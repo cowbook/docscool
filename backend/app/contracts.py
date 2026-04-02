@@ -389,6 +389,68 @@ def _normalize_contract_file_path(raw_path: str) -> str:
     return value.lstrip('/')
 
 
+def _load_contract_file_payload(record: Contract):
+    normalized_file_path = _normalize_contract_file_path(record.file_path)
+    if not normalized_file_path:
+        raise FileNotFoundError('该合同未上传文件')
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        password = get_cached_user_password(g.current_user)
+        if not password:
+            raise PermissionError('登录凭据已过期，请重新登录后下载')
+
+        remote_file_path = _build_filestation_path(normalized_file_path)
+        sid = _synology_user_login(g.current_user, password)
+        response = None
+        for path_value in (f'["{remote_file_path}"]', remote_file_path):
+            candidate = requests.get(
+                f"{current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')}/webapi/entry.cgi",
+                params={
+                    'api': 'SYNO.FileStation.Download',
+                    'version': '2',
+                    'method': 'download',
+                    'mode': 'download',
+                    'path': path_value,
+                    '_sid': sid,
+                },
+                timeout=60,
+                verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
+            )
+            if candidate.status_code == 404:
+                continue
+            candidate.raise_for_status()
+            response = candidate
+            break
+
+        if response is None:
+            raise FileNotFoundError('文件不存在或路径无效')
+
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        if 'application/json' in content_type:
+            try:
+                payload = response.json()
+                if not payload.get('success'):
+                    raise RuntimeError(_synology_error_message(payload, 'filestation'))
+            except ValueError:
+                pass
+
+        file_name = _filename_from_content_disposition(response.headers.get('Content-Disposition', ''))
+        if not file_name:
+            file_name = os.path.basename(normalized_file_path) or f'contract_{record.id}.bin'
+
+        mime = response.headers.get('Content-Type') or 'application/octet-stream'
+        return response.content, file_name, mime
+
+    local_file_path = _safe_local_file_path(normalized_file_path)
+    if not os.path.isfile(local_file_path):
+        raise FileNotFoundError('文件不存在或已被移动')
+
+    file_name = os.path.basename(local_file_path)
+    mime = 'application/pdf' if file_name.lower().endswith('.pdf') else 'application/octet-stream'
+    with open(local_file_path, 'rb') as f:
+        return f.read(), file_name, mime
+
+
 def _get_department_names():
     rows = Department.query.order_by(Department.name.asc()).all()
     return [row.name for row in rows]
@@ -1238,72 +1300,52 @@ def parse_contract_pdf():
 @require_auth
 def download_contract_file(contract_id):
     record = Contract.query.get_or_404(contract_id)
+    try:
+        content, file_name, mime = _load_contract_file_payload(record)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
+    except ValueError:
+        return jsonify({'message': 'file_path 非法'}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        return jsonify({'message': f'文件下载失败: {exc}'}), 500
+
+    return send_file(
+        BytesIO(content),
+        mimetype=mime,
+        as_attachment=True,
+        download_name=file_name,
+    )
+
+
+@contracts_bp.get('/contracts/<int:contract_id>/preview')
+@require_auth
+def preview_contract_file(contract_id):
+    record = Contract.query.get_or_404(contract_id)
     normalized_file_path = _normalize_contract_file_path(record.file_path)
     if not normalized_file_path:
         return jsonify({'message': '该合同未上传文件'}), 404
 
-    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
-        password = get_cached_user_password(g.current_user)
-        if not password:
-            return jsonify({'message': '登录凭据已过期，请重新登录后下载'}), 401
-
-        remote_file_path = _build_filestation_path(normalized_file_path)
-
-        #print(f"Attempting to download from Synology: {remote_file_path} for user {g.current_user}")
-        try:
-            sid = _synology_user_login(g.current_user, password)
-            response = None
-            for path_value in (f'["{remote_file_path}"]', remote_file_path):
-                candidate = requests.get(
-                    f"{current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')}/webapi/entry.cgi",
-                    params={
-                        'api': 'SYNO.FileStation.Download',
-                        'version': '2',
-                        'method': 'download',
-                        'mode': 'download',
-                        'path': path_value,
-                        '_sid': sid,
-                    },
-                    timeout=60,
-                    verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
-                )
-                if candidate.status_code == 404:
-                    continue
-                candidate.raise_for_status()
-                response = candidate
-                break
-
-            if response is None:
-                return jsonify({'message': '文件下载失败: 文件不存在或路径无效'}), 404
-        except Exception as exc:
-            return jsonify({'message': f'文件下载失败: {exc}'}), 500
-
-        content_type = (response.headers.get('Content-Type') or '').lower()
-        if 'application/json' in content_type:
-            try:
-                payload = response.json()
-                if not payload.get('success'):
-                    return jsonify({'message': f"文件下载失败: {_synology_error_message(payload, 'filestation')}"}), 500
-            except ValueError:
-                pass
-
-        file_name = _filename_from_content_disposition(response.headers.get('Content-Disposition', ''))
-        if not file_name:
-            file_name = os.path.basename(normalized_file_path) or f'contract_{record.id}.bin'
-
-        return send_file(
-            BytesIO(response.content),
-            mimetype=response.headers.get('Content-Type') or 'application/octet-stream',
-            as_attachment=True,
-            download_name=file_name,
-        )
+    file_name = os.path.basename(normalized_file_path)
+    if not file_name.lower().endswith('.pdf'):
+        return jsonify({'message': '仅支持PDF预览'}), 400
 
     try:
-        local_file_path = _safe_local_file_path(normalized_file_path)
+        content, payload_name, _mime = _load_contract_file_payload(record)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except ValueError:
         return jsonify({'message': 'file_path 非法'}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        return jsonify({'message': f'文件预览失败: {exc}'}), 500
 
-    if not os.path.isfile(local_file_path):
-        return jsonify({'message': '文件不存在或已被移动'}), 404
-
-    return send_file(local_file_path, as_attachment=True, download_name=os.path.basename(local_file_path))
+    final_name = payload_name or file_name or f'contract_{record.id}.pdf'
+    return send_file(
+        BytesIO(content),
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=final_name,
+    )

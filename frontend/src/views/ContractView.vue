@@ -32,7 +32,7 @@
       <el-table :data="pagedContracts" stripe size="small" class="contract-table" @row-click="handleRowClick">
          <el-table-column label="文件" min-width="220">
           <template #default="scope">
-            <el-link class="file-cell"  @click.stop="downloadContractFile(scope.row)" v-if="scope.row.file_path">
+            <el-link class="file-cell"  @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
 
               <el-tooltip :content="scope.row.file_path" placement="top">
                 <Icon
@@ -55,9 +55,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="contract_name" label="合同名称" min-width="220">
+        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip>
           <template #default="scope">
-            <span>{{ scope.row.contract_name }}</span>
+            <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="contract_number" label="合同编号" min-width="140" />
@@ -101,70 +101,98 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1120px, 96vw)">
+    <el-dialog v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1380px, 98vw)">
       <el-form :model="form" label-width="120px" class="dialog-form">
-        <div class="form-grid">
-          <el-form-item label="合同名称">
-            <el-input v-model="form.contract_name" />
-          </el-form-item>
-          <el-form-item label="合同编号">
-            <el-input v-model="form.contract_number" />
-          </el-form-item>
-          <el-form-item label="合同单位">
-            <el-input v-model="form.contract_unit" />
-          </el-form-item>
-          <el-form-item label="合同金额(万元)">
-            <el-input v-model="form.contract_amount_wan" type="number" />
-          </el-form-item>
-          <el-form-item label="审批状态">
-            <el-select v-model="form.approval_status" clearable placeholder="可留空" style="width: 100%">
-              <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="承办人">
-            <el-input v-model="form.handler" clearable placeholder="可留空" />
-          </el-form-item>
-          <el-form-item label="承办部门">
-            <el-select v-model="form.handling_department" placeholder="请选择部门" style="width: 100%">
-              <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="合同确定方式">
-            <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
-              <el-option v-for="item in options.contract_determination_method" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="承办日期">
-            <el-date-picker v-model="form.handling_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="合同类型">
-            <el-select v-model="form.contract_type" placeholder="请选择合同类型" style="width: 100%">
-              <el-option v-for="item in options.contract_type" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="发票类型">
-            <el-select v-model="form.invoice_type" placeholder="请选择发票类型" style="width: 100%">
-              <el-option v-for="item in options.invoice_type" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="税率">
-            <el-input v-model="form.tax_rate" />
-          </el-form-item>
-          <el-form-item label="计价方式">
-            <el-select v-model="form.pricing_method" placeholder="请选择计价方式" style="width: 100%">
-              <el-option v-for="item in options.pricing_method" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="是否归档">
-            <el-select v-model="form.is_archived" style="width: 100%">
-              <el-option v-for="item in options.is_archived" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="项目">
-            <el-select v-model="form.project" clearable placeholder="可留空" style="width: 100%" filterable>
-              <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
+        <div class="dialog-layout">
+          <div class="preview-column">
+            <div class="preview-title">文件预览</div>
+            <div
+              class="preview-panel"
+              :class="{ 'preview-panel-clickable': !!previewUrl && !previewLoading }"
+              @click="openFullscreenPreview"
+            >
+              <div v-if="previewLoading" class="preview-placeholder">预览加载中...</div>
+              <VuePdfEmbed
+                v-else-if="previewUrl"
+                :source="previewUrl"
+                class="pdf-preview-embed"
+                @rendering-failed="handlePdfRenderFailed"
+              />
+              <div v-else class="preview-placeholder">{{ previewMessage }}</div>
+            </div>
+            <div v-if="previewUrl && !previewLoading" class="preview-hint">点击预览区域可全屏查看</div>
+          </div>
+
+          <div class="form-column">
+            <div class="form-grid">
+          
+              <el-form-item label="合同名称"  class="form-item-span-2">
+                <el-input v-model="form.contract_name" />
+              </el-form-item>
+              <el-form-item label="合同编号">
+                <el-input v-model="form.contract_number" />
+              </el-form-item>
+              <el-form-item label="合同单位">
+                <el-input v-model="form.contract_unit" />
+              </el-form-item>
+              <el-form-item label="合同金额(万元)">
+                <el-input v-model="form.contract_amount_wan" type="number" />
+              </el-form-item>
+              <el-form-item label="审批状态">
+                <el-select v-model="form.approval_status" clearable placeholder="可留空" style="width: 100%">
+                  <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="承办人">
+                <el-input v-model="form.handler" clearable placeholder="可留空" />
+              </el-form-item>
+              <el-form-item label="承办部门">
+                <el-select v-model="form.handling_department" placeholder="请选择部门" style="width: 100%">
+                  <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="合同确定方式">
+                <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
+                  <el-option v-for="item in options.contract_determination_method" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="承办日期">
+                <el-date-picker v-model="form.handling_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="合同类型">
+                <el-select v-model="form.contract_type" placeholder="请选择合同类型" style="width: 100%">
+                  <el-option v-for="item in options.contract_type" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="发票类型">
+                <el-select v-model="form.invoice_type" placeholder="请选择发票类型" style="width: 100%">
+                  <el-option v-for="item in options.invoice_type" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="税率">
+                <el-input v-model="form.tax_rate" />
+              </el-form-item>
+              <el-form-item label="计价方式">
+                <el-select v-model="form.pricing_method" placeholder="请选择计价方式" style="width: 100%">
+                  <el-option v-for="item in options.pricing_method" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="是否归档">
+                <el-select v-model="form.is_archived" style="width: 100%">
+                  <el-option v-for="item in options.is_archived" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="项目">
+                <el-select v-model="form.project" clearable placeholder="可留空" style="width: 100%" filterable>
+                  <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+
+              <el-form-item label="文件路径">
+                <el-input v-model="form.file_path" readonly placeholder="暂无文件路径" />
+              </el-form-item>
+            </div>
+          </div>
         </div>
       </el-form>
 
@@ -173,20 +201,60 @@
         <el-button :loading="saving" type="primary" @click="saveContract">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="fullPreviewVisible"
+      width="96vw"
+      top="2vh"
+      destroy-on-close
+      append-to-body
+    >
+      <template #header>
+        <div class="fullscreen-dialog-header">
+          <span class="fullscreen-dialog-title">{{ fullPreviewTitle }}</span>
+          <el-button
+            type="primary"
+            :disabled="!currentPreviewRow?.file_path"
+            @click="downloadContractFile(currentPreviewRow)"
+          >
+            下载原文件
+          </el-button>
+        </div>
+      </template>
+
+      <div class="fullscreen-preview-wrapper">
+        <VuePdfEmbed
+          v-if="previewUrl"
+          :source="previewUrl"
+          class="pdf-preview-embed fullscreen-pdf-preview"
+          @rendering-failed="handlePdfRenderFailed"
+        />
+        <div v-else class="preview-placeholder fullscreen-preview-placeholder">暂无可预览内容</div>
+      </div>
+
+      <template #footer>
+        <el-button @click="fullPreviewVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Icon } from '@iconify/vue'
+import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
 import { CircleCloseFilled, Edit, Upload } from '@element-plus/icons-vue'
+import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 import http from '../api/http'
+
+GlobalWorkerOptions.workerSrc = PdfWorker
 
 const contracts = ref([])
 const departments = ref([])
@@ -197,6 +265,11 @@ const editing = ref(null)
 const currentPage = ref(1)
 const aiUploadInput = ref(null)
 const pendingAiUploadFile = ref(null)
+const previewUrl = ref('')
+const previewLoading = ref(false)
+const previewMessage = ref('暂无文件')
+const fullPreviewVisible = ref(false)
+const currentPreviewRow = ref(null)
 const pageSize = 100
 
 const filters = reactive({
@@ -219,8 +292,23 @@ const pagedContracts = computed(() => {
   const start = (currentPage.value - 1) * pageSize
   return contracts.value.slice(start, start + pageSize)
 })
+const contractNameColumnWidth = computed(() => {
+  const baseWidth = 220
+  const maxWidth = 560
+  const longestLength = contracts.value.reduce((maxLength, item) => {
+    const text = String(item?.contract_name || '')
+    return Math.max(maxLength, text.length)
+  }, 0)
+
+  return Math.min(maxWidth, Math.max(baseWidth, longestLength * 12 + 16))
+})
+const fullPreviewTitle = computed(() => {
+  const name = getFileName(currentPreviewRow.value?.file_path || '')
+  return name ? `文件预览 - ${name}` : '文件预览'
+})
 
 const form = reactive({
+  file_path: '',
   contract_name: '',
   contract_number: '',
   contract_unit: '',
@@ -239,6 +327,7 @@ const form = reactive({
 })
 
 const resetForm = () => {
+  form.file_path = ''
   form.contract_name = ''
   form.contract_number = ''
   form.contract_unit = ''
@@ -293,7 +382,9 @@ const handleRowClick = (row, column) => {
 const openCreate = () => {
   editing.value = null
   pendingAiUploadFile.value = null
+  currentPreviewRow.value = null
   resetForm()
+  resetPreview('暂无文件')
   dialogVisible.value = true
 }
 
@@ -347,7 +438,9 @@ const handleAiPdfSelected = async (event) => {
     editing.value = null
     pendingAiUploadFile.value = file
     resetForm()
+    form.file_path = file.name
     applyParsedFields(data?.fields || {})
+    setPreviewFromFile(file)
     dialogVisible.value = true
     ElMessage.success('AI解析完成，请确认后保存')
   } catch (error) {
@@ -372,6 +465,8 @@ const handleAiPdfSelected = async (event) => {
 
 const openEdit = (row) => {
   editing.value = row
+  currentPreviewRow.value = row
+  form.file_path = row.file_path || ''
   form.contract_name = row.contract_name
   form.contract_number = row.contract_number || ''
   form.contract_unit = row.contract_unit || ''
@@ -387,7 +482,103 @@ const openEdit = (row) => {
   form.pricing_method = row.pricing_method || ''
   form.is_archived = row.is_archived || '未归档'
   form.project = row.project || ''
+  loadPdfPreviewForRow(row)
   dialogVisible.value = true
+}
+
+const revokePreviewUrl = () => {
+  if (previewUrl.value) {
+    window.URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = ''
+  }
+}
+
+const resetPreview = (message = '暂无文件', closeFullscreen = true) => {
+  previewLoading.value = false
+  previewMessage.value = message
+  if (closeFullscreen) {
+    fullPreviewVisible.value = false
+  }
+  revokePreviewUrl()
+}
+
+const isPdfFilePath = (filePath) => getFileExt(filePath) === 'pdf'
+
+const setPreviewFromBlob = (blob) => {
+  revokePreviewUrl()
+  const source = blob instanceof Blob ? blob : new Blob([blob], { type: 'application/pdf' })
+  const safeBlob = source.type && source.type.includes('pdf')
+    ? source
+    : new Blob([source], { type: 'application/pdf' })
+  previewUrl.value = window.URL.createObjectURL(safeBlob)
+  previewMessage.value = ''
+}
+
+const setPreviewFromFile = (file) => {
+  if (!file) {
+    resetPreview('暂无文件')
+    return
+  }
+  if (!/\.pdf$/i.test(file.name)) {
+    resetPreview('该文件不是PDF，无法预览')
+    return
+  }
+  setPreviewFromBlob(file)
+}
+
+const handlePdfRenderFailed = () => {
+  resetPreview('PDF组件渲染失败，请检查文件内容或浏览器兼容性')
+}
+
+const openFullscreenPreview = () => {
+  if (!previewUrl.value || previewLoading.value) {
+    return
+  }
+  fullPreviewVisible.value = true
+}
+
+const openFilePreview = async (row) => {
+  if (!row?.file_path) {
+    ElMessage.warning('该合同未上传文件')
+    return
+  }
+
+  currentPreviewRow.value = row
+  fullPreviewVisible.value = true
+
+  if (!isPdfFilePath(row.file_path)) {
+    resetPreview('该文件不是PDF，无法预览，请使用下方按钮下载原文件', false)
+    return
+  }
+
+  await loadPdfPreviewForRow(row, false)
+}
+
+const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
+  if (!row?.file_path) {
+    resetPreview('暂无文件', closeFullscreenOnError)
+    return
+  }
+
+  if (!isPdfFilePath(row.file_path)) {
+    resetPreview('该文件不是PDF，无法预览', closeFullscreenOnError)
+    return
+  }
+
+  previewLoading.value = true
+  previewMessage.value = ''
+  try {
+    const response = await http.get(`/contracts/${row.id}/preview`, {
+      responseType: 'blob',
+    })
+    setPreviewFromBlob(response.data)
+  } catch (error) {
+    const message = await parseErrorMessage(error, 'PDF预览加载失败')
+    resetPreview(`PDF预览加载失败：${message}`, closeFullscreenOnError)
+    ElMessage.warning(message)
+  } finally {
+    previewLoading.value = false
+  }
 }
 
 const saveContract = async () => {
@@ -597,6 +788,12 @@ onMounted(async () => {
     ElMessage.error('数据加载失败')
   }
 })
+
+watch(dialogVisible, (visible) => {
+  if (!visible) {
+    resetPreview('暂无文件')
+  }
+})
 </script>
 
 <style>
@@ -690,10 +887,118 @@ onMounted(async () => {
   font-weight: 500;
 }
 
+.contract-name-cell {
+  display: inline-block;
+  white-space: nowrap;
+}
+
 .pager {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.dialog-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px 16px;
+}
+
+.preview-column {
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fafafa;
+}
+
+.preview-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #374151;
+}
+
+.preview-panel {
+  height: min(70vh, 760px);
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  overflow: auto;
+}
+
+.preview-panel-clickable {
+  cursor: zoom-in;
+}
+
+.preview-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6b7280;
+  text-align: right;
+}
+
+.preview-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  padding: 12px;
+  text-align: center;
+}
+
+.pdf-preview-embed {
+  width: 100%;
+  min-height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.pdf-preview-embed :deep(canvas) {
+  width: 100% !important;
+  height: auto !important;
+  display: block;
+  margin: 0 auto 12px;
+}
+
+.fullscreen-preview-wrapper {
+  height: 88vh;
+  overflow: auto;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.fullscreen-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-right: 32px;
+}
+
+.fullscreen-dialog-title {
+  min-width: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fullscreen-pdf-preview {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.fullscreen-preview-placeholder {
+  min-height: 60vh;
+}
+
+.dialog-form .form-column {
+  min-width: 0;
 }
 
 .dialog-form .form-grid {
@@ -702,9 +1007,32 @@ onMounted(async () => {
   gap: 4px 16px;
 }
 
-@media (min-width: 1024px) {
+.form-item-span-2 {
+  grid-column: span 1;
+}
+
+@media (min-width: 1280px) {
+  .dialog-layout {
+    grid-template-columns: minmax(360px, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .dialog-form .form-column {
+    grid-column: 2 / span 2;
+  }
+
   .dialog-form .form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-item-span-2 {
+    grid-column: span 2;
+  }
+}
+
+@media (min-width: 1024px) {
+  .preview-panel {
+    height: min(62vh, 680px);
   }
 }
 </style>
