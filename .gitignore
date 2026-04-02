@@ -12,6 +12,18 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Environment and local data
+.env
+backend/.env
+backend/instance/
+
+# Build artifacts
+frontend/dist/
+
+# Temp files
+.push_result.txt
+.token_check.txt
+
 # OS/editor
 .DS_Store
 Thumbs.db
