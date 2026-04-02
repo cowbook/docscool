@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const http = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.PROD ? '/docs/api' : '/api',
   timeout: 10000,
 })
 
