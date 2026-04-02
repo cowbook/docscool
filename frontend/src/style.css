@@ -1,0 +1,17 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(120deg, #f6f8fb 0%, #eef3ff 100%);
+}
+
+#app {
+  min-height: 100vh;
+}

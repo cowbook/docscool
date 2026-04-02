@@ -1,0 +1,21 @@
+# Node
+frontend/node_modules/
+
+# Python virtual environments
+backend/.venv/
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs
+*.log

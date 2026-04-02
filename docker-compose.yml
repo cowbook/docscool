@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: contract-backend
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/instance:/app/instance
+      - /volume1/contracts:/volume1/contracts
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: contract-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+    restart: unless-stopped
