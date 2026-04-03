@@ -28,15 +28,71 @@ import http from '../api/http'
 
 const contracts = ref([])
 
+const parseDecimalParts = (value) => {
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/[，,\s]/g, '')
+    .replace(/。/g, '.')
+
+  const match = normalized.match(/^([+-]?)(\d+)(?:\.(\d+))?$/)
+  if (!match) {
+    return null
+  }
+
+  return {
+    negative: match[1] === '-',
+    integer: match[2],
+    fraction: match[3] || '',
+  }
+}
+
+const sumDecimalStrings = (values) => {
+  const parsedValues = values
+    .map(parseDecimalParts)
+    .filter(Boolean)
+
+  if (!parsedValues.length) {
+    return { total: 0n, scale: 0 }
+  }
+
+  const scale = parsedValues.reduce((maxScale, item) => Math.max(maxScale, item.fraction.length), 0)
+  const total = parsedValues.reduce((sum, item) => {
+    const digits = `${item.integer}${item.fraction.padEnd(scale, '0')}`
+    const scaled = BigInt(digits || '0')
+    return item.negative ? sum - scaled : sum + scaled
+  }, 0n)
+
+  return { total, scale }
+}
+
+const formatScaledDecimal = (total, scale) => {
+  const negative = total < 0n
+  const absolute = negative ? -total : total
+  const raw = absolute.toString().padStart(scale + 1, '0')
+  const integerPart = scale > 0 ? raw.slice(0, -scale) : raw
+  const fractionPart = scale > 0 ? raw.slice(-scale) : ''
+  const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+
+  if (!fractionPart) {
+    return `${negative ? '-' : ''}${groupedInteger}.00`
+  }
+
+  const trimmedFraction = fractionPart.replace(/0+$/, '')
+  if (!trimmedFraction) {
+    return `${negative ? '-' : ''}${groupedInteger}.00`
+  }
+  if (trimmedFraction.length === 1) {
+    return `${negative ? '-' : ''}${groupedInteger}.${trimmedFraction}0`
+  }
+
+  return `${negative ? '-' : ''}${groupedInteger}.${trimmedFraction}`
+}
+
 const totalCount = computed(() => contracts.value.length)
-const totalAmount = computed(() => contracts.value.reduce((sum, item) => {
-  const value = Number(item.contract_amount_wan ?? item.amount)
-  return sum + (Number.isFinite(value) ? value : 0)
-}, 0))
-const totalAmountText = computed(() => new Intl.NumberFormat('zh-CN', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-}).format(totalAmount.value))
+const totalAmountState = computed(() => sumDecimalStrings(
+  contracts.value.map((item) => item.contract_amount_wan ?? item.amount),
+))
+const totalAmountText = computed(() => formatScaledDecimal(totalAmountState.value.total, totalAmountState.value.scale))
 
 const loadData = async () => {
   try {

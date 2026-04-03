@@ -39,6 +39,7 @@ def _ensure_contract_columns():
         'pricing_method': 'ALTER TABLE contracts ADD COLUMN pricing_method VARCHAR(64)',
         'is_archived': 'ALTER TABLE contracts ADD COLUMN is_archived VARCHAR(32)',
         'project': 'ALTER TABLE contracts ADD COLUMN project VARCHAR(255)',
+        'fullbody': 'ALTER TABLE contracts ADD COLUMN fullbody TEXT',
     }
 
     result = db.session.execute(db.text("PRAGMA table_info(contracts)"))

@@ -2,9 +2,11 @@ import os
 import posixpath
 import re
 import json
+from difflib import SequenceMatcher
 from io import BytesIO
+from uuid import uuid4
 from urllib.parse import unquote
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 import requests
@@ -13,6 +15,7 @@ import fitz
 import numpy as np
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
+from sqlalchemy import String, cast, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from .auth import get_cached_user_password, require_auth
 from .extensions import db
@@ -21,6 +24,7 @@ from .models import Contract, Department, ProjectOption
 
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 _OCR_ENGINE = None
+_IMPORT_ERROR_REPORTS = {}
 
 
 CONTRACT_FIELD_KEYS = [
@@ -98,6 +102,48 @@ SYNOLOGY_FILESTATION_ERROR_MESSAGES = {
 }
 
 
+AMOUNT_UNIT_TO_WAN = {
+    '元': Decimal('0.0001'),
+    '千元': Decimal('0.1'),
+    '万元': Decimal('1'),
+    '万': Decimal('1'),
+    '亿元': Decimal('10000'),
+    '亿': Decimal('10000'),
+}
+
+
+EXCEL_ALLOWED_EXTENSIONS = {'.xls', '.xlsx'}
+
+
+AI_MATCH_CANDIDATE_LIMIT = 20
+
+
+EXCEL_HEADER_ALIASES = {
+    'contract_name': ['合同名称', '合同名', '名称', '标题', '流程标题', '审批标题', '表单标题'],
+    'contract_number': ['合同编号', '编号', '协议编号', '单号', '流程编号', '表单编号'],
+    'contract_unit': ['合同单位', '对方单位', '签约单位', '相对方', '供应商', '供应商名称', '客户名称'],
+    'contract_amount_wan': ['合同金额', '合同金额万元', '合同金额元', '金额', '价税合计', '含税金额', '总价', '合同总价', '合同总金额'],
+    'approval_status': ['审批状态', '审核状态', '状态', '流程状态', '审批结果'],
+    'handler': ['承办人', '经办人', '负责人', '申请人', '发起人', '填报人'],
+    'handling_department': ['承办部门', '部门', '归口部门', '申请部门', '发起部门', '所属部门'],
+    'contract_determination_method': ['合同确定方式', '确定方式', '采购方式', '招采方式', '定标方式'],
+    'handling_date': ['承办日期', '处理日期', '审批日期', '日期', '发起日期', '申请日期', '创建时间', '提交时间'],
+    'contract_type': ['合同类型', '类型'],
+    'invoice_type': ['发票类型', '票据类型'],
+    'tax_rate': ['税率'],
+    'pricing_method': ['计价方式', '定价方式'],
+    'is_archived': ['是否归档', '归档状态'],
+    'project': ['项目', '项目名称'],
+}
+
+
+EXCEL_HEADER_LOOKUP = {
+    re.sub(r'[^\w\u4e00-\u9fff]+', '', alias.strip().lower()): field
+    for field, aliases in EXCEL_HEADER_ALIASES.items()
+    for alias in aliases
+}
+
+
 def _parse_date(value):
     if not value:
         return None
@@ -112,6 +158,442 @@ def _safe_decimal(value):
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _format_decimal_plain(value: Decimal) -> str:
+    text = format(value, 'f')
+    if '.' in text:
+        text = text.rstrip('0').rstrip('.')
+    return text or '0'
+
+
+def _convert_amount_to_wan(number_text: str, unit_text: str) -> str:
+    cleaned_number = (number_text or '').replace(',', '').replace('，', '').strip()
+    amount = Decimal(cleaned_number)
+    multiplier = AMOUNT_UNIT_TO_WAN.get((unit_text or '').strip(), Decimal('1'))
+    return _format_decimal_plain(amount * multiplier)
+
+
+def _normalize_excel_header(value) -> str:
+    text = str(value or '').strip().lower()
+    return re.sub(r'[^\w\u4e00-\u9fff]+', '', text)
+
+
+def _stringify_excel_value(value) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return _format_decimal_plain(value)
+    if isinstance(value, bool):
+        return '是' if value else '否'
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _format_decimal_plain(Decimal(str(value)))
+    return str(value).strip()
+
+
+def _is_excel_row_empty(row) -> bool:
+    return not any(_stringify_excel_value(item).strip() for item in (row or []))
+
+
+def _match_excel_field(header_text: str) -> str:
+    normalized = _normalize_excel_header(header_text)
+    if not normalized:
+        return ''
+
+    direct = EXCEL_HEADER_LOOKUP.get(normalized)
+    if direct:
+        return direct
+
+    contains_rules = [
+        ('contract_name', ('合同名称', '合同名', '流程标题', '审批标题', '表单标题', '标题')),
+        ('contract_number', ('合同编号', '协议编号', '流程编号', '表单编号', '编号', '单号')),
+        ('contract_unit', ('合同单位', '对方单位', '签约单位', '相对方', '供应商', '客户名称')),
+        ('contract_amount_wan', ('合同金额', '合同总价', '合同总金额', '价税合计', '含税金额', '总价', '金额')),
+        ('approval_status', ('审批状态', '审核状态', '流程状态', '审批结果', '状态')),
+        ('handler', ('承办人', '经办人', '负责人', '申请人', '发起人', '填报人')),
+        ('handling_department', ('承办部门', '归口部门', '申请部门', '发起部门', '所属部门', '部门')),
+        ('contract_determination_method', ('合同确定方式', '确定方式', '采购方式', '招采方式', '定标方式')),
+        ('handling_date', ('承办日期', '处理日期', '审批日期', '发起日期', '申请日期', '创建时间', '提交时间', '日期')),
+        ('contract_type', ('合同类型',)),
+        ('invoice_type', ('发票类型', '票据类型')),
+        ('tax_rate', ('税率',)),
+        ('pricing_method', ('计价方式', '定价方式')),
+        ('is_archived', ('是否归档', '归档状态')),
+        ('project', ('项目名称', '项目')),
+    ]
+    for field, keywords in contains_rules:
+        if any(keyword in header_text for keyword in keywords):
+            return field
+
+    return ''
+
+
+def _map_excel_columns(header_row):
+    field_indexes = {}
+    header_labels = {}
+
+    for index, cell in enumerate(header_row or []):
+        header_text = _stringify_excel_value(cell)
+        field = _match_excel_field(header_text)
+        if field and field not in field_indexes:
+            field_indexes[field] = index
+            header_labels[field] = header_text
+
+    return field_indexes, header_labels
+
+
+def _detect_excel_header(rows):
+    best = None
+    best_count = 0
+    max_candidates = min(len(rows), 20)
+
+    for index in range(max_candidates):
+        row = rows[index]
+        if _is_excel_row_empty(row):
+            continue
+        field_indexes, header_labels = _map_excel_columns(row)
+        recognized_count = len(field_indexes)
+        if recognized_count > best_count:
+            best = (index, field_indexes, header_labels)
+            best_count = recognized_count
+
+    if best_count == 0:
+        return None, {}, {}
+    return best
+
+
+def _detect_amount_unit_from_header(header_text: str) -> str:
+    text = str(header_text or '')
+    for unit in ('亿元', '万元', '千元', '万', '元'):
+        if unit in text:
+            return unit
+    return '万元'
+
+
+def _normalize_excel_amount(value, header_text: str) -> str:
+    text = _stringify_excel_value(value)
+    if not text:
+        return ''
+
+    normalized = text.replace(',', '').replace('，', '').strip()
+    match = re.search(r'([+-]?[0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)', normalized)
+    if match:
+        return _convert_amount_to_wan(match.group(1), match.group(2))
+
+    if re.fullmatch(r'[+-]?[0-9]+(?:\.[0-9]+)?', normalized):
+        return _convert_amount_to_wan(normalized, _detect_amount_unit_from_header(header_text))
+
+    cleaned = re.sub(r'[^0-9.+-]', '', normalized)
+    if cleaned.count('.') > 1:
+        first_dot = cleaned.find('.')
+        cleaned = cleaned[:first_dot + 1] + cleaned[first_dot + 1:].replace('.', '')
+    if re.fullmatch(r'[+-]?[0-9]+(?:\.[0-9]+)?', cleaned):
+        return _convert_amount_to_wan(cleaned, _detect_amount_unit_from_header(header_text))
+
+    return ''
+
+
+def _normalize_excel_date(value) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return _normalize_date_value(_stringify_excel_value(value))
+
+
+def _load_excel_rows(uploaded_file):
+    filename = (uploaded_file.filename or '').strip()
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in EXCEL_ALLOWED_EXTENSIONS:
+        raise ValueError('仅支持上传 xls 或 xlsx 文件')
+
+    try:
+        uploaded_file.stream.seek(0)
+    except Exception:
+        pass
+    content = uploaded_file.stream.read()
+    if not content:
+        raise ValueError('Excel 文件内容为空')
+
+    if ext == '.xlsx':
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise RuntimeError('缺少 openpyxl 依赖，无法导入 xlsx 文件') from exc
+
+        workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
+        sheet = workbook.worksheets[0]
+        rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+        return sheet.title, rows
+
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise RuntimeError('缺少 xlrd 依赖，无法导入 xls 文件') from exc
+
+    workbook = xlrd.open_workbook(file_contents=content)
+    sheet = workbook.sheet_by_index(0)
+    rows = []
+    for row_index in range(sheet.nrows):
+        values = []
+        for col_index in range(sheet.ncols):
+            cell = sheet.cell(row_index, col_index)
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                cell_value = xlrd.xldate.xldate_as_datetime(cell.value, workbook.datemode)
+                values.append(cell_value)
+            elif cell.ctype == xlrd.XL_CELL_NUMBER:
+                values.append(int(cell.value) if float(cell.value).is_integer() else cell.value)
+            elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                values.append(bool(cell.value))
+            elif cell.ctype in {xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK}:
+                values.append('')
+            else:
+                values.append(cell.value)
+        rows.append(values)
+    return sheet.name, rows
+
+
+def _build_contract_import_template():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = '合同导入模板'
+
+    headers = [
+        '合同名称',
+        '合同编号',
+        '合同单位',
+        '合同金额(万元)',
+        '审批状态',
+        '承办人',
+        '承办部门',
+        '合同确定方式',
+        '承办日期',
+        '合同类型',
+        '发票类型',
+        '税率',
+        '计价方式',
+        '是否归档',
+        '项目',
+    ]
+    widths = [26, 20, 24, 16, 14, 14, 18, 18, 14, 14, 16, 12, 14, 12, 22]
+
+    sheet.append(headers)
+    header_fill = PatternFill(fill_type='solid', fgColor='DCE6F1')
+    header_font = Font(bold=True)
+    for index, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=1, column=index)
+        cell.fill = header_fill
+        cell.font = header_font
+        sheet.column_dimensions[cell.column_letter].width = widths[index - 1]
+
+    sheet.freeze_panes = 'A2'
+
+    notes = workbook.create_sheet('填写说明')
+    note_rows = [
+        ['说明', '内容'],
+        ['必要列', '合同名称、合同金额(万元)、承办部门'],
+        ['金额规则', '请填写万元单位的纯数字，可保留 8 位及以上小数'],
+        ['日期格式', '建议使用 YYYY-MM-DD，例如 2026-04-03'],
+        ['承办部门', '必须填写系统中已经配置的部门名称'],
+        ['项目', '如填写，必须填写系统中已配置的项目名称'],
+        ['支持格式', 'xls、xlsx'],
+    ]
+    for row in note_rows:
+        notes.append(row)
+    notes.column_dimensions['A'].width = 18
+    notes.column_dimensions['B'].width = 80
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def _build_import_error_report(sheet_name: str, source_headers, failed_rows):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = '导入失败明细'
+
+    normalized_headers = [str(item or '').strip() for item in (source_headers or [])]
+    if not normalized_headers:
+        normalized_headers = [f'原始列{i + 1}' for i in range(max((len(item.get('row_values') or []) for item in failed_rows), default=0))]
+
+    headers = ['Excel工作表', 'Excel行号'] + normalized_headers + ['失败原因']
+    widths = [18, 12] + [max(12, min(28, len(header) + 4)) for header in normalized_headers] + [40]
+
+    sheet.append(headers)
+    header_fill = PatternFill(fill_type='solid', fgColor='FCE4D6')
+    header_font = Font(bold=True)
+    for index, _header in enumerate(headers, start=1):
+        cell = sheet.cell(row=1, column=index)
+        cell.fill = header_fill
+        cell.font = header_font
+        sheet.column_dimensions[cell.column_letter].width = widths[index - 1]
+
+    for item in failed_rows:
+        row_values = [_stringify_excel_value(value) for value in (item.get('row_values') or [])]
+        padded_values = row_values + [''] * max(0, len(normalized_headers) - len(row_values))
+        sheet.append([
+            sheet_name,
+            item.get('row', ''),
+            *padded_values[:len(normalized_headers)],
+            item.get('message', ''),
+        ])
+
+    sheet.freeze_panes = 'A2'
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def _store_import_error_report(sheet_name: str, source_headers, failed_rows):
+    if not failed_rows:
+        return '', ''
+
+    output = _build_import_error_report(sheet_name, source_headers, failed_rows)
+    token = uuid4().hex
+    filename = f'合同导入失败明细_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+    _IMPORT_ERROR_REPORTS[token] = {
+        'filename': filename,
+        'content': output.getvalue(),
+    }
+    return token, filename
+
+
+def _normalize_excel_option_fields(fields: dict, option_sets: dict) -> dict:
+    normalized = dict(fields or {})
+
+    normalized['handling_department'] = _match_option_value(
+        normalized.get('handling_department', ''),
+        option_sets.get('handling_department', []),
+        (normalized.get('handling_department') or '').strip(),
+    )
+    normalized['project'] = _match_option_value(
+        normalized.get('project', ''),
+        option_sets.get('project', []),
+        (normalized.get('project') or '').strip(),
+    )
+    normalized['approval_status'] = _match_option_value(
+        normalized.get('approval_status', ''),
+        option_sets.get('approval_status', []),
+        (normalized.get('approval_status') or '').strip(),
+    )
+    normalized['contract_determination_method'] = _match_option_value(
+        normalized.get('contract_determination_method', ''),
+        option_sets.get('contract_determination_method', []),
+        (normalized.get('contract_determination_method') or '').strip(),
+    )
+    normalized['contract_type'] = _match_option_value(
+        normalized.get('contract_type', ''),
+        option_sets.get('contract_type', []),
+        (normalized.get('contract_type') or '').strip(),
+    )
+    normalized['pricing_method'] = _match_option_value(
+        normalized.get('pricing_method', ''),
+        option_sets.get('pricing_method', []),
+        (normalized.get('pricing_method') or '').strip(),
+    )
+    normalized['invoice_type'] = _match_option_value(
+        normalized.get('invoice_type', ''),
+        option_sets.get('invoice_type', []),
+        (normalized.get('invoice_type') or '').strip(),
+    )
+    normalized['is_archived'] = _match_option_value(
+        normalized.get('is_archived', ''),
+        option_sets.get('is_archived', []),
+        (normalized.get('is_archived') or '').strip(),
+    )
+    return normalized
+
+
+def _build_import_payload_from_row(row, field_indexes, header_labels, option_sets):
+    payload = {key: '' for key in CONTRACT_FIELD_KEYS}
+
+    for field, index in field_indexes.items():
+        raw_value = row[index] if index < len(row) else ''
+        if field == 'contract_amount_wan':
+            payload[field] = _normalize_excel_amount(raw_value, header_labels.get(field, ''))
+        elif field == 'handling_date':
+            payload[field] = _normalize_excel_date(raw_value)
+        else:
+            payload[field] = _stringify_excel_value(raw_value)
+
+    payload['contract_name'] = payload['contract_name'].replace('\n', ' ').strip()
+    payload['contract_number'] = payload['contract_number'].strip()
+    payload['contract_unit'] = payload['contract_unit'].strip()
+
+    return _normalize_excel_option_fields(payload, option_sets)
+
+
+def _build_contract_record(body: dict, created_by: str, pending_contract_numbers=None):
+    payload = body or {}
+
+    required = ['contract_name', 'contract_amount_wan', 'handling_department']
+    missing = [key for key in required if not str(payload.get(key, '')).strip()]
+    if missing:
+        return None, f'Missing required fields: {", ".join(missing)}', 400
+
+    amount = _safe_decimal(payload.get('contract_amount_wan'))
+    if amount is None:
+        return None, 'contract_amount_wan is invalid', 400
+
+    contract_number = (payload.get('contract_number') or '').strip()
+    pending_contract_numbers = pending_contract_numbers or set()
+    if contract_number:
+        if contract_number in pending_contract_numbers:
+            return None, 'contract_number already exists', 409
+        if Contract.query.filter_by(contract_number=contract_number).first():
+            return None, 'contract_number already exists', 409
+
+    department = (payload.get('handling_department') or '').strip()
+    allowed_departments = _get_department_names()
+    if department not in allowed_departments:
+        return None, 'handling_department is not in configured department settings', 400
+    _department_dir(department)
+
+    project = (payload.get('project') or '').strip() or None
+    if project:
+        allowed_projects = _get_project_names()
+        if project not in allowed_projects:
+            return None, 'project is not in configured project settings', 400
+
+    record = Contract(
+        contract_number=contract_number or None,
+        contract_name=(payload.get('contract_name') or '').strip(),
+        contract_unit=(payload.get('contract_unit') or '').strip() or None,
+        amount=amount,
+        currency='CNY',
+        approval_status=(payload.get('approval_status') or '').strip() or None,
+        handler=(payload.get('handler') or '').strip() or None,
+        department=department,
+        contract_determination_method=(payload.get('contract_determination_method') or '').strip() or None,
+        handling_date=_parse_date(payload.get('handling_date')),
+        contract_type=(payload.get('contract_type') or '').strip() or None,
+        invoice_type=(payload.get('invoice_type') or '').strip() or None,
+        tax_rate=(payload.get('tax_rate') or '').strip() or None,
+        pricing_method=(payload.get('pricing_method') or '').strip() or None,
+        is_archived=(payload.get('is_archived') or '').strip() or None,
+        project=project,
+        fullbody=(payload.get('fullbody') or '').strip() or None,
+        start_date=_parse_date(payload.get('start_date')),
+        end_date=_parse_date(payload.get('end_date')),
+        status=(payload.get('approval_status') or '').strip() or (payload.get('status') or 'active').strip() or 'active',
+        created_by=created_by,
+    )
+    return record, '', 0
 
 
 def _department_dir(department: str) -> str:
@@ -685,15 +1167,37 @@ def _find_contract_number(pdf_text: str, fallback: str) -> str:
 
 
 def _find_amount_wan(pdf_text: str, fallback: str) -> str:
-    text = (pdf_text or '').replace(',', '')
-    patterns = [
-        r'([0-9]+(?:\.[0-9]+)?)\s*万元',
-        r'金额[（(]?万元[）)]?[^0-9]*([0-9]+(?:\.[0-9]+)?)',
+    def _extract_amount_with_unit(text: str, patterns) -> str:
+        normalized = (text or '').replace(',', '').replace('，', '').replace(' ', '')
+        for pattern in patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if not match:
+                continue
+
+            number_text = match.group(1)
+            unit_text = match.group(2) if match.lastindex and match.lastindex >= 2 else '万元'
+            try:
+                return _convert_amount_to_wan(number_text, unit_text)
+            except (InvalidOperation, ValueError):
+                continue
+        return ''
+
+    pdf_patterns = [
+        r'(?:合同(?:总)?金额|合同价款|合同总价|价税合计|含税金额|金额|人民币(?:小写|金额)?|总价)[^0-9¥￥]*[¥￥]?([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
+        r'[¥￥]([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
+        r'([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
+    extracted = _extract_amount_with_unit(pdf_text, pdf_patterns)
+    if extracted:
+        return extracted
+
+    fallback_patterns = [
+        r'([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
+        r'([0-9]+(?:\.[0-9]+)?)',
+    ]
+    extracted = _extract_amount_with_unit(fallback, fallback_patterns)
+    if extracted:
+        return extracted
 
     cleaned = re.sub(r'[^0-9.]', '', (fallback or '').strip())
     if cleaned.count('.') > 1:
@@ -763,6 +1267,69 @@ def _normalize_ai_fields(raw: dict, pdf_text: str = '') -> dict:
 def _normalize_option_text(value: str) -> str:
     text = (value or '').strip().lower()
     return re.sub(r'[^\w\u4e00-\u9fff]+', '', text)
+
+
+def _find_ai_match_candidates(fields: dict, limit: int = AI_MATCH_CANDIDATE_LIMIT):
+    normalized_name = _normalize_option_text((fields or {}).get('contract_name', ''))
+    amount = _safe_decimal((fields or {}).get('contract_amount_wan'))
+    if not normalized_name and amount is None:
+        return []
+
+    same_amount_candidates = []
+    name_similarity_candidates = []
+    rows = Contract.query.order_by(Contract.updated_at.desc()).all()
+    for row in rows:
+        reasons = []
+        similarity = 0.0
+        contains_match = False
+
+        existing_name = _normalize_option_text(row.contract_name or '')
+        if normalized_name and existing_name:
+            similarity = SequenceMatcher(None, normalized_name, existing_name).ratio()
+            contains_match = normalized_name in existing_name or existing_name in normalized_name
+            if contains_match or similarity >= 0.55:
+                reasons.append('标题相似')
+
+        same_amount = False
+        if amount is not None and row.amount is not None:
+            try:
+                same_amount = Decimal(str(row.amount)) == amount
+            except (InvalidOperation, ValueError):
+                same_amount = False
+            if same_amount:
+                reasons.append('金额相同')
+
+        if not reasons:
+            continue
+
+        item = row.to_dict()
+        item['match_reasons'] = reasons
+        item['name_similarity'] = round(similarity, 4)
+        item['same_amount'] = same_amount
+
+        if same_amount:
+            same_amount_candidates.append(item)
+        elif contains_match or similarity >= 0.55:
+            name_similarity_candidates.append(item)
+
+    same_amount_candidates.sort(key=lambda item: (-item['name_similarity'], -item['id']))
+    name_similarity_candidates.sort(key=lambda item: (-item['name_similarity'], -item['id']))
+
+    merged = []
+    seen_ids = set()
+    for item in same_amount_candidates:
+        if item['id'] in seen_ids:
+            continue
+        merged.append(item)
+        seen_ids.add(item['id'])
+
+    for item in name_similarity_candidates[:5]:
+        if item['id'] in seen_ids:
+            continue
+        merged.append(item)
+        seen_ids.add(item['id'])
+
+    return merged[:limit]
 
 
 def _match_option_value(value: str, options, default: str = '') -> str:
@@ -888,8 +1455,11 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         '你是合同结构化抽取助手。请从给定PDF文本中抽取合同字段，只返回JSON对象，不要输出任何解释。\\n'
         'JSON键必须严格使用以下字段：'
         + ','.join(CONTRACT_FIELD_KEYS)
-        + '\\n'
-        '如果某字段不存在，请返回空字符串。handling_date 格式为 YYYY-MM-DD。contract_amount_wan 只保留数字。\\n'
+        + '\n'
+        '如果某字段不存在，请返回空字符串。handling_date 格式为 YYYY-MM-DD。'
+        'contract_amount_wan 必须返回“万元”为单位的纯数字字符串，不能带单位。'
+        '如果原文金额单位是元、千元、亿元或其他单位，必须精确换算成万元。'
+        '换算时不得四舍五入，不得截断，不得丢失任何有效数字。\n'
         '以下是PDF文本：\\n'
         + pdf_text[:20000]
     )
@@ -899,7 +1469,11 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         'messages': [
             {
                 'role': 'system',
-                'content': '你是合同结构化抽取助手，只返回合法JSON对象，不输出解释。在抽取contract_unit时，指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。' + \
+                'content': '你是合同结构化抽取助手，只返回合法JSON对象，不输出解释。'
+                    '在抽取contract_unit时，指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。'
+                    'contract_amount_wan 必须始终返回万元单位的纯数字字符串；'
+                    '如果原文是元、千元、亿元等其它单位，必须做精确换算为万元；'
+                    '不得四舍五入，不得截断，不得省略任何有效数字。' + \
                     '项目project请尽量从标题或是其它文本中识别出项目相关信息，选取如下列表中意思能对应的标题或文本 ，必须返回如下的项目名称，否则请返回空""：'+ ','.join(_get_project_names()) + ',\n' + \
                     'handling_department必须返回如下的部门名称之一（如果能从标题或是其它文本中识别出部门相关信息的话），否则请返回空""：' + ','.join(_get_department_names()) + ',\n' + \
                     'contract_name 可能有多行请合并回车空格等字符，如果无法识别则返回空""。'
@@ -1067,15 +1641,51 @@ def delete_department_setting(department_id):
 def list_contracts():
     department = (request.args.get('handling_department') or request.args.get('department') or '').strip()
     status = (request.args.get('approval_status') or request.args.get('status') or '').strip()
+    keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
 
     query = Contract.query
     if department:
         query = query.filter(Contract.department == department)
     if status:
         query = query.filter(Contract.approval_status == status)
+    if keyword:
+        pattern = f'%{keyword}%'
+        query = query.filter(or_(
+            Contract.contract_number.ilike(pattern),
+            Contract.contract_name.ilike(pattern),
+            Contract.contract_unit.ilike(pattern),
+            Contract.currency.ilike(pattern),
+            Contract.approval_status.ilike(pattern),
+            Contract.handler.ilike(pattern),
+            Contract.department.ilike(pattern),
+            Contract.contract_determination_method.ilike(pattern),
+            Contract.contract_type.ilike(pattern),
+            Contract.invoice_type.ilike(pattern),
+            Contract.tax_rate.ilike(pattern),
+            Contract.pricing_method.ilike(pattern),
+            Contract.is_archived.ilike(pattern),
+            Contract.project.ilike(pattern),
+            Contract.status.ilike(pattern),
+            Contract.file_path.ilike(pattern),
+            Contract.fullbody.ilike(pattern),
+            Contract.created_by.ilike(pattern),
+            cast(Contract.amount, String).ilike(pattern),
+            cast(Contract.handling_date, String).ilike(pattern),
+            cast(Contract.start_date, String).ilike(pattern),
+            cast(Contract.end_date, String).ilike(pattern),
+            cast(Contract.created_at, String).ilike(pattern),
+            cast(Contract.updated_at, String).ilike(pattern),
+        ))
 
     rows = query.order_by(Contract.updated_at.desc()).all()
     return jsonify([row.to_dict() for row in rows])
+
+
+@contracts_bp.get('/contracts/<int:contract_id>')
+@require_auth
+def get_contract(contract_id):
+    row = Contract.query.get_or_404(contract_id)
+    return jsonify(row.to_dict(include_fullbody=True))
 
 
 @contracts_bp.post('/contracts')
@@ -1083,57 +1693,151 @@ def list_contracts():
 def create_contract():
     body = request.get_json(silent=True) or {}
 
-    required = ['contract_name', 'contract_amount_wan', 'handling_department']
-    missing = [key for key in required if not str(body.get(key, '')).strip()]
-    if missing:
-        return jsonify({'message': f'Missing required fields: {", ".join(missing)}'}), 400
-
-    amount = _safe_decimal(body.get('contract_amount_wan'))
-    if amount is None:
-        return jsonify({'message': 'contract_amount_wan is invalid'}), 400
-
-    contract_number = (body.get('contract_number') or '').strip()
-    if contract_number and Contract.query.filter_by(contract_number=contract_number).first():
-        return jsonify({'message': 'contract_number already exists'}), 409
-
-    department = body['handling_department'].strip()
-    allowed_departments = _get_department_names()
-    if department not in allowed_departments:
-        return jsonify({'message': 'handling_department is not in configured department settings'}), 400
-    _department_dir(department)
-
-    project = (body.get('project') or '').strip() or None
-    if project:
-        allowed_projects = _get_project_names()
-        if project not in allowed_projects:
-            return jsonify({'message': 'project is not in configured project settings'}), 400
-
-    record = Contract(
-        contract_number=contract_number or None,
-        contract_name=body['contract_name'].strip(),
-        contract_unit=(body.get('contract_unit') or '').strip() or None,
-        amount=amount,
-        currency='CNY',
-        approval_status=(body.get('approval_status') or '').strip() or None,
-        handler=(body.get('handler') or '').strip() or None,
-        department=department,
-        contract_determination_method=(body.get('contract_determination_method') or '').strip() or None,
-        handling_date=_parse_date(body.get('handling_date')),
-        contract_type=(body.get('contract_type') or '').strip() or None,
-        invoice_type=(body.get('invoice_type') or '').strip() or None,
-        tax_rate=(body.get('tax_rate') or '').strip() or None,
-        pricing_method=(body.get('pricing_method') or '').strip() or None,
-        is_archived=(body.get('is_archived') or '').strip() or None,
-        project=project,
-        start_date=_parse_date(body.get('start_date')),
-        end_date=_parse_date(body.get('end_date')),
-        status=(body.get('approval_status') or '').strip() or (body.get('status') or 'active').strip() or 'active',
-        created_by=g.current_user,
-    )
+    record, message, status_code = _build_contract_record(body, g.current_user)
+    if record is None:
+        return jsonify({'message': message}), status_code
 
     db.session.add(record)
     db.session.commit()
-    return jsonify(record.to_dict()), 201
+    return jsonify(record.to_dict(include_fullbody=True)), 201
+
+
+@contracts_bp.post('/contracts/import-excel')
+@require_auth
+def import_contracts_excel():
+    if 'file' not in request.files:
+        return jsonify({'message': 'file is required'}), 400
+
+    uploaded = request.files['file']
+    if uploaded.filename == '':
+        return jsonify({'message': 'empty filename'}), 400
+
+    file_ext = os.path.splitext(uploaded.filename)[1].lower()
+    if file_ext not in EXCEL_ALLOWED_EXTENSIONS:
+        return jsonify({'message': '仅支持上传 xls 或 xlsx 文件'}), 400
+
+    try:
+        sheet_name, rows = _load_excel_rows(uploaded)
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 500
+    except Exception as exc:
+        current_app.logger.exception('Excel import failed while reading workbook')
+        return jsonify({'message': f'Excel解析失败: {exc}'}), 400
+
+    if not rows:
+        return jsonify({'message': 'Excel 文件中没有可读取的数据'}), 400
+
+    header_index, field_indexes, header_labels = _detect_excel_header(rows)
+    if not field_indexes:
+        return jsonify({'message': '未识别到可用表头，请确认 Excel 中包含合同名称、合同金额、承办部门等列'}), 400
+
+    required_headers = {
+        'contract_name': '合同名称',
+        'contract_amount_wan': '合同金额',
+        'handling_department': '承办部门',
+    }
+    missing_headers = [label for key, label in required_headers.items() if key not in field_indexes]
+    if missing_headers:
+        return jsonify({'message': f'Excel 缺少必要列: {", ".join(missing_headers)}'}), 400
+
+    option_sets = _get_contract_option_sets()
+    pending_contract_numbers = set()
+    imported_count = 0
+    skipped_count = 0
+    processed_rows = 0
+    errors = []
+    failed_rows = []
+    source_headers = [_stringify_excel_value(cell) for cell in (rows[header_index] if header_index is not None else [])]
+
+    for excel_row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+        if _is_excel_row_empty(row):
+            continue
+
+        payload = _build_import_payload_from_row(row, field_indexes, header_labels, option_sets)
+        if not any(str(payload.get(key, '')).strip() for key in CONTRACT_FIELD_KEYS):
+            continue
+
+        processed_rows += 1
+        record, message, status_code = _build_contract_record(
+            payload,
+            g.current_user,
+            pending_contract_numbers=pending_contract_numbers,
+        )
+        if record is None:
+            skipped_count += 1
+            errors.append({
+                'row': excel_row_number,
+                'status_code': status_code,
+                'message': message,
+            })
+            failed_rows.append({
+                'row': excel_row_number,
+                'message': message,
+                'row_values': list(row),
+            })
+            continue
+
+        db.session.add(record)
+        imported_count += 1
+        if record.contract_number:
+            pending_contract_numbers.add(record.contract_number)
+
+    if processed_rows == 0:
+        return jsonify({'message': 'Excel 表头已识别，但没有可导入的数据行'}), 400
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception('Excel import failed while saving rows')
+        return jsonify({'message': f'Excel导入保存失败: {exc}'}), 500
+
+    error_report_token, error_report_filename = _store_import_error_report(sheet_name, source_headers, failed_rows)
+
+    return jsonify({
+        'sheet_name': sheet_name,
+        'header_row': header_index + 1,
+        'total_rows': processed_rows,
+        'imported_count': imported_count,
+        'skipped_count': skipped_count,
+        'errors': errors[:50],
+        'error_report_token': error_report_token,
+        'error_report_filename': error_report_filename,
+    })
+
+
+@contracts_bp.get('/contracts/import-template')
+@require_auth
+def download_contract_import_template():
+    try:
+        output = _build_contract_import_template()
+    except Exception as exc:
+        current_app.logger.exception('Failed to build contract import template')
+        return jsonify({'message': f'导入模板生成失败: {exc}'}), 500
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='合同导入模板.xlsx',
+    )
+
+
+@contracts_bp.get('/contracts/import-error-report/<token>')
+@require_auth
+def download_contract_import_error_report(token):
+    payload = _IMPORT_ERROR_REPORTS.pop(token, None)
+    if not payload:
+        return jsonify({'message': '导入失败明细不存在或已失效，请重新导入后再下载'}), 404
+
+    return send_file(
+        BytesIO(payload['content']),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=payload['filename'],
+    )
 
 
 @contracts_bp.put('/contracts/<int:contract_id>')
@@ -1197,6 +1901,8 @@ def update_contract(contract_id):
             if project not in allowed_projects:
                 return jsonify({'message': 'project is not in configured project settings'}), 400
         record.project = project
+    if 'fullbody' in body:
+        record.fullbody = (body.get('fullbody') or '').strip() or None
     if 'start_date' in body:
         record.start_date = _parse_date(body.get('start_date'))
     if 'end_date' in body:
@@ -1205,7 +1911,7 @@ def update_contract(contract_id):
         record.status = (body.get('status') or '').strip() or record.status
 
     db.session.commit()
-    return jsonify(record.to_dict())
+    return jsonify(record.to_dict(include_fullbody=True))
 
 
 @contracts_bp.post('/contracts/<int:contract_id>/upload')
@@ -1291,9 +1997,16 @@ def parse_contract_pdf():
     fields = _normalize_option_fields(raw_fields)
     current_app.logger.info('AI parse: option-normalized fields=%s', fields)
 
+    match_candidates = _find_ai_match_candidates(fields)
+    current_app.logger.info('AI parse: matched existing contracts=%s', len(match_candidates))
+
     current_app.logger.info('AI parse: success extracted fields=%s', fields)
 
-    return jsonify({'fields': fields})
+    return jsonify({
+        'fields': fields,
+        'fullbody': pdf_text,
+        'match_candidates': match_candidates,
+    })
 
 
 @contracts_bp.get('/contracts/<int:contract_id>/download')

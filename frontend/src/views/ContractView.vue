@@ -5,11 +5,23 @@
         <div class="card-header">
           <div class="card-title">所有合同</div>
           <div class="header-actions">
-            <el-button :loading="aiParsing" @click="triggerAiUpload">{{ aiParsing ? 'AI解析中...' : '上传合同' }}</el-button>
+            <el-button :disabled="importingExcel" @click="downloadImportTemplate">导入模板下载</el-button>
+            <el-button :loading="importingExcel" :disabled="aiParsing" @click="triggerExcelUpload">
+              {{ importingExcel ? 'EXCEL导入中...' : 'EXCEL导入' }}
+            </el-button>
+            <el-button :loading="aiParsing" @click="triggerAiUpload">{{ aiParsing ? 'AI解析中...' : 'AI上传' }}</el-button>
             <el-button type="primary" :disabled="aiParsing" @click="openCreate">新建合同</el-button>
           </div>
         </div>
       </template>
+
+      <input
+        ref="excelUploadInput"
+        type="file"
+        accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        style="display: none"
+        @change="handleExcelSelected"
+      />
 
       <input
         ref="aiUploadInput"
@@ -26,10 +38,19 @@
         <el-select v-model="filters.approval_status" clearable placeholder="按审批状态筛选" style="width: 180px" @change="loadContracts">
           <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
         </el-select>
+        <el-input
+          v-model="filters.keyword"
+          clearable
+          placeholder="搜索任意合同字段"
+          style="width: 280px"
+          @clear="loadContracts"
+          @keyup.enter="loadContracts"
+        />
+        <el-button type="primary" @click="loadContracts">搜索</el-button>
         <el-button @click="loadContracts">刷新</el-button>
       </div>
 
-      <el-table :data="pagedContracts" stripe size="small" class="contract-table" @row-click="handleRowClick">
+      <el-table :data="pagedContracts" stripe size="small" class="contract-table">
          <el-table-column label="文件" min-width="220">
           <template #default="scope">
             <el-link class="file-cell"  @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
@@ -57,7 +78,9 @@
 
         <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip>
           <template #default="scope">
-            <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
+            <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
+              <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
+            </button>
           </template>
         </el-table-column>
         <el-table-column prop="contract_number" label="合同编号" min-width="140" />
@@ -78,7 +101,7 @@
                 :show-file-list="false"
                 :http-request="(options) => doUpload(scope.row.id, options.file)"
               >
-                <el-tooltip content="上传文件" placement="top">
+                <el-tooltip content="上传合同" placement="top">
                   <el-button circle size="small" :icon="Upload" />
                 </el-tooltip>
               </el-upload>
@@ -101,11 +124,111 @@
       </div>
     </el-card>
 
+    <el-dialog v-model="aiMatchDialogVisible" title="识别结果确认" width="min(1080px, 96vw)">
+      <div class="ai-match-dialog">
+        <div class="ai-match-preview-column">
+          <div class="preview-header">
+            <div class="preview-title">上传文件预览</div>
+          </div>
+          <div
+            class="preview-panel"
+            :class="{ 'preview-panel-clickable': !!previewUrl && !previewLoading }"
+            @click="openFullscreenPreview"
+          >
+            <div v-if="previewLoading" class="preview-placeholder">预览加载中...</div>
+            <VuePdfEmbed
+              v-else-if="previewUrl"
+              :source="previewUrl"
+              class="pdf-preview-embed"
+              @rendering-failed="handlePdfRenderFailed"
+            />
+            <div v-else class="preview-placeholder">{{ previewMessage }}</div>
+          </div>
+          <div v-if="previewUrl && !previewLoading" class="preview-hint">点击预览区域可全屏查看</div>
+        </div>
+
+        <div class="ai-match-content">
+          <div class="ai-match-summary">
+            <div class="ai-match-title">AI 已完成解析，请先确认这是新合同还是已有合同。</div>
+            <div class="ai-match-subtitle">系统已按合同标题相似度和金额相同规则筛出候选合同。</div>
+          </div>
+
+          <el-table
+            :data="aiMatchCandidates"
+            stripe
+            size="small"
+            class="ai-match-table"
+            empty-text="未找到相似合同，可直接选择“这是新合同”"
+            @row-click="handleAiMatchRowClick"
+          >
+            <el-table-column label="选择" width="74" align="center">
+              <template #default="scope">
+                <input
+                  class="ai-match-radio"
+                  type="radio"
+                  name="ai-match-selection"
+                  :checked="aiMatchSelection === String(scope.row.id)"
+                  @change="selectAiMatchCandidate(scope.row.id)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="文件" min-width="240">
+              <template #default="scope">
+                <el-link v-if="scope.row.file_path" class="file-cell" @click.stop="openFilePreview(scope.row)">
+                  <Icon :icon="getFileIcon(scope.row.file_path)" class="file-ok file-download" />
+                  <span class="file-name" :title="getFileName(scope.row.file_path)">
+                    {{ getFileName(scope.row.file_path) }}
+                  </span>
+                </el-link>
+                <span v-else class="no-file-name">未上传</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="contract_name" label="合同名称" min-width="280" show-overflow-tooltip />
+            <el-table-column prop="contract_amount_wan" label="金额(万元)" min-width="130" />
+            <el-table-column label="匹配依据" min-width="160">
+              <template #default="scope">
+                {{ formatAiMatchReasons(scope.row) }}
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <label class="ai-match-new-option" @click="selectAiMatchAsNew">
+            <input
+              class="ai-match-radio"
+              type="radio"
+              name="ai-match-selection"
+              :checked="aiMatchSelection === AI_NEW_CONTRACT_VALUE"
+              @change="selectAiMatchAsNew"
+            />
+            <span>这是新合同</span>
+          </label>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="closeAiMatchDialog">取消</el-button>
+        <el-button type="primary" :loading="aiMatchProcessing" @click="proceedAiMatchSelection">下一步</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1380px, 98vw)">
       <el-form :model="form" label-width="120px" class="dialog-form">
         <div class="dialog-layout">
           <div class="preview-column">
-            <div class="preview-title">文件预览</div>
+            <div class="preview-header">
+              <div class="preview-title">文件预览</div>
+              <div class="preview-actions">
+
+                <el-button size="small" @click="textDialogVisible = true">文本</el-button>
+
+                <el-upload
+                  :show-file-list="false"
+                  :http-request="(options) => handleDialogUpload(options.file)"
+                >
+                  <el-button :icon="Upload" size="small">上传文件</el-button>
+                </el-upload>
+              </div>
+            </div>
             <div
               class="preview-panel"
               :class="{ 'preview-panel-clickable': !!previewUrl && !previewLoading }"
@@ -136,7 +259,12 @@
                 <el-input v-model="form.contract_unit" />
               </el-form-item>
               <el-form-item label="合同金额(万元)">
-                <el-input v-model="form.contract_amount_wan" type="number" />
+                <el-input
+                  v-model="form.contract_amount_wan"
+                  inputmode="decimal"
+                  placeholder="支持最多 8 位及以上精确小数输入"
+                  @blur="normalizeContractAmount"
+                />
               </el-form-item>
               <el-form-item label="审批状态">
                 <el-select v-model="form.approval_status" clearable placeholder="可留空" style="width: 100%">
@@ -236,12 +364,26 @@
         <el-button @click="fullPreviewVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="textDialogVisible" title="合同文本" width="min(960px, 96vw)">
+      <el-input
+        v-model="form.fullbody"
+        type="textarea"
+        :rows="24"
+        resize="vertical"
+        placeholder="暂无文本内容"
+      />
+
+      <template #footer>
+        <el-button @click="textDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
 import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
@@ -256,13 +398,26 @@ import http from '../api/http'
 
 GlobalWorkerOptions.workerSrc = PdfWorker
 
+const AI_NEW_CONTRACT_VALUE = '__new_contract__'
+
 const contracts = ref([])
 const departments = ref([])
 const saving = ref(false)
 const aiParsing = ref(false)
+const aiMatchDialogVisible = ref(false)
+const aiMatchProcessing = ref(false)
+const aiMatchCandidates = ref([])
+const aiMatchSelection = ref(AI_NEW_CONTRACT_VALUE)
+const aiParsedFields = ref(null)
+const aiParsedFullbody = ref('')
+const aiParsedUploadFile = ref(null)
+const previewFileName = ref('')
+const importingExcel = ref(false)
 const dialogVisible = ref(false)
+const textDialogVisible = ref(false)
 const editing = ref(null)
 const currentPage = ref(1)
+const excelUploadInput = ref(null)
 const aiUploadInput = ref(null)
 const pendingAiUploadFile = ref(null)
 const previewUrl = ref('')
@@ -275,6 +430,7 @@ const pageSize = 100
 const filters = reactive({
   handling_department: '',
   approval_status: '',
+  keyword: '',
 })
 
 const options = reactive({
@@ -303,6 +459,9 @@ const contractNameColumnWidth = computed(() => {
   return Math.min(maxWidth, Math.max(baseWidth, longestLength * 12 + 16))
 })
 const fullPreviewTitle = computed(() => {
+  if (previewFileName.value) {
+    return `文件预览 - ${previewFileName.value}`
+  }
   const name = getFileName(currentPreviewRow.value?.file_path || '')
   return name ? `文件预览 - ${name}` : '文件预览'
 })
@@ -324,6 +483,7 @@ const form = reactive({
   pricing_method: '',
   is_archived: '未归档',
   project: '',
+  fullbody: '',
 })
 
 const resetForm = () => {
@@ -343,6 +503,21 @@ const resetForm = () => {
   form.pricing_method = ''
   form.is_archived = '未归档'
   form.project = ''
+  form.fullbody = ''
+}
+
+const resetAiMatchState = () => {
+  aiMatchCandidates.value = []
+  aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
+  aiParsedFields.value = null
+  aiParsedFullbody.value = ''
+  aiParsedUploadFile.value = null
+  aiMatchProcessing.value = false
+}
+
+const loadContractDetail = async (contractId) => {
+  const { data } = await http.get(`/contracts/${contractId}`)
+  return data
 }
 
 const loadDepartments = async () => {
@@ -366,26 +541,117 @@ const loadContracts = async () => {
     params: {
       handling_department: filters.handling_department || undefined,
       approval_status: filters.approval_status || undefined,
+      keyword: filters.keyword || undefined,
     },
   })
   contracts.value = data
   currentPage.value = 1
 }
 
-const handleRowClick = (row, column) => {
-  if (column?.label === '操作') {
-    return
-  }
-  openEdit(row)
-}
-
 const openCreate = () => {
   editing.value = null
   pendingAiUploadFile.value = null
   currentPreviewRow.value = null
+  previewFileName.value = ''
   resetForm()
   resetPreview('暂无文件')
   dialogVisible.value = true
+}
+
+const isBlankValue = (value) => String(value ?? '').trim() === ''
+
+const populateFormFromContract = (row) => {
+  form.file_path = row.file_path || ''
+  form.contract_name = row.contract_name || ''
+  form.contract_number = row.contract_number || ''
+  form.contract_unit = row.contract_unit || ''
+  form.contract_amount_wan = normalizeAmountInputValue(row.contract_amount_wan)
+  form.approval_status = row.approval_status || ''
+  form.handler = row.handler || ''
+  form.handling_department = row.handling_department || row.department || ''
+  form.contract_determination_method = row.contract_determination_method || ''
+  form.handling_date = row.handling_date || ''
+  form.contract_type = row.contract_type || ''
+  form.invoice_type = row.invoice_type || ''
+  form.tax_rate = row.tax_rate || ''
+  form.pricing_method = row.pricing_method || ''
+  form.is_archived = row.is_archived || '未归档'
+  form.project = row.project || ''
+  form.fullbody = row.fullbody || ''
+}
+
+const applyAiSupplementalFields = (fields, sourceRow = {}) => {
+  const mapping = [
+    ['contract_name', 'contract_name'],
+    ['contract_number', 'contract_number'],
+    ['contract_unit', 'contract_unit'],
+    ['contract_amount_wan', 'contract_amount_wan'],
+    ['approval_status', 'approval_status'],
+    ['handler', 'handler'],
+    ['handling_department', 'handling_department'],
+    ['contract_determination_method', 'contract_determination_method'],
+    ['handling_date', 'handling_date'],
+    ['contract_type', 'contract_type'],
+    ['invoice_type', 'invoice_type'],
+    ['tax_rate', 'tax_rate'],
+    ['pricing_method', 'pricing_method'],
+    ['is_archived', 'is_archived'],
+    ['project', 'project'],
+    ['fullbody', 'fullbody'],
+  ]
+
+  for (const [formKey, fieldKey] of mapping) {
+    const incomingRaw = fields?.[fieldKey]
+    const incomingValue = formKey === 'contract_amount_wan'
+      ? normalizeAmountInputValue(incomingRaw)
+      : String(incomingRaw ?? '').trim()
+
+    if (isBlankValue(incomingValue)) {
+      continue
+    }
+
+    const existingValue = formKey === 'handling_department'
+      ? (sourceRow?.handling_department || sourceRow?.department || '')
+      : sourceRow?.[formKey]
+
+    if (!isBlankValue(existingValue)) {
+      continue
+    }
+
+    form[formKey] = incomingValue
+  }
+}
+
+const openCreateFromAi = (file, fields) => {
+  editing.value = null
+  pendingAiUploadFile.value = file
+  currentPreviewRow.value = null
+  previewFileName.value = file?.name || ''
+  resetForm()
+  form.file_path = file?.name || ''
+  applyParsedFields(fields || {})
+  form.fullbody = aiParsedFullbody.value || ''
+  setPreviewFromFile(file)
+  dialogVisible.value = true
+}
+
+const openEditWithSupplementalFields = async (row, fields) => {
+  const detail = row?.id ? await loadContractDetail(row.id) : row
+  editing.value = detail
+  currentPreviewRow.value = detail
+  previewFileName.value = ''
+  pendingAiUploadFile.value = null
+  populateFormFromContract(detail)
+  applyAiSupplementalFields(fields || {}, detail)
+  loadPdfPreviewForRow(detail)
+  dialogVisible.value = true
+}
+
+const triggerExcelUpload = () => {
+  if (importingExcel.value) {
+    return
+  }
+  excelUploadInput.value?.click()
 }
 
 const triggerAiUpload = () => {
@@ -395,11 +661,81 @@ const triggerAiUpload = () => {
   aiUploadInput.value?.click()
 }
 
+const handleExcelSelected = async (event) => {
+  const file = event?.target?.files?.[0]
+  if (!file) {
+    return
+  }
+
+  if (!/\.(xls|xlsx)$/i.test(file.name)) {
+    ElMessage.warning('请上传 xls 或 xlsx 文件')
+    event.target.value = ''
+    return
+  }
+
+  importingExcel.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+
+    const { data } = await http.post('/contracts/import-excel', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+
+    await loadFieldOptions()
+    await loadContracts()
+
+    const summary = `导入完成：成功 ${data?.imported_count || 0} 条，跳过 ${data?.skipped_count || 0} 条。`
+    const errorLines = Array.isArray(data?.errors)
+      ? data.errors.slice(0, 10).map((item) => `第 ${item.row} 行：${item.message}`)
+      : []
+
+    if (errorLines.length > 0) {
+      await ElMessageBox.alert(`${summary}\n\n${errorLines.join('\n')}`, 'EXCEL导入结果', {
+        confirmButtonText: '知道了',
+      })
+      if (data?.error_report_token) {
+        await downloadImportErrorReport(data.error_report_token, data.error_report_filename)
+        ElMessage.success('失败明细已下载，可修正后再次导入')
+      }
+    } else {
+      ElMessage.success(summary)
+    }
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || 'EXCEL 导入失败')
+  } finally {
+    importingExcel.value = false
+    event.target.value = ''
+  }
+}
+
+const downloadImportTemplate = async () => {
+  try {
+    const response = await http.get('/contracts/import-template', {
+      responseType: 'blob',
+    })
+    const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
+    triggerBrowserDownload(response.data, headerName || '合同导入模板.xlsx')
+  } catch (error) {
+    const message = await parseErrorMessage(error, '导入模板下载失败')
+    ElMessage.error(message)
+  }
+}
+
+const downloadImportErrorReport = async (token, fallbackName = '合同导入失败明细.xlsx') => {
+  const response = await http.get(`/contracts/import-error-report/${token}`, {
+    responseType: 'blob',
+  })
+  const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
+  triggerBrowserDownload(response.data, headerName || fallbackName)
+}
+
 const applyParsedFields = (fields) => {
   form.contract_name = fields?.contract_name || ''
   form.contract_number = fields?.contract_number || ''
   form.contract_unit = fields?.contract_unit || ''
-  form.contract_amount_wan = fields?.contract_amount_wan || ''
+  form.contract_amount_wan = normalizeAmountInputValue(fields?.contract_amount_wan || '')
   form.approval_status = fields?.approval_status || ''
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
@@ -411,6 +747,88 @@ const applyParsedFields = (fields) => {
   form.pricing_method = fields?.pricing_method || ''
   form.is_archived = fields?.is_archived || '未归档'
   form.project = fields?.project || ''
+  form.fullbody = fields?.fullbody || ''
+}
+
+const selectAiMatchCandidate = (contractId) => {
+  aiMatchSelection.value = String(contractId)
+}
+
+const selectAiMatchAsNew = () => {
+  aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
+}
+
+const handleAiMatchRowClick = (row) => {
+  if (row?.id) {
+    selectAiMatchCandidate(row.id)
+  }
+}
+
+const formatAiMatchReasons = (row) => {
+  const reasons = Array.isArray(row?.match_reasons)
+    ? row.match_reasons.filter((item) => String(item || '').trim())
+    : []
+
+  if (reasons.length > 0) {
+    return reasons.join(' / ')
+  }
+
+  const fallback = []
+  if (row?.name_similarity > 0) {
+    fallback.push('标题相似')
+  }
+  if (row?.same_amount) {
+    fallback.push('金额相同')
+  }
+  return fallback.join(' / ')
+}
+
+const closeAiMatchDialog = () => {
+  aiMatchDialogVisible.value = false
+  resetAiMatchState()
+  previewFileName.value = ''
+}
+
+const proceedAiMatchSelection = async () => {
+  const selectedValue = aiMatchSelection.value
+  const selectedFile = aiParsedUploadFile.value
+  const parsedFields = aiParsedFields.value || {}
+
+  if (!selectedFile) {
+    ElMessage.error('AI上传文件状态已丢失，请重新上传')
+    closeAiMatchDialog()
+    return
+  }
+
+  aiMatchProcessing.value = true
+  try {
+    if (selectedValue === AI_NEW_CONTRACT_VALUE) {
+      aiMatchDialogVisible.value = false
+      openCreateFromAi(selectedFile, parsedFields)
+      resetAiMatchState()
+      return
+    }
+
+    const selectedId = Number(selectedValue)
+    const matchedRow = aiMatchCandidates.value.find((item) => item.id === selectedId)
+    if (!matchedRow) {
+      ElMessage.warning('请选择要关联的已有合同，或选择“这是新合同”')
+      return
+    }
+
+    const uploadResult = await doUpload(matchedRow.id, selectedFile)
+    const mergedRow = {
+      ...matchedRow,
+      file_path: uploadResult?.file_path || matchedRow.file_path,
+    }
+
+    aiMatchDialogVisible.value = false
+    await openEditWithSupplementalFields(mergedRow, parsedFields)
+    ElMessage.success('已关联到已有合同，请确认补充字段后保存')
+    resetAiMatchState()
+  } finally {
+    aiMatchProcessing.value = false
+  }
 }
 
 const handleAiPdfSelected = async (event) => {
@@ -425,6 +843,8 @@ const handleAiPdfSelected = async (event) => {
     return
   }
 
+  resetAiMatchState()
+  pendingAiUploadFile.value = null
   aiParsing.value = true
   ElMessage.info('AI正在解析PDF，请稍候')
   try {
@@ -435,14 +855,21 @@ const handleAiPdfSelected = async (event) => {
       timeout: 120000,
     })
 
-    editing.value = null
-    pendingAiUploadFile.value = file
-    resetForm()
-    form.file_path = file.name
-    applyParsedFields(data?.fields || {})
+    const parsedFullbody = data?.fullbody || ''
+    const parsedFields = {
+      ...(data?.fields || {}),
+      fullbody: parsedFullbody,
+    }
+
+    aiParsedUploadFile.value = file
+    aiParsedFields.value = parsedFields
+    aiParsedFullbody.value = parsedFullbody
+    aiMatchCandidates.value = Array.isArray(data?.match_candidates) ? data.match_candidates : []
+    aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
+    previewFileName.value = file.name
     setPreviewFromFile(file)
-    dialogVisible.value = true
-    ElMessage.success('AI解析完成，请确认后保存')
+    aiMatchDialogVisible.value = true
+    ElMessage.success('AI解析完成，请先确认是否匹配到已有合同')
   } catch (error) {
     if (error?.code === 'ECONNABORTED') {
       ElMessage.error('AI解析超时，请稍后重试')
@@ -464,26 +891,7 @@ const handleAiPdfSelected = async (event) => {
 }
 
 const openEdit = (row) => {
-  editing.value = row
-  currentPreviewRow.value = row
-  form.file_path = row.file_path || ''
-  form.contract_name = row.contract_name
-  form.contract_number = row.contract_number || ''
-  form.contract_unit = row.contract_unit || ''
-  form.contract_amount_wan = row.contract_amount_wan
-  form.approval_status = row.approval_status || ''
-  form.handler = row.handler || ''
-  form.handling_department = row.handling_department || ''
-  form.contract_determination_method = row.contract_determination_method || ''
-  form.handling_date = row.handling_date || ''
-  form.contract_type = row.contract_type || ''
-  form.invoice_type = row.invoice_type || ''
-  form.tax_rate = row.tax_rate || ''
-  form.pricing_method = row.pricing_method || ''
-  form.is_archived = row.is_archived || '未归档'
-  form.project = row.project || ''
-  loadPdfPreviewForRow(row)
-  dialogVisible.value = true
+  openEditWithSupplementalFields(row, null)
 }
 
 const revokePreviewUrl = () => {
@@ -516,9 +924,11 @@ const setPreviewFromBlob = (blob) => {
 
 const setPreviewFromFile = (file) => {
   if (!file) {
+    previewFileName.value = ''
     resetPreview('暂无文件')
     return
   }
+  previewFileName.value = file.name || ''
   if (!/\.pdf$/i.test(file.name)) {
     resetPreview('该文件不是PDF，无法预览')
     return
@@ -544,6 +954,7 @@ const openFilePreview = async (row) => {
   }
 
   currentPreviewRow.value = row
+  previewFileName.value = ''
   fullPreviewVisible.value = true
 
   if (!isPdfFilePath(row.file_path)) {
@@ -566,6 +977,7 @@ const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
   }
 
   previewLoading.value = true
+  previewFileName.value = getFileName(row.file_path)
   previewMessage.value = ''
   try {
     const response = await http.get(`/contracts/${row.id}/preview`, {
@@ -581,11 +993,41 @@ const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
   }
 }
 
+const normalizeAmountInputValue = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return ''
+  }
+
+  const normalized = raw
+    .replace(/[，,\s]/g, '')
+    .replace(/。/g, '.')
+
+  if (/^\d*(?:\.\d*)?$/.test(normalized)) {
+    return normalized
+  }
+
+  return raw
+}
+
+const normalizeContractAmount = () => {
+  form.contract_amount_wan = normalizeAmountInputValue(form.contract_amount_wan)
+}
+
 const saveContract = async () => {
-  if (!form.contract_name || !form.handling_department || !form.contract_amount_wan) {
+  const normalizedAmount = normalizeAmountInputValue(form.contract_amount_wan)
+
+  if (!form.contract_name || !form.handling_department || !normalizedAmount) {
     ElMessage.warning('请填写必要字段')
     return
   }
+
+  if (!/^\d+(?:\.\d+)?$/.test(normalizedAmount)) {
+    ElMessage.warning('合同金额请输入纯数字，可带小数点')
+    return
+  }
+
+  form.contract_amount_wan = normalizedAmount
 
   if (!departments.value.includes(form.handling_department)) {
     ElMessage.warning('请选择系统设置中的有效部门')
@@ -604,7 +1046,7 @@ const saveContract = async () => {
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
-        contract_amount_wan: form.contract_amount_wan,
+        contract_amount_wan: normalizedAmount,
         approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
@@ -616,6 +1058,7 @@ const saveContract = async () => {
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
+        fullbody: form.fullbody,
       })
       ElMessage.success('更新成功')
     } else {
@@ -623,7 +1066,7 @@ const saveContract = async () => {
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
-        contract_amount_wan: form.contract_amount_wan,
+        contract_amount_wan: normalizedAmount,
         approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
@@ -635,6 +1078,7 @@ const saveContract = async () => {
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
+        fullbody: form.fullbody,
       })
 
       if (pendingAiUploadFile.value) {
@@ -659,18 +1103,53 @@ const saveContract = async () => {
   }
 }
 
+const syncEditingFileState = async (filePath) => {
+  const normalizedFilePath = filePath || ''
+  form.file_path = normalizedFilePath
+
+  if (editing.value) {
+    editing.value.file_path = normalizedFilePath
+  }
+  if (currentPreviewRow.value?.id === editing.value?.id) {
+    currentPreviewRow.value.file_path = normalizedFilePath
+  }
+
+  if (!normalizedFilePath) {
+    resetPreview('暂无文件', false)
+    return
+  }
+
+  await loadPdfPreviewForRow({ id: editing.value.id, file_path: normalizedFilePath }, false)
+}
+
 const doUpload = async (contractId, file) => {
   const fd = new FormData()
   fd.append('file', file)
   try {
-    await http.post(`/contracts/${contractId}/upload`, fd, {
+    const { data } = await http.post(`/contracts/${contractId}/upload`, fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     ElMessage.success('上传成功')
     await loadContracts()
+    return data
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '上传失败')
+    throw error
   }
+}
+
+const handleDialogUpload = async (file) => {
+  if (!editing.value?.id) {
+    pendingAiUploadFile.value = file
+    form.file_path = file?.name || ''
+    currentPreviewRow.value = null
+    setPreviewFromFile(file)
+    ElMessage.success('文件已选择，保存合同后会自动上传')
+    return
+  }
+
+  const data = await doUpload(editing.value.id, file)
+  await syncEditingFileState(data?.file_path)
 }
 
 const parseFilenameFromDisposition = (value) => {
@@ -794,6 +1273,12 @@ watch(dialogVisible, (visible) => {
     resetPreview('暂无文件')
   }
 })
+
+watch(aiMatchDialogVisible, (visible) => {
+  if (!visible && !aiMatchProcessing.value) {
+    resetAiMatchState()
+  }
+})
 </script>
 
 <style>
@@ -884,11 +1369,30 @@ watch(dialogVisible, (visible) => {
 }
 
 .contract-name-link {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
   font-weight: 500;
+  cursor: pointer;
+}
+
+.contract-name-link:hover .contract-name-cell {
+  text-decoration: underline;
+}
+
+.contract-name-link:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .contract-name-cell {
   display: inline-block;
+  max-width: 100%;
   white-space: nowrap;
 }
 
@@ -896,6 +1400,65 @@ watch(dialogVisible, (visible) => {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.ai-match-dialog {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ai-match-preview-column {
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fafafa;
+}
+
+.ai-match-preview-column .preview-panel {
+  height: min(62vh, 720px);
+}
+
+.ai-match-content {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-match-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-match-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.ai-match-subtitle {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.ai-match-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
+.ai-match-radio {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.ai-match-new-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  cursor: pointer;
+  color: #111827;
+  font-weight: 500;
 }
 
 .dialog-layout {
@@ -914,8 +1477,15 @@ watch(dialogVisible, (visible) => {
 .preview-title {
   font-size: 14px;
   font-weight: 600;
-  margin-bottom: 8px;
   color: #374151;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 .preview-panel {
@@ -1011,6 +1581,11 @@ watch(dialogVisible, (visible) => {
   grid-column: span 1;
 }
 
+.preview-actions{
+    display: flex;
+    gap: 8px;
+}
+
 @media (min-width: 1280px) {
   .dialog-layout {
     grid-template-columns: minmax(360px, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -1033,6 +1608,16 @@ watch(dialogVisible, (visible) => {
 @media (min-width: 1024px) {
   .preview-panel {
     height: min(62vh, 680px);
+  }
+}
+
+@media (max-width: 1100px) {
+  .ai-match-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-match-preview-column .preview-panel {
+    height: min(48vh, 520px);
   }
 }
 </style>

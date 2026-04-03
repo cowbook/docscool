@@ -1,6 +1,18 @@
 from datetime import datetime
+from decimal import Decimal
 
 from .extensions import db
+
+
+def _decimal_to_string(value) -> str:
+    if value is None:
+        return ''
+
+    decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    text = format(decimal_value, 'f')
+    if '.' in text:
+        text = text.rstrip('0').rstrip('.')
+    return text or '0'
 
 
 class Contract(db.Model):
@@ -10,7 +22,7 @@ class Contract(db.Model):
     contract_number = db.Column(db.String(64), unique=True, nullable=True, index=True)
     contract_name = db.Column(db.String(255), nullable=False)
     contract_unit = db.Column(db.String(255), nullable=True)
-    amount = db.Column(db.Numeric(12, 2), nullable=False)
+    amount = db.Column(db.Numeric(20, 8), nullable=False)
     currency = db.Column(db.String(16), nullable=False, default='CNY')
     approval_status = db.Column(db.String(64), nullable=True)
     handler = db.Column(db.String(64), nullable=True)
@@ -23,6 +35,7 @@ class Contract(db.Model):
     pricing_method = db.Column(db.String(64), nullable=True)
     is_archived = db.Column(db.String(32), nullable=True)
     project = db.Column(db.String(255), nullable=True)
+    fullbody = db.Column(db.Text, nullable=True)
     start_date = db.Column(db.Date, nullable=True)
     end_date = db.Column(db.Date, nullable=True)
     status = db.Column(db.String(32), nullable=False, default='active')
@@ -31,14 +44,14 @@ class Contract(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_fullbody: bool = False):
+        payload = {
             'id': self.id,
             'contract_number': self.contract_number,
             'contract_name': self.contract_name,
             'contract_unit': self.contract_unit,
-            'contract_amount_wan': float(self.amount),
-            'amount': float(self.amount),
+            'contract_amount_wan': _decimal_to_string(self.amount),
+            'amount': _decimal_to_string(self.amount),
             'currency': self.currency,
             'approval_status': self.approval_status,
             'handler': self.handler,
@@ -60,6 +73,9 @@ class Contract(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }
+        if include_fullbody:
+            payload['fullbody'] = self.fullbody or ''
+        return payload
 
 
 class Department(db.Model):
