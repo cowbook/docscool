@@ -94,7 +94,7 @@
         <el-table-column prop="is_archived" label="是否归档" min-width="90" />
         <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
      
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <el-table-column label="操作" width="140" fixed="right" align="center">
           <template #default="scope">
             <div class="action-buttons">
               <el-upload
@@ -107,6 +107,9 @@
               </el-upload>
               <el-tooltip content="编辑" placement="top">
                 <el-button circle size="small" type="primary" :icon="Edit" @click.stop="openEdit(scope.row)" />
+              </el-tooltip>
+              <el-tooltip content="删除" placement="top">
+                <el-button circle size="small" type="danger" :icon="Delete" @click.stop="handleDelete(scope.row)" />
               </el-tooltip>
             </div>
           </template>
@@ -390,7 +393,7 @@ import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
-import { CircleCloseFilled, Edit, Upload } from '@element-plus/icons-vue'
+import { CircleCloseFilled, Delete, Edit, Upload } from '@element-plus/icons-vue'
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
@@ -1135,6 +1138,48 @@ const doUpload = async (contractId, file) => {
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '上传失败')
     throw error
+  }
+}
+
+const handleDelete = async (row) => {
+  if (!row?.id) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除合同《${row.contract_name || '未命名合同'}》吗？\n这会同时删除合同数据和已上传文件，且无法恢复。`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+
+    await http.delete(`/contracts/${row.id}`)
+
+    if (editing.value?.id === row.id) {
+      dialogVisible.value = false
+      textDialogVisible.value = false
+      editing.value = null
+      pendingAiUploadFile.value = null
+      resetForm()
+    }
+
+    if (currentPreviewRow.value?.id === row.id) {
+      currentPreviewRow.value = null
+      previewFileName.value = ''
+      resetPreview('暂无文件')
+    }
+
+    ElMessage.success('删除成功')
+    await loadContracts()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+    ElMessage.error(error?.response?.data?.message || '删除失败')
   }
 }
 

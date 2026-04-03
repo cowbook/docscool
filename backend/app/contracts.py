@@ -933,6 +933,38 @@ def _load_contract_file_payload(record: Contract):
         return f.read(), file_name, mime
 
 
+def _delete_contract_file(record: Contract) -> None:
+    normalized_file_path = _normalize_contract_file_path(record.file_path)
+    if not normalized_file_path:
+        return
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        remote_file_path = _build_filestation_path(normalized_file_path)
+        sid = _synology_upload_login()
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.Delete',
+                'version': '2',
+                'method': 'delete',
+            },
+            data={
+                'path': f'["{remote_file_path}"]',
+            },
+        )
+        if payload.get('success'):
+            return
+
+        code = _synology_error_code(payload)
+        if code in {404, 415}:
+            return
+        raise RuntimeError(_synology_error_message(payload, 'filestation'))
+
+    local_file_path = _safe_local_file_path(normalized_file_path)
+    if os.path.isfile(local_file_path):
+        os.remove(local_file_path)
+
+
 def _get_department_names():
     rows = Department.query.order_by(Department.name.asc()).all()
     return [row.name for row in rows]
@@ -1909,6 +1941,23 @@ def update_contract(contract_id):
 
     db.session.commit()
     return jsonify(record.to_dict(include_fullbody=True))
+
+
+@contracts_bp.delete('/contracts/<int:contract_id>')
+@require_auth
+def delete_contract(contract_id):
+    record = Contract.query.get_or_404(contract_id)
+
+    try:
+        _delete_contract_file(record)
+    except ValueError:
+        return jsonify({'message': 'file_path 非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'删除文件失败: {exc}'}), 500
+
+    db.session.delete(record)
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 @contracts_bp.post('/contracts/<int:contract_id>/upload')
