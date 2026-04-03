@@ -1,3 +1,6 @@
+*.swp
+*.pid
+
 # Node
 frontend/node_modules/
 
