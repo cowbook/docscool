@@ -27,6 +27,7 @@ contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 _OCR_ENGINE = None
 _IMPORT_ERROR_REPORTS = {}
 EXTERNAL_API_TIMEOUT_SECONDS = 300
+DEFAULT_DEPARTMENT_NAME = '财务部'
 
 
 CONTRACT_FIELD_KEYS = [
@@ -229,7 +230,7 @@ def _match_excel_field(header_text: str) -> str:
         ('project', ('项目名称', '项目')),
     ]
     for field, keywords in contains_rules:
-        if any(keyword in header_text for keyword in keywords):
+        if any(keyword == header_text for keyword in keywords):
             return field
 
     return ''
@@ -2024,6 +2025,9 @@ def create_department_setting():
 @require_auth
 def delete_department_setting(department_id):
     row = Department.query.get_or_404(department_id)
+
+    if row.name == DEFAULT_DEPARTMENT_NAME:
+        return jsonify({'message': '默认部门“财务部”不允许删除'}), 409
 
     in_use = Contract.query.filter(Contract.department == row.name).first()
     if in_use:

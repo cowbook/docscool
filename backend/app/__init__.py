@@ -9,7 +9,7 @@ from .auth import auth_bp
 from .config import Config
 from .contracts import contracts_bp
 from .extensions import db
-from .models import Contract, ProjectOption
+from .models import Contract, Department, ProjectOption
 
 
 DEFAULT_PROJECT_OPTIONS = [
@@ -24,6 +24,8 @@ DEFAULT_PROJECT_OPTIONS = [
     '江苏沿海输气管道淮安-建湖-盐城段工程',
     '江苏沿海输气管道淮安储气库支线段工程',
 ]
+
+DEFAULT_DEPARTMENT_NAME = '财务部'
 
 
 def _ensure_contract_columns():
@@ -58,6 +60,15 @@ def _seed_project_options():
 
     for name in missing:
         db.session.add(ProjectOption(name=name))
+    db.session.commit()
+
+
+def _seed_departments():
+    existing = {row.name for row in Department.query.all()}
+    if DEFAULT_DEPARTMENT_NAME in existing:
+        return
+
+    db.session.add(Department(name=DEFAULT_DEPARTMENT_NAME))
     db.session.commit()
 
 
@@ -120,6 +131,7 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         _ensure_contract_columns()
+        _seed_departments()
         _seed_project_options()
         _migrate_legacy_file_paths(app)
 

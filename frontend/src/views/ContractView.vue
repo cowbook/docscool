@@ -1,5 +1,5 @@
 <template>
-  <div class="contract-page">
+  <div class="contract-page" :loading="importingExcel || aiParsing">
     <el-card>
       <template #header>
         <div class="card-header">
@@ -10,13 +10,10 @@
           
           <div class="header-actions">
             <el-button-group>
-              <el-button :disabled="importingExcel || aiParsing" @click="downloadImportTemplate">
-                <el-icon><Download /></el-icon>
-                <span>模板</span>
-              </el-button>
+            
               <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
-                <el-icon><Upload /></el-icon>
-                <span>{{ importingExcel ? '导入中...' : '导入' }}</span>
+                <Icon :icon="fileTypeExcel" />
+                <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
               </el-button>
               <el-button :loading="aiParsing" @click="triggerAiUpload">
                 <el-icon><Document /></el-icon>
@@ -131,7 +128,7 @@
                 {{ getFileName(scope.row.file_path) || '缺失' }}
               </span>
             </el-link>
-            <div v-else  @click.stop="javascript:void(0);" >
+            <div v-else>
                 <el-icon class="file-miss"><CircleCloseFilled /></el-icon>
                 <span class="no-file-name">未上传</span>
             
@@ -146,7 +143,13 @@
             </button>
           </template>
         </el-table-column>
-        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable />
+        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable show-overflow-tooltip>
+          <template #default="scope">
+            <span class="no-wrap-cell" :title="scope.row.contract_number || ''">
+              {{ scope.row.contract_number || '' }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
         <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
         <el-table-column prop="approval_status" label="审批状态" min-width="100" sortable />
@@ -290,21 +293,25 @@
           style="margin-bottom: 20px"
         >
           <div class="import-rules">
-            <div>• 合同编号必须唯一，如果编号存在，则更新合同内容</div>
-            <div>• 所有导入的合同自动归档到"未归档"</div>
-            <div>• 已归档的合同只能由管理员进行修改</div>
+            <div>• 合同编号: 必须唯一，如果编号存在，则更新合同内容</div>
+            <div>• 归档状态: 所有导入的合同自动归档到"未归档",已归档的合同由管理员进行修改</div>
+            <div>• 合同金额: 从MIS导出的“合同金额（万元”）必须转成元，字段名必须重新命名为“合同金额” </div>
           </div>
         </el-alert>
       </div>
       <template #footer>
         <div class="import-dialog-footer">
-          <el-button @click="importDialogVisible = false">取消</el-button>
-          <el-button @click="downloadImportTemplate">
+
+           <el-button link @click="downloadImportTemplate">
             <el-icon><Download /></el-icon>
             下载模板
           </el-button>
+
+          
+          <el-button @click="importDialogVisible = false">取消</el-button>
+         
           <el-button type="primary" @click="triggerExcelUpload">
-            <el-icon><Upload /></el-icon>
+            <el-icon><Document /></el-icon>
             选择文件
           </el-button>
         </div>
@@ -1611,6 +1618,14 @@ watch(aiMatchDialogVisible, (visible) => {
   display: inline-block;
   max-width: 100%;
   white-space: nowrap;
+}
+
+.no-wrap-cell {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pager {
