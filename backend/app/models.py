@@ -50,7 +50,7 @@ class Contract(db.Model):
             'contract_number': self.contract_number,
             'contract_name': self.contract_name,
             'contract_unit': self.contract_unit,
-            'contract_amount_wan': _decimal_to_string(self.amount),
+            'contract_amount': _decimal_to_string(self.amount),
             'amount': _decimal_to_string(self.amount),
             'currency': self.currency,
             'approval_status': self.approval_status,

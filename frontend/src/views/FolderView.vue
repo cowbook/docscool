@@ -50,6 +50,14 @@
               <button type="button" class="menu-item" @click="handleContextCommand('create')">新建文件夹</button>
               <button
                 type="button"
+                class="menu-item"
+                :disabled="!contextTargetPath"
+                @click="handleContextCommand('rename')"
+              >
+                改名
+              </button>
+              <button
+                type="button"
                 class="menu-item menu-item-danger"
                 :disabled="!contextTargetPath"
                 @click="handleContextCommand('delete')"
@@ -91,7 +99,7 @@
             <el-table-column prop="contract_name" label="名称" min-width="260" show-overflow-tooltip />
             <el-table-column prop="contract_number" label="合同编号" min-width="140" />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
-            <el-table-column prop="contract_amount_wan" label="合同金额(万元)" min-width="120" />
+            <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
             <el-table-column prop="approval_status" label="审批状态" min-width="110" />
             <el-table-column prop="handler" label="承办人" min-width="100" />
             <el-table-column prop="handling_department" label="承办部门" min-width="130" />
@@ -283,6 +291,10 @@ const handleContextCommand = async (command) => {
     await createFolder(targetPath)
     return
   }
+  if (command === 'rename') {
+    await renameFolder(targetPath)
+    return
+  }
   if (command === 'delete') {
     await deleteFolder(targetPath)
   }
@@ -305,7 +317,7 @@ const filteredFiles = computed(() => {
       row?.contract_name,
       row?.contract_number,
       row?.contract_unit,
-      row?.contract_amount_wan,
+      row?.contract_amount,
       row?.approval_status,
       row?.handler,
       row?.handling_department,
@@ -550,6 +562,51 @@ const deleteFolder = async (targetPath = selectedFolderPath.value) => {
       return
     }
     ElMessage.error(error?.response?.data?.message || '删除文件夹失败')
+  }
+}
+
+const renameFolder = async (targetPath = selectedFolderPath.value) => {
+  const folderPath = normalizePath(targetPath)
+  if (!folderPath) {
+    ElMessage.warning('根目录不允许重命名')
+    return
+  }
+
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的文件夹名称', '重命名文件夹', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputPlaceholder: '新文件夹名称',
+      inputValidator: (val) => {
+        if (!String(val || '').trim()) {
+          return '文件夹名称不能为空'
+        }
+        if (/[/\\]/.test(val)) {
+          return '文件夹名称不能包含斜杠'
+        }
+        return true
+      },
+    })
+
+    await http.put('/folders', {
+      path: folderPath,
+      name: value,
+    })
+
+    ElMessage.success('重命名成功')
+    const parentPath = getParentPath(folderPath)
+    await refreshAffectedNodeChildren(parentPath)
+    await nextTick()
+    const newPath = parentPath ? `${parentPath}/${value}` : value
+    if (selectedFolderPath.value === folderPath) {
+      selectedFolderPath.value = newPath
+    }
+    treeRef.value?.setCurrentKey?.(newPath)
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+    ElMessage.error(error?.response?.data?.message || '重命名文件夹失败')
   }
 }
 

@@ -33,7 +33,7 @@ CONTRACT_FIELD_KEYS = [
     'contract_name',
     'contract_number',
     'contract_unit',
-    'contract_amount_wan',
+    'contract_amount',
     'approval_status',
     'handler',
     'handling_department',
@@ -124,7 +124,7 @@ EXCEL_HEADER_ALIASES = {
     'contract_name': ['合同名称', '合同名', '名称', '标题', '流程标题', '审批标题', '表单标题'],
     'contract_number': ['合同编号', '编号', '协议编号', '单号', '流程编号', '表单编号'],
     'contract_unit': ['合同单位', '对方单位', '签约单位', '相对方', '供应商', '供应商名称', '客户名称'],
-    'contract_amount_wan': ['合同金额', '合同金额万元', '合同金额元', '金额', '价税合计', '含税金额', '总价', '合同总价', '合同总金额'],
+    'contract_amount': ['合同金额', '金额', '价税合计', '含税金额', '总价', '合同总价', '合同总金额'],
     'approval_status': ['审批状态', '审核状态', '状态', '流程状态', '审批结果'],
     'handler': ['承办人', '经办人', '负责人', '申请人', '发起人', '填报人'],
     'handling_department': ['承办部门', '部门', '归口部门', '申请部门', '发起部门', '所属部门'],
@@ -134,7 +134,6 @@ EXCEL_HEADER_ALIASES = {
     'invoice_type': ['发票类型', '票据类型'],
     'tax_rate': ['税率'],
     'pricing_method': ['计价方式', '定价方式'],
-    'is_archived': ['是否归档', '归档状态'],
     'project': ['项目', '项目名称'],
 }
 
@@ -216,7 +215,7 @@ def _match_excel_field(header_text: str) -> str:
         ('contract_name', ('合同名称', '合同名', '流程标题', '审批标题', '表单标题', '标题')),
         ('contract_number', ('合同编号', '协议编号', '流程编号', '表单编号', '编号', '单号')),
         ('contract_unit', ('合同单位', '对方单位', '签约单位', '相对方', '供应商', '客户名称')),
-        ('contract_amount_wan', ('合同金额', '合同总价', '合同总金额', '价税合计', '含税金额', '总价', '金额')),
+        ('contract_amount', ('合同金额', '合同总价', '合同总金额', '价税合计', '含税金额', '总价', '金额')),
         ('approval_status', ('审批状态', '审核状态', '流程状态', '审批结果', '状态')),
         ('handler', ('承办人', '经办人', '负责人', '申请人', '发起人', '填报人')),
         ('handling_department', ('承办部门', '归口部门', '申请部门', '发起部门', '所属部门', '部门')),
@@ -373,7 +372,7 @@ def _build_contract_import_template():
         '合同名称',
         '合同编号',
         '合同单位',
-        '合同金额(万元)',
+        '合同金额',
         '审批状态',
         '承办人',
         '承办部门',
@@ -383,10 +382,9 @@ def _build_contract_import_template():
         '发票类型',
         '税率',
         '计价方式',
-        '是否归档',
         '项目',
     ]
-    widths = [26, 20, 24, 16, 14, 14, 18, 18, 14, 14, 16, 12, 14, 12, 22]
+    widths = [26, 20, 24, 16, 14, 14, 18, 18, 14, 14, 16, 12, 14, 22]
 
     sheet.append(headers)
     header_fill = PatternFill(fill_type='solid', fgColor='DCE6F1')
@@ -402,8 +400,8 @@ def _build_contract_import_template():
     notes = workbook.create_sheet('填写说明')
     note_rows = [
         ['说明', '内容'],
-        ['必要列', '合同名称、合同金额(万元)、承办部门'],
-        ['金额规则', '请填写万元单位的纯数字，可保留 8 位及以上小数'],
+        ['必要列', '合同名称、合同金额、承办部门'],
+        ['金额规则', '请填写元单位的纯数字，可保留 8 位及以上小数'],
         ['日期格式', '建议使用 YYYY-MM-DD，例如 2026-04-03'],
         ['承办部门', '必须填写系统中已经配置的部门名称'],
         ['项目', '如填写，必须填写系统中已配置的项目名称'],
@@ -526,8 +524,8 @@ def _build_import_payload_from_row(row, field_indexes, header_labels, option_set
 
     for field, index in field_indexes.items():
         raw_value = row[index] if index < len(row) else ''
-        if field == 'contract_amount_wan':
-            payload[field] = _normalize_excel_amount(raw_value, header_labels.get(field, ''))
+        if field == 'contract_amount':
+            payload[field] = _stringify_excel_value(raw_value)
         elif field == 'handling_date':
             payload[field] = _normalize_excel_date(raw_value)
         else:
@@ -540,37 +538,67 @@ def _build_import_payload_from_row(row, field_indexes, header_labels, option_set
     return _normalize_excel_option_fields(payload, option_sets)
 
 
-def _build_contract_record(body: dict, created_by: str, pending_contract_numbers=None):
+def _build_contract_record(body: dict, created_by: str, pending_contract_numbers=None, update_mode=True):
     payload = body or {}
 
-    required = ['contract_name', 'contract_amount_wan', 'handling_department']
+    required = ['contract_name', 'contract_amount', 'handling_department']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
     if missing:
-        return None, f'Missing required fields: {", ".join(missing)}', 400
+        return None, f'Missing required fields: {", ".join(missing)}', 400, False
 
-    amount = _safe_decimal(payload.get('contract_amount_wan'))
+    amount = _safe_decimal(payload.get('contract_amount'))
     if amount is None:
-        return None, 'contract_amount_wan is invalid', 400
+        return None, 'contract_amount is invalid', 400, False
 
     contract_number = (payload.get('contract_number') or '').strip()
+    if not contract_number:
+        return None, '合同编号不能为空', 400, False
+    
     pending_contract_numbers = pending_contract_numbers or set()
+    is_update = False
+    
     if contract_number:
         if contract_number in pending_contract_numbers:
-            return None, 'contract_number already exists', 409
-        if Contract.query.filter_by(contract_number=contract_number).first():
-            return None, 'contract_number already exists', 409
+            return None, 'contract_number already exists', 409, False
+        
+        existing_contract = Contract.query.filter_by(contract_number=contract_number).first()
+        if existing_contract:
+            if update_mode:
+                if existing_contract.is_archived == '已归档':
+                    return None, '已归档的合同只能由管理员进行修改', 403, False
+                existing_contract.contract_name = (payload.get('contract_name') or '').strip()
+                existing_contract.contract_unit = (payload.get('contract_unit') or '').strip() or None
+                existing_contract.amount = amount
+                existing_contract.currency = 'CNY'
+                existing_contract.approval_status = (payload.get('approval_status') or '').strip() or None
+                existing_contract.handler = (payload.get('handler') or '').strip() or None
+                existing_contract.department = (payload.get('handling_department') or '').strip()
+                existing_contract.contract_determination_method = (payload.get('contract_determination_method') or '').strip() or None
+                existing_contract.handling_date = _parse_date(payload.get('handling_date'))
+                existing_contract.contract_type = (payload.get('contract_type') or '').strip() or None
+                existing_contract.invoice_type = (payload.get('invoice_type') or '').strip() or None
+                existing_contract.tax_rate = (payload.get('tax_rate') or '').strip() or None
+                existing_contract.pricing_method = (payload.get('pricing_method') or '').strip() or None
+                existing_contract.project = (payload.get('project') or '').strip() or None
+                existing_contract.fullbody = (payload.get('fullbody') or '').strip() or None
+                existing_contract.start_date = _parse_date(payload.get('start_date'))
+                existing_contract.end_date = _parse_date(payload.get('end_date'))
+                existing_contract.status = (payload.get('approval_status') or '').strip() or (payload.get('status') or 'active').strip() or 'active'
+                return existing_contract, '', 0, True
+            else:
+                return None, 'contract_number already exists', 409, False
 
     department = (payload.get('handling_department') or '').strip()
     allowed_departments = _get_department_names()
     if department not in allowed_departments:
-        return None, 'handling_department is not in configured department settings', 400
+        return None, 'handling_department is not in configured department settings', 400, False
     _department_dir(department)
 
     project = (payload.get('project') or '').strip() or None
     if project:
         allowed_projects = _get_project_names()
         if project not in allowed_projects:
-            return None, 'project is not in configured project settings', 400
+            return None, 'project is not in configured project settings', 400, False
 
     record = Contract(
         contract_number=contract_number or None,
@@ -587,7 +615,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         invoice_type=(payload.get('invoice_type') or '').strip() or None,
         tax_rate=(payload.get('tax_rate') or '').strip() or None,
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
-        is_archived=(payload.get('is_archived') or '').strip() or None,
+        is_archived='未归档',
         project=project,
         fullbody=(payload.get('fullbody') or '').strip() or None,
         start_date=_parse_date(payload.get('start_date')),
@@ -595,7 +623,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         status=(payload.get('approval_status') or '').strip() or (payload.get('status') or 'active').strip() or 'active',
         created_by=created_by,
     )
-    return record, '', 0
+    return record, '', 0, False
 
 
 def _department_dir(department: str) -> str:
@@ -1144,7 +1172,7 @@ def _build_folder_file_items(relative_folder_path: str):
             'contract_name': contract_payload.get('contract_name') if contract_payload else '<无匹配>',
             'contract_number': contract_payload.get('contract_number') if contract_payload else '',
             'contract_unit': contract_payload.get('contract_unit') if contract_payload else '',
-            'contract_amount_wan': contract_payload.get('contract_amount_wan') if contract_payload else '',
+            'contract_amount': contract_payload.get('contract_amount') if contract_payload else '',
             'approval_status': contract_payload.get('approval_status') if contract_payload else '',
             'handler': contract_payload.get('handler') if contract_payload else '',
             'handling_department': contract_payload.get('handling_department') if contract_payload else '',
@@ -1631,7 +1659,7 @@ def _normalize_ai_fields(raw: dict, pdf_text: str = '') -> dict:
 
     normalized['contract_number'] = _find_contract_number(pdf_text, normalized.get('contract_number', ''))
     normalized['contract_unit'] = _exclude_my_company(normalized.get('contract_unit', ''))
-    normalized['contract_amount_wan'] = _find_amount_wan(pdf_text, normalized.get('contract_amount_wan', ''))
+    normalized['contract_amount'] = _find_amount_wan(pdf_text, normalized.get('contract_amount', ''))
     normalized['handling_date'] = _normalize_date_value(normalized.get('handling_date', ''))
     normalized['tax_rate'] = _find_tax_rate(pdf_text, normalized.get('tax_rate', ''))
     return normalized
@@ -1644,7 +1672,7 @@ def _normalize_option_text(value: str) -> str:
 
 def _find_ai_match_candidates(fields: dict, limit: int = AI_MATCH_CANDIDATE_LIMIT):
     normalized_name = _normalize_option_text((fields or {}).get('contract_name', ''))
-    amount = _safe_decimal((fields or {}).get('contract_amount_wan'))
+    amount = _safe_decimal((fields or {}).get('contract_amount'))
     if not normalized_name and amount is None:
         return []
 
@@ -1831,8 +1859,8 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
         'handling_date格式为 YYYY-MM-DD\n'
          'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。如果不好定位就返回文本里出现的非我公司的单位名称。\n'
-                    'contract_amount_wan 必须始终返回万元单位的纯数字字符串不能带单位。；'
-                    '如果原文是元、千元、亿元等其它单位，必须做精确换算为万元；'
+                    'contract_amount 必须始终返回元单位的纯数字字符串不能带单位。；'
+                    '如果原文是万元、千元、亿元等其它单位，必须做精确换算为元；'
                     '不得四舍五入，不得截断，不得省略任何有效数字。\n' + \
                     'project是合同属于什么工程或项目，请尽量从标题或是其它文本中识别出项目相关信息， 从全文解理本合同是不是属于如下项目列表，不需要要强匹配找意思相似的标题或文本, 必须值返回如下的项目名称文本，如果合同真的不属于项目或是工程请返回空""：'+ ','.join(_get_project_names()) + ',\n' + \
                     'handling_department必须返回如下的部门列表其中之一文本（如果能从标题或是其它文本中识别出部门相关信息的话最好，不能的话先判断这个合同一般是列表中的哪个部门职责，通过判断来返回），实在靠不上部门请返回空""：' + ','.join(_get_department_names()) + ',\n' + \
@@ -2108,6 +2136,80 @@ def delete_folder():
     return jsonify({'success': True})
 
 
+@contracts_bp.put('/folders')
+@require_auth
+def rename_folder():
+    body = request.get_json(silent=True) or {}
+    folder_path = body.get('path') or ''
+    new_name = body.get('name') or ''
+
+    if not folder_path:
+        return jsonify({'message': 'path is required'}), 400
+    if not new_name:
+        return jsonify({'message': 'name is required'}), 400
+
+    try:
+        normalized_path = _normalize_relative_path(folder_path)
+        if not normalized_path:
+            return jsonify({'message': '不允许重命名根目录'}), 400
+
+        name = (new_name or '').strip()
+        if not name:
+            return jsonify({'message': '文件夹名称不能为空'}), 400
+        if '/' in name or '\\' in name:
+            return jsonify({'message': '文件夹名称不能包含斜杠'}), 400
+
+        parent_path = posixpath.dirname(normalized_path)
+        if parent_path == '.':
+            parent_path = ''
+
+        new_relative_path = _build_synology_file_path(parent_path, name)
+
+        if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+            sid = _synology_upload_login()
+            old_remote_path = _remote_folder_path(normalized_path)
+            new_remote_path = _remote_folder_path(new_relative_path)
+
+            payload = _synology_api_post(
+                sid,
+                {
+                    'api': 'SYNO.FileStation.Rename',
+                    'version': '2',
+                    'method': 'rename',
+                },
+                data={
+                    'path': f'["{old_remote_path}"]',
+                    'name': _synology_json_array(name),
+                },
+            )
+            if not payload.get('success'):
+                code = _synology_error_code(payload)
+                if code in {404, 415}:
+                    return jsonify({'message': '目录不存在'}), 404
+                raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        else:
+            old_local_path = _safe_local_folder_path(normalized_path)
+            if not os.path.isdir(old_local_path):
+                return jsonify({'message': '目录不存在'}), 404
+
+            new_local_path = _safe_local_folder_path(new_relative_path)
+            if os.path.exists(new_local_path):
+                return jsonify({'message': '文件夹已存在'}), 409
+
+            os.rename(old_local_path, new_local_path)
+
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileExistsError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        return jsonify({'message': f'重命名文件夹失败: {exc}'}), 500
+
+    return jsonify({'path': new_relative_path})
+
+
 @contracts_bp.get('/folders/file-download')
 @require_auth
 def download_storage_file():
@@ -2162,14 +2264,27 @@ def preview_storage_file():
 @require_auth
 def list_contracts():
     department = (request.args.get('handling_department') or request.args.get('department') or '').strip()
+    project = (request.args.get('project') or '').strip()
     status = (request.args.get('approval_status') or request.args.get('status') or '').strip()
     keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
+    has_file = request.args.get('has_file') == 'true'
+    is_archived = (request.args.get('is_archived') or '').strip()
 
     query = Contract.query
-    if department:
+    if department == '__empty__':
+        query = query.filter(Contract.department.is_(None))
+    elif department:
         query = query.filter(Contract.department == department)
+    if project == '__empty__':
+        query = query.filter(Contract.project.is_(None))
+    elif project:
+        query = query.filter(Contract.project == project)
     if status:
         query = query.filter(Contract.approval_status == status)
+    if has_file:
+        query = query.filter(Contract.file_path.isnot(None))
+    if is_archived:
+        query = query.filter(Contract.is_archived == is_archived)
     if keyword:
         pattern = f'%{keyword}%'
         query = query.filter(or_(
@@ -2215,7 +2330,7 @@ def get_contract(contract_id):
 def create_contract():
     body = request.get_json(silent=True) or {}
 
-    record, message, status_code = _build_contract_record(body, g.current_user)
+    record, message, status_code, _ = _build_contract_record(body, g.current_user)
     if record is None:
         return jsonify({'message': message}), status_code
 
@@ -2257,7 +2372,7 @@ def import_contracts_excel():
 
     required_headers = {
         'contract_name': '合同名称',
-        'contract_amount_wan': '合同金额',
+        'contract_amount': '合同金额',
         'handling_department': '承办部门',
     }
     missing_headers = [label for key, label in required_headers.items() if key not in field_indexes]
@@ -2267,6 +2382,7 @@ def import_contracts_excel():
     option_sets = _get_contract_option_sets()
     pending_contract_numbers = set()
     imported_count = 0
+    updated_count = 0
     skipped_count = 0
     processed_rows = 0
     errors = []
@@ -2282,10 +2398,11 @@ def import_contracts_excel():
             continue
 
         processed_rows += 1
-        record, message, status_code = _build_contract_record(
+        record, message, status_code, is_update = _build_contract_record(
             payload,
             g.current_user,
             pending_contract_numbers=pending_contract_numbers,
+            update_mode=True,
         )
         if record is None:
             skipped_count += 1
@@ -2302,7 +2419,10 @@ def import_contracts_excel():
             continue
 
         db.session.add(record)
-        imported_count += 1
+        if is_update:
+            updated_count += 1
+        else:
+            imported_count += 1
         if record.contract_number:
             pending_contract_numbers.add(record.contract_number)
 
@@ -2323,6 +2443,7 @@ def import_contracts_excel():
         'header_row': header_index + 1,
         'total_rows': processed_rows,
         'imported_count': imported_count,
+        'updated_count': updated_count,
         'skipped_count': skipped_count,
         'errors': errors[:50],
         'error_report_token': error_report_token,
@@ -2384,11 +2505,19 @@ def update_contract(contract_id):
         record.contract_name = (body.get('contract_name') or '').strip() or record.contract_name
     if 'contract_unit' in body:
         record.contract_unit = (body.get('contract_unit') or '').strip() or None
-    if 'contract_amount_wan' in body:
-        amount = _safe_decimal(body.get('contract_amount_wan'))
+
+
+
+    if 'contract_amount' in body:
+        amount = _safe_decimal(body.get('contract_amount'))
         if amount is None:
-            return jsonify({'message': 'contract_amount_wan is invalid'}), 400
+            return jsonify({'message': 'contract_amount is invalid'}), 400
+
         record.amount = amount
+        current_app.logger.info('调试: contract_amount=%s, amount=%s', body.get('contract_amount'), amount)
+        
+
+
     if 'approval_status' in body:
         record.approval_status = (body.get('approval_status') or '').strip() or None
         record.status = record.approval_status or record.status

@@ -4,15 +4,43 @@
       <template #header>
         <div class="card-header">
           <div class="card-title">所有合同</div>
+          <div class="card-num">
+            <el-tag type="danger" size="default">{{ totalContracts }} 条</el-tag>
+          </div>
+          
           <div class="header-actions">
-            <el-button :disabled="importingExcel" @click="downloadImportTemplate">导入模板下载</el-button>
-            <el-button :loading="importingExcel" :disabled="aiParsing" @click="triggerExcelUpload">
-              {{ importingExcel ? 'EXCEL导入中...' : 'EXCEL导入' }}
-            </el-button>
-            <el-button :loading="aiParsing" @click="triggerAiUpload">{{ aiParsing ? 'AI解析中...' : 'AI上传' }}</el-button>
-            <el-button type="primary" :disabled="aiParsing" @click="openCreate">新建合同</el-button>
+            <el-button-group>
+              <el-button :disabled="importingExcel || aiParsing" @click="downloadImportTemplate">
+                <el-icon><Download /></el-icon>
+                <span>模板</span>
+              </el-button>
+              <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
+                <el-icon><Upload /></el-icon>
+                <span>{{ importingExcel ? '导入中...' : '导入' }}</span>
+              </el-button>
+              <el-button :loading="aiParsing" @click="triggerAiUpload">
+                <el-icon><Document /></el-icon>
+                <span>{{ aiParsing ? '解析中...' : 'AI上传' }}</span>
+              </el-button>
+              <el-button type="primary" :disabled="aiParsing" @click="openCreate">
+                <el-icon><Plus /></el-icon>
+                <span>新建</span>
+              </el-button>
+            </el-button-group>
           </div>
         </div>
+      <div class="header-notice">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-top: 12px;"
+        >
+          <div class="notice-content">
+            <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有管理员可以修改</span>
+          </div>
+        </el-alert>
+      </div>
       </template>
 
       <input
@@ -32,25 +60,60 @@
       />
 
       <div class="toolbar">
-        <el-select v-model="filters.handling_department" clearable placeholder="按承办部门筛选" style="width: 220px" @change="loadContracts">
-          <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
-        </el-select>
-        <el-select v-model="filters.approval_status" clearable placeholder="按审批状态筛选" style="width: 180px" @change="loadContracts">
-          <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
-        </el-select>
-        <el-input
-          v-model="filters.keyword"
-          clearable
-          placeholder="搜索任意合同字段"
-          style="width: 280px"
-          @clear="loadContracts"
-          @keyup.enter="loadContracts"
-        />
-        <el-button type="primary" @click="loadContracts">搜索</el-button>
-        <el-button @click="loadContracts">刷新</el-button>
+        <div class="toolbar-row">
+        
+          <el-switch
+            v-model="filters.has_file"
+            active-text="有文件"
+            inactive-text="全部"
+            @change="loadContracts"
+          />
+          <el-switch
+            v-model="filters.is_archived"
+            active-text="已归档"
+            inactive-text="未归档"
+            @change="loadContracts"
+          />
+        </div>
+        <div class="toolbar-row">
+
+            <el-select v-model="filters.handling_department" clearable placeholder="按承办部门筛选" style="width: 220px" @change="loadContracts">
+            <el-option value="__empty__" label="(空)" />
+            <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="filters.project" clearable placeholder="按项目筛选" style="width: 200px" @change="loadContracts">
+            <el-option value="__empty__" label="(空)" />
+            <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="filters.approval_status" clearable placeholder="按审批状态筛选" style="width: 180px" @change="loadContracts">
+            <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
+          </el-select>
+
+          <el-input
+            v-model="filters.keyword"
+            clearable
+            placeholder="搜索任意合同字段"
+            style="width: 280px"
+            @clear="loadContracts"
+            @keyup.enter="loadContracts"
+          />
+          <el-button type="primary" @click="loadContracts">搜索</el-button>
+          <el-button @click="loadContracts">刷新</el-button>
+        </div>
       </div>
 
-      <el-table :data="pagedContracts" stripe size="small" class="contract-table">
+      <div class="pager-top">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="totalContracts"
+          :page-sizes="[50, 100, 200, 500]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
+
+      <el-table :data="pagedContracts" stripe border resizable size="small" class="contract-table" @sort-change="handleSortChange">
          <el-table-column label="文件" min-width="220">
           <template #default="scope">
             <el-link class="file-cell"  @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
@@ -76,23 +139,23 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip>
+        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip sortable>
           <template #default="scope">
             <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
               <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
             </button>
           </template>
         </el-table-column>
-        <el-table-column prop="contract_number" label="合同编号" min-width="140" />
-        <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="contract_amount_wan" label="合同金额(万元)" min-width="120" />
-        <el-table-column prop="approval_status" label="审批状态" min-width="100" />
-        <el-table-column prop="handler" label="承办人" min-width="100" />
-        <el-table-column prop="handling_department" label="承办部门" min-width="130" />
-        <el-table-column prop="handling_date" label="承办日期" min-width="110" />
-        <el-table-column prop="contract_type" label="合同类型" min-width="110" />
-        <el-table-column prop="is_archived" label="是否归档" min-width="90" />
-        <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable />
+        <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
+        <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
+        <el-table-column prop="approval_status" label="审批状态" min-width="100" sortable />
+        <el-table-column prop="handler" label="承办人" min-width="100" sortable />
+        <el-table-column prop="handling_department" label="承办部门" min-width="130" sortable />
+        <el-table-column prop="handling_date" label="承办日期" min-width="110" sortable />
+        <el-table-column prop="contract_type" label="合同类型" min-width="110" sortable />
+        <el-table-column prop="is_archived" label="是否归档" min-width="90" sortable />
+        <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip sortable />
      
         <el-table-column label="操作" width="140" fixed="right" align="center">
           <template #default="scope">
@@ -119,9 +182,10 @@
       <div class="pager">
         <el-pagination
           v-model:current-page="currentPage"
-          :page-size="pageSize"
+          v-model:page-size="pageSize"
           :total="totalContracts"
-          layout="total, prev, pager, next, jumper"
+          :page-sizes="[50, 100, 200, 500]"
+          layout="total, sizes, prev, pager, next, jumper"
           background
         />
       </div>
@@ -159,6 +223,8 @@
           <el-table
             :data="aiMatchCandidates"
             stripe
+            border
+            resizable
             size="small"
             class="ai-match-table"
             empty-text="未找到相似合同，可直接选择“这是新合同”"
@@ -187,7 +253,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="contract_name" label="合同名称" min-width="280" show-overflow-tooltip />
-            <el-table-column prop="contract_amount_wan" label="金额(万元)" min-width="130" />
+            <el-table-column prop="contract_amount" label="金额" min-width="130" />
             <el-table-column label="匹配依据" min-width="160">
               <template #default="scope">
                 {{ formatAiMatchReasons(scope.row) }}
@@ -211,6 +277,37 @@
       <template #footer>
         <el-button @click="closeAiMatchDialog">取消</el-button>
         <el-button type="primary" :loading="aiMatchProcessing" @click="proceedAiMatchSelection">下一步</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="importDialogVisible" title="导入合同" width="500px" :close-on-click-modal="false">
+      <div class="import-dialog-content">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="导入规则"
+          style="margin-bottom: 20px"
+        >
+          <div class="import-rules">
+            <div>• 合同编号必须唯一，如果编号存在，则更新合同内容</div>
+            <div>• 所有导入的合同自动归档到"未归档"</div>
+            <div>• 已归档的合同只能由管理员进行修改</div>
+          </div>
+        </el-alert>
+      </div>
+      <template #footer>
+        <div class="import-dialog-footer">
+          <el-button @click="importDialogVisible = false">取消</el-button>
+          <el-button @click="downloadImportTemplate">
+            <el-icon><Download /></el-icon>
+            下载模板
+          </el-button>
+          <el-button type="primary" @click="triggerExcelUpload">
+            <el-icon><Upload /></el-icon>
+            选择文件
+          </el-button>
+        </div>
       </template>
     </el-dialog>
 
@@ -261,9 +358,9 @@
               <el-form-item label="合同单位">
                 <el-input v-model="form.contract_unit" />
               </el-form-item>
-              <el-form-item label="合同金额(万元)">
+              <el-form-item label="合同金额">
                 <el-input
-                  v-model="form.contract_amount_wan"
+                  v-model="form.contract_amount"
                   inputmode="decimal"
                   placeholder="支持最多 8 位及以上精确小数输入"
                   @blur="normalizeContractAmount"
@@ -393,7 +490,7 @@ import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
-import { CircleCloseFilled, Delete, Edit, Upload } from '@element-plus/icons-vue'
+import { CircleCloseFilled, Delete, Document, Download, Edit, Plus, Upload } from '@element-plus/icons-vue'
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
@@ -416,10 +513,49 @@ const aiParsedFullbody = ref('')
 const aiParsedUploadFile = ref(null)
 const previewFileName = ref('')
 const importingExcel = ref(false)
+const importDialogVisible = ref(false)
 const dialogVisible = ref(false)
 const textDialogVisible = ref(false)
 const editing = ref(null)
 const currentPage = ref(1)
+const sortState = reactive({ prop: '', order: '' })
+
+const handleSortChange = ({ prop, order }) => {
+  sortState.prop = prop
+  sortState.order = order
+}
+
+const sortedContracts = computed(() => {
+  if (!contracts.value || contracts.value.length === 0) return []
+  if (!sortState.prop || !sortState.order) return contracts.value
+  
+  const sorted = [...contracts.value].sort((a, b) => {
+    let valA = a[sortState.prop]
+    let valB = b[sortState.prop]
+    
+    if (valA === null || valA === undefined) valA = ''
+    if (valB === null || valB === undefined) valB = ''
+    
+    if (typeof valA === 'number' && typeof valB === 'number') {
+      return sortState.order === 'ascending' ? valA - valB : valB - valA
+    }
+    
+    valA = String(valA)
+    valB = String(valB)
+    
+    return sortState.order === 'ascending' 
+      ? valA.localeCompare(valB, 'zh-CN')
+      : valB.localeCompare(valA, 'zh-CN')
+  })
+  
+  return sorted
+})
+
+const pagedContracts = computed(() => {
+  if (!sortedContracts.value || sortedContracts.value.length === 0) return []
+  const start = (currentPage.value - 1) * pageSize.value
+  return sortedContracts.value.slice(start, start + pageSize.value)
+})
 const excelUploadInput = ref(null)
 const aiUploadInput = ref(null)
 const pendingAiUploadFile = ref(null)
@@ -428,12 +564,15 @@ const previewLoading = ref(false)
 const previewMessage = ref('暂无文件')
 const fullPreviewVisible = ref(false)
 const currentPreviewRow = ref(null)
-const pageSize = 100
+const pageSize = ref(100)
 
 const filters = reactive({
   handling_department: '',
+  project: '',
   approval_status: '',
   keyword: '',
+  has_file: false,
+  is_archived: null,
 })
 
 const options = reactive({
@@ -446,20 +585,30 @@ const options = reactive({
   project: [],
 })
 
-const totalContracts = computed(() => contracts.value.length)
-const pagedContracts = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return contracts.value.slice(start, start + pageSize)
-})
+const totalContracts = computed(() => sortedContracts.value ? sortedContracts.value.length : 0)
+
 const contractNameColumnWidth = computed(() => {
+  if (!pagedContracts.value || pagedContracts.value.length === 0) return 220
   const baseWidth = 220
   const maxWidth = 560
-  const longestLength = contracts.value.reduce((maxLength, item) => {
+  const longestLength = pagedContracts.value.reduce((maxLength, item) => {
     const text = String(item?.contract_name || '')
     return Math.max(maxLength, text.length)
   }, 0)
 
   return Math.min(maxWidth, Math.max(baseWidth, longestLength * 12 + 16))
+})
+
+const contractNumberColumnWidth = computed(() => {
+  if (!pagedContracts.value || pagedContracts.value.length === 0) return 200
+  const baseWidth = 90
+  const maxWidth = 400
+  const longestLength = pagedContracts.value.reduce((maxLength, item) => {
+    const text = String(item?.contract_number || '')
+    return Math.max(maxLength, text.length)
+  }, 0)
+
+  return Math.min(maxWidth, Math.max(baseWidth, longestLength * 7 + 16))
 })
 const fullPreviewTitle = computed(() => {
   if (previewFileName.value) {
@@ -474,7 +623,7 @@ const form = reactive({
   contract_name: '',
   contract_number: '',
   contract_unit: '',
-  contract_amount_wan: '',
+  contract_amount: '',
   approval_status: '',
   handler: '',
   handling_department: '',
@@ -494,7 +643,7 @@ const resetForm = () => {
   form.contract_name = ''
   form.contract_number = ''
   form.contract_unit = ''
-  form.contract_amount_wan = ''
+  form.contract_amount = ''
   form.approval_status = ''
   form.handler = ''
   form.handling_department = ''
@@ -543,8 +692,11 @@ const loadContracts = async () => {
   const { data } = await http.get('/contracts', {
     params: {
       handling_department: filters.handling_department || undefined,
+      project: filters.project || undefined,
       approval_status: filters.approval_status || undefined,
       keyword: filters.keyword || undefined,
+      has_file: filters.has_file || undefined,
+      is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
     },
   })
   contracts.value = data
@@ -568,7 +720,7 @@ const populateFormFromContract = (row) => {
   form.contract_name = row.contract_name || ''
   form.contract_number = row.contract_number || ''
   form.contract_unit = row.contract_unit || ''
-  form.contract_amount_wan = normalizeAmountInputValue(row.contract_amount_wan)
+  form.contract_amount = normalizeAmountInputValue(row.contract_amount)
   form.approval_status = row.approval_status || ''
   form.handler = row.handler || ''
   form.handling_department = row.handling_department || row.department || ''
@@ -588,7 +740,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['contract_name', 'contract_name'],
     ['contract_number', 'contract_number'],
     ['contract_unit', 'contract_unit'],
-    ['contract_amount_wan', 'contract_amount_wan'],
+    ['contract_amount', 'contract_amount'],
     ['approval_status', 'approval_status'],
     ['handler', 'handler'],
     ['handling_department', 'handling_department'],
@@ -605,7 +757,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
 
   for (const [formKey, fieldKey] of mapping) {
     const incomingRaw = fields?.[fieldKey]
-    const incomingValue = formKey === 'contract_amount_wan'
+    const incomingValue = formKey === 'contract_amount'
       ? normalizeAmountInputValue(incomingRaw)
       : String(incomingRaw ?? '').trim()
 
@@ -689,7 +841,7 @@ const handleExcelSelected = async (event) => {
     await loadFieldOptions()
     await loadContracts()
 
-    const summary = `导入完成：成功 ${data?.imported_count || 0} 条，跳过 ${data?.skipped_count || 0} 条。`
+    const summary = `导入完成：新增 ${data?.imported_count || 0} 条，更新 ${data?.updated_count || 0} 条，跳过 ${data?.skipped_count || 0} 条。`
     const errorLines = Array.isArray(data?.errors)
       ? data.errors.slice(0, 10).map((item) => `第 ${item.row} 行：${item.message}`)
       : []
@@ -709,6 +861,7 @@ const handleExcelSelected = async (event) => {
     ElMessage.error(error?.response?.data?.message || 'EXCEL 导入失败')
   } finally {
     importingExcel.value = false
+    importDialogVisible.value = false
     event.target.value = ''
   }
 }
@@ -738,7 +891,7 @@ const applyParsedFields = (fields) => {
   form.contract_name = fields?.contract_name || ''
   form.contract_number = fields?.contract_number || ''
   form.contract_unit = fields?.contract_unit || ''
-  form.contract_amount_wan = normalizeAmountInputValue(fields?.contract_amount_wan || '')
+  form.contract_amount = normalizeAmountInputValue(fields?.contract_amount || '')
   form.approval_status = fields?.approval_status || ''
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
@@ -1014,11 +1167,11 @@ const normalizeAmountInputValue = (value) => {
 }
 
 const normalizeContractAmount = () => {
-  form.contract_amount_wan = normalizeAmountInputValue(form.contract_amount_wan)
+  form.contract_amount = normalizeAmountInputValue(form.contract_amount)
 }
 
 const saveContract = async () => {
-  const normalizedAmount = normalizeAmountInputValue(form.contract_amount_wan)
+  const normalizedAmount = normalizeAmountInputValue(form.contract_amount)
 
   if (!form.contract_name || !form.handling_department || !normalizedAmount) {
     ElMessage.warning('请填写必要字段')
@@ -1030,7 +1183,7 @@ const saveContract = async () => {
     return
   }
 
-  form.contract_amount_wan = normalizedAmount
+  form.contract_amount = normalizedAmount
 
   if (!departments.value.includes(form.handling_department)) {
     ElMessage.warning('请选择系统设置中的有效部门')
@@ -1049,7 +1202,7 @@ const saveContract = async () => {
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
-        contract_amount_wan: normalizedAmount,
+        contract_amount: normalizedAmount,
         approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
@@ -1069,7 +1222,7 @@ const saveContract = async () => {
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
-        contract_amount_wan: normalizedAmount,
+        contract_amount: normalizedAmount,
         approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
@@ -1353,13 +1506,32 @@ watch(aiMatchDialogVisible, (visible) => {
 .card-title {
   font-size: 18px;
   font-weight: 600;
+  margin-right: 12px;
 }
 
+
+.card-num {
+  flex-grow: 1;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.card-num-tag {
+  font-size: 14px;
+}
 .toolbar {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.toolbar-row {
+  display: flex;
+  gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .contract-table :deep(.el-table__cell) {
@@ -1443,6 +1615,12 @@ watch(aiMatchDialogVisible, (visible) => {
 
 .pager {
   margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pager-top {
+  margin-bottom: 12px;
   display: flex;
   justify-content: flex-end;
 }
@@ -1664,5 +1842,21 @@ watch(aiMatchDialogVisible, (visible) => {
   .ai-match-preview-column .preview-panel {
     height: min(48vh, 520px);
   }
+}
+
+.import-dialog-content {
+  padding: 10px 0;
+}
+
+.import-rules {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #606266;
+}
+
+.import-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 </style>
