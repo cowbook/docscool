@@ -2,6 +2,7 @@ import os
 import posixpath
 import re
 import json
+import mimetypes
 from difflib import SequenceMatcher
 from io import BytesIO
 from uuid import uuid4
@@ -25,6 +26,7 @@ from .models import Contract, Department, ProjectOption
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 _OCR_ENGINE = None
 _IMPORT_ERROR_REPORTS = {}
+EXTERNAL_API_TIMEOUT_SECONDS = 300
 
 
 CONTRACT_FIELD_KEYS = [
@@ -663,7 +665,7 @@ def _synology_upload_login() -> str:
     response = requests.get(
         f"{base_url}/webapi/auth.cgi",
         params=params,
-        timeout=10,
+        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
         verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
     )
     response.raise_for_status()
@@ -692,7 +694,7 @@ def _synology_user_login(account: str, password: str, session_name: str = 'DocsC
     response = requests.get(
         f"{base_url}/webapi/auth.cgi",
         params=params,
-        timeout=10,
+        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
         verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
     )
     response.raise_for_status()
@@ -711,7 +713,7 @@ def _synology_api_get(sid: str, params: dict) -> dict:
     response = requests.get(
         endpoint,
         params=merged,
-        timeout=30,
+        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
         verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
     )
     response.raise_for_status()
@@ -729,11 +731,15 @@ def _synology_api_post(sid: str, params: dict, data: dict = None, files: dict = 
         params=merged,
         data=data,
         files=files,
-        timeout=60,
+        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
         verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
     )
     response.raise_for_status()
     return response.json()
+
+
+def _synology_json_array(*values: str) -> str:
+    return json.dumps([str(value or '') for value in values], ensure_ascii=False)
 
 
 def _synology_ensure_remote_folder(sid: str, remote_folder: str) -> None:
@@ -750,8 +756,8 @@ def _synology_ensure_remote_folder(sid: str, remote_folder: str) -> None:
             'method': 'create',
         },
         data={
-            'folder_path': parent,
-            'name': leaf,
+            'folder_path': _synology_json_array(parent),
+            'name': _synology_json_array(leaf),
             'force_parent': 'true',
         },
     )
@@ -895,7 +901,7 @@ def _load_contract_file_payload(record: Contract):
                     'path': path_value,
                     '_sid': sid,
                 },
-                timeout=60,
+                timeout=EXTERNAL_API_TIMEOUT_SECONDS,
                 verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
             )
             if candidate.status_code == 404:
@@ -963,6 +969,341 @@ def _delete_contract_file(record: Contract) -> None:
     local_file_path = _safe_local_file_path(normalized_file_path)
     if os.path.isfile(local_file_path):
         os.remove(local_file_path)
+
+
+def _normalize_relative_path(raw_path: str) -> str:
+    value = (raw_path or '').replace('\\', '/').strip().lstrip('/')
+    if not value:
+        return ''
+
+    normalized = posixpath.normpath(value)
+    if normalized in {'.', ''}:
+        return ''
+    if normalized == '..' or normalized.startswith('../'):
+        raise ValueError('invalid path')
+    return normalized.lstrip('/')
+
+
+def _safe_local_folder_path(relative_path: str) -> str:
+    root = os.path.abspath(current_app.config['CONTRACT_STORAGE_ROOT'])
+    normalized = _normalize_relative_path(relative_path)
+    resolved = os.path.abspath(os.path.join(root, normalized.replace('/', os.sep)))
+    if os.path.commonpath([root, resolved]) != root:
+        raise ValueError('invalid path')
+    return resolved
+
+
+def _list_local_entries(relative_path: str):
+    folder_path = _safe_local_folder_path(relative_path)
+    if not os.path.isdir(folder_path):
+        raise FileNotFoundError('目录不存在')
+
+    directories = []
+    files = []
+    with os.scandir(folder_path) as entries:
+        for entry in entries:
+            entry_rel_path = _build_synology_file_path(relative_path, entry.name)
+            if entry.is_dir(follow_symlinks=False):
+                directories.append({
+                    'name': entry.name,
+                    'path': entry_rel_path,
+                })
+            elif entry.is_file(follow_symlinks=False):
+                stat_result = entry.stat(follow_symlinks=False)
+                files.append({
+                    'name': entry.name,
+                    'path': entry_rel_path,
+                    'size': int(stat_result.st_size),
+                    'mtime': int(stat_result.st_mtime),
+                })
+
+    directories.sort(key=lambda item: item['name'].lower())
+    files.sort(key=lambda item: item['name'].lower())
+    return directories, files
+
+
+def _remote_folder_path(relative_path: str) -> str:
+    normalized = _normalize_relative_path(relative_path)
+    return _build_filestation_path(normalized)
+
+
+def _list_remote_entries(relative_path: str, sid: str = ''):
+    resolved_sid = sid or _synology_upload_login()
+    folder_path = _remote_folder_path(relative_path)
+    payload = _synology_api_get(
+        resolved_sid,
+        {
+            'api': 'SYNO.FileStation.List',
+            'version': '2',
+            'method': 'list',
+            'folder_path': folder_path,
+            'additional': '["size","time"]',
+        },
+    )
+    if not payload.get('success'):
+        code = _synology_error_code(payload)
+        if code in {404, 415}:
+            raise FileNotFoundError('目录不存在')
+        raise RuntimeError(_synology_error_message(payload, 'filestation'))
+
+    directories = []
+    files = []
+    for item in payload.get('data', {}).get('files', []):
+        name = (item.get('name') or '').strip()
+        if not name:
+            continue
+
+        entry_rel_path = _build_synology_file_path(relative_path, name)
+        if item.get('isdir'):
+            directories.append({
+                'name': name,
+                'path': entry_rel_path,
+            })
+            continue
+
+        additional = item.get('additional') or {}
+        mtime = ((additional.get('time') or {}).get('mtime'))
+        size = additional.get('size')
+        files.append({
+            'name': name,
+            'path': entry_rel_path,
+            'size': int(size) if isinstance(size, (int, float)) else 0,
+            'mtime': int(mtime) if isinstance(mtime, (int, float)) else None,
+        })
+
+    directories.sort(key=lambda entry: entry['name'].lower())
+    files.sort(key=lambda entry: entry['name'].lower())
+    return directories, files
+
+
+def _list_storage_entries(relative_path: str):
+    normalized = _normalize_relative_path(relative_path)
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        return _list_remote_entries(normalized)
+    return _list_local_entries(normalized)
+
+
+def _list_folder_children_nodes(relative_path: str):
+    directories, _files = _list_storage_entries(relative_path)
+    return [
+        {
+            'name': item['name'],
+            'path': item['path'],
+        }
+        for item in directories
+    ]
+
+
+def _build_folder_tree(relative_path: str):
+    directories, _files = _list_storage_entries(relative_path)
+    children = [_build_folder_tree(item['path']) for item in directories]
+    name = os.path.basename(relative_path.rstrip('/')) if relative_path else ''
+    return {
+        'name': name or _storage_root_name(),
+        'path': relative_path,
+        'children': children,
+    }
+
+
+def _storage_root_name() -> str:
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        root = (current_app.config.get('SYNOLOGY_FILESTATION_ROOT') or '').replace('\\', '/').rstrip('/')
+    else:
+        root = (current_app.config.get('CONTRACT_STORAGE_ROOT') or '').replace('\\', '/').rstrip('/')
+    return os.path.basename(root) or root or '/'
+
+
+def _build_contract_file_index() -> dict:
+    index = {}
+    rows = Contract.query.filter(Contract.file_path.isnot(None)).all()
+    for row in rows:
+        normalized = _normalize_contract_file_path(row.file_path)
+        if not normalized:
+            continue
+        if normalized not in index:
+            index[normalized] = row
+    return index
+
+
+def _build_folder_file_items(relative_folder_path: str):
+    _directories, files = _list_storage_entries(relative_folder_path)
+    contract_index = _build_contract_file_index()
+
+    payload = []
+    for item in files:
+        relative_file_path = item['path']
+        matched = contract_index.get(relative_file_path)
+        contract_payload = matched.to_dict() if matched else None
+
+        row = {
+            'name': item['name'],
+            'file_path': relative_file_path,
+            'size': item.get('size') or 0,
+            'mtime': item.get('mtime'),
+            'matched_contract_id': matched.id if matched else None,
+            'contract_name': contract_payload.get('contract_name') if contract_payload else '<无匹配>',
+            'contract_number': contract_payload.get('contract_number') if contract_payload else '',
+            'contract_unit': contract_payload.get('contract_unit') if contract_payload else '',
+            'contract_amount_wan': contract_payload.get('contract_amount_wan') if contract_payload else '',
+            'approval_status': contract_payload.get('approval_status') if contract_payload else '',
+            'handler': contract_payload.get('handler') if contract_payload else '',
+            'handling_department': contract_payload.get('handling_department') if contract_payload else '',
+            'handling_date': contract_payload.get('handling_date') if contract_payload else '',
+            'contract_type': contract_payload.get('contract_type') if contract_payload else '',
+            'is_archived': contract_payload.get('is_archived') if contract_payload else '',
+            'project': contract_payload.get('project') if contract_payload else '',
+            'contract': contract_payload,
+        }
+        payload.append(row)
+
+    return payload
+
+
+def _create_storage_folder(parent_path: str, folder_name: str) -> str:
+    normalized_parent = _normalize_relative_path(parent_path)
+    name = (folder_name or '').strip()
+    if not name:
+        raise ValueError('文件夹名称不能为空')
+    if '/' in name or '\\' in name:
+        raise ValueError('文件夹名称不能包含斜杠')
+
+    target_relative_path = _build_synology_file_path(normalized_parent, name)
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.CreateFolder',
+                'version': '2',
+                'method': 'create',
+            },
+            data={
+                'folder_path': _synology_json_array(_remote_folder_path(normalized_parent)),
+                'name': _synology_json_array(name),
+                'force_parent': 'false',
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code == 414:
+                raise FileExistsError('文件夹已存在')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        return target_relative_path
+
+    target_path = _safe_local_folder_path(target_relative_path)
+    os.makedirs(target_path, exist_ok=False)
+    return target_relative_path
+
+
+def _delete_storage_folder(relative_path: str) -> None:
+    normalized = _normalize_relative_path(relative_path)
+    if not normalized:
+        raise ValueError('不允许删除根目录')
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        directories, files = _list_remote_entries(normalized, sid=sid)
+        if files:
+            raise RuntimeError('该文件夹下存在文件，不能删除')
+        if directories:
+            raise RuntimeError('该文件夹下存在子文件夹，不能删除')
+
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.Delete',
+                'version': '2',
+                'method': 'delete',
+            },
+            data={
+                'path': f'["{_remote_folder_path(normalized)}"]',
+                'recursive': 'false',
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('目录不存在')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        return
+
+    folder_path = _safe_local_folder_path(normalized)
+    if not os.path.isdir(folder_path):
+        raise FileNotFoundError('目录不存在')
+
+    child_dirs = []
+    child_files = []
+    with os.scandir(folder_path) as entries:
+        for entry in entries:
+            if entry.is_file(follow_symlinks=False):
+                child_files.append(entry.name)
+            elif entry.is_dir(follow_symlinks=False):
+                child_dirs.append(entry.name)
+
+    if child_files:
+        raise RuntimeError('该文件夹下存在文件，不能删除')
+    if child_dirs:
+        raise RuntimeError('该文件夹下存在子文件夹，不能删除')
+
+    os.rmdir(folder_path)
+
+
+def _load_storage_file_payload(relative_file_path: str):
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        remote_file_path = _remote_folder_path(normalized)
+        response = None
+        for path_value in (f'["{remote_file_path}"]', remote_file_path):
+            candidate = requests.get(
+                f"{current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')}/webapi/entry.cgi",
+                params={
+                    'api': 'SYNO.FileStation.Download',
+                    'version': '2',
+                    'method': 'download',
+                    'mode': 'download',
+                    'path': path_value,
+                    '_sid': sid,
+                },
+                timeout=EXTERNAL_API_TIMEOUT_SECONDS,
+                verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
+            )
+            if candidate.status_code == 404:
+                continue
+            candidate.raise_for_status()
+            response = candidate
+            break
+
+        if response is None:
+            raise FileNotFoundError('文件不存在或路径无效')
+
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        if 'application/json' in content_type:
+            try:
+                payload = response.json()
+                if not payload.get('success'):
+                    raise RuntimeError(_synology_error_message(payload, 'filestation'))
+            except ValueError:
+                pass
+
+        file_name = _filename_from_content_disposition(response.headers.get('Content-Disposition', ''))
+        if not file_name:
+            file_name = os.path.basename(normalized) or 'download.bin'
+
+        mime = response.headers.get('Content-Type') or mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return response.content, file_name, mime
+
+    local_file_path = _safe_local_file_path(normalized)
+    if not os.path.isfile(local_file_path):
+        raise FileNotFoundError('文件不存在或已被移动')
+
+    file_name = os.path.basename(local_file_path)
+    mime = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+    with open(local_file_path, 'rb') as f:
+        return f.read(), file_name, mime
 
 
 def _get_department_names():
@@ -1531,7 +1872,7 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
             'Content-Type': 'application/json',
         },
         json=payload,
-        timeout=60,
+        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
     )
     current_app.logger.info('AI parse: Minimax response status=%s', response.status_code)
     response.raise_for_status()
@@ -1663,6 +2004,158 @@ def delete_department_setting(department_id):
     db.session.delete(row)
     db.session.commit()
     return jsonify({'success': True})
+
+
+@contracts_bp.get('/folders/tree')
+@require_auth
+def get_folders_tree():
+    try:
+        root = {
+            'name': _storage_root_name(),
+            'path': '',
+        }
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'读取目录树失败: {exc}'}), 500
+
+    return jsonify({
+        'storage_mode': current_app.config.get('CONTRACT_STORAGE_MODE') or 'local',
+        'root': root,
+    })
+
+
+@contracts_bp.get('/folders/children')
+@require_auth
+def list_folder_children():
+    parent_path = request.args.get('parent_path') or request.args.get('path') or ''
+    try:
+        normalized = _normalize_relative_path(parent_path)
+        children = _list_folder_children_nodes(normalized)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'读取子目录失败: {exc}'}), 500
+
+    return jsonify({
+        'parent_path': normalized,
+        'children': children,
+    })
+
+
+@contracts_bp.get('/folders/files')
+@require_auth
+def list_folder_files():
+    folder_path = request.args.get('folder_path') or request.args.get('folder') or ''
+    try:
+        normalized = _normalize_relative_path(folder_path)
+        rows = _build_folder_file_items(normalized)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'读取目录文件失败: {exc}'}), 500
+
+    return jsonify({
+        'folder_path': normalized,
+        'files': rows,
+    })
+
+
+@contracts_bp.post('/folders')
+@require_auth
+def create_folder():
+    body = request.get_json(silent=True) or {}
+    parent_path = body.get('parent_path') or body.get('parent') or ''
+    name = body.get('name') or ''
+
+    try:
+        folder_path = _create_storage_folder(parent_path, name)
+    except FileExistsError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'message': f'新建文件夹失败: {exc}'}), 500
+
+    return jsonify({'path': folder_path}), 201
+
+
+@contracts_bp.delete('/folders')
+@require_auth
+def delete_folder():
+    body = request.get_json(silent=True) or {}
+    folder_path = body.get('path') or request.args.get('path') or ''
+
+    try:
+        _delete_storage_folder(folder_path)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        return jsonify({'message': f'删除文件夹失败: {exc}'}), 500
+
+    return jsonify({'success': True})
+
+
+@contracts_bp.get('/folders/file-download')
+@require_auth
+def download_storage_file():
+    file_path = request.args.get('path') or request.args.get('file_path') or ''
+    try:
+        content, file_name, mime = _load_storage_file_payload(file_path)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        return jsonify({'message': f'文件下载失败: {exc}'}), 500
+
+    return send_file(
+        BytesIO(content),
+        mimetype=mime,
+        as_attachment=True,
+        download_name=file_name,
+    )
+
+
+@contracts_bp.get('/folders/file-preview')
+@require_auth
+def preview_storage_file():
+    file_path = request.args.get('path') or request.args.get('file_path') or ''
+    normalized = _normalize_relative_path(file_path)
+    if not normalized.lower().endswith('.pdf'):
+        return jsonify({'message': '仅支持PDF预览'}), 400
+
+    try:
+        content, file_name, _mime = _load_storage_file_payload(normalized)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        return jsonify({'message': f'文件预览失败: {exc}'}), 500
+
+    return send_file(
+        BytesIO(content),
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=file_name,
+    )
 
 
 @contracts_bp.get('/contracts')

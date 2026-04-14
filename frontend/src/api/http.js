@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const http = axios.create({
   baseURL: import.meta.env.PROD ? '/docs/api' : '/api',
-  timeout: 10000,
+  timeout: 300000,
 })
 
 http.interceptors.request.use((config) => {
@@ -19,8 +19,10 @@ http.interceptors.response.use(
     if (error?.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('username')
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
+      const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+      const loginPath = `${basePath}/login` || '/login'
+      if (window.location.pathname !== loginPath) {
+        window.location.href = loginPath
       }
     }
     return Promise.reject(error)

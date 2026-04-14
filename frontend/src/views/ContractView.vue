@@ -683,7 +683,7 @@ const handleExcelSelected = async (event) => {
 
     const { data } = await http.post('/contracts/import-excel', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
+      timeout: 300000,
     })
 
     await loadFieldOptions()
@@ -855,7 +855,7 @@ const handleAiPdfSelected = async (event) => {
     fd.append('file', file)
     const { data } = await http.post('/contracts/ai-parse', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
+      timeout: 300000,
     })
 
     const parsedFullbody = data?.fullbody || ''

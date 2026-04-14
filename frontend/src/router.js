@@ -4,6 +4,7 @@ import LoginView from './views/LoginView.vue'
 import MainLayout from './views/MainLayout.vue'
 import HomeView from './views/HomeView.vue'
 import ContractView from './views/ContractView.vue'
+import FolderView from './views/FolderView.vue'
 import LogoutView from './views/LogoutView.vue'
 import DepartmentSettingsView from './views/DepartmentSettingsView.vue'
 import ProjectSettingsView from './views/ProjectSettingsView.vue'
@@ -17,6 +18,7 @@ const routes = [
       { path: '', redirect: '/home' },
       { path: 'home', component: HomeView },
       { path: 'contracts/all', component: ContractView },
+      { path: 'contracts/folders', component: FolderView },
       { path: 'settings/departments', component: DepartmentSettingsView },
       { path: 'settings/projects', component: ProjectSettingsView },
       { path: 'settings/logout', component: LogoutView },

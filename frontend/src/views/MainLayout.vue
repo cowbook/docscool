@@ -17,6 +17,10 @@
               <el-icon><Tickets /></el-icon>
               <span>所有合同</span>
             </el-menu-item>
+            <el-menu-item index="/contracts/folders">
+              <el-icon><Folder /></el-icon>
+              <span>文件夹</span>
+            </el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="/settings">
             <template #title>
@@ -72,6 +76,10 @@
             <el-icon><Tickets /></el-icon>
             <span>所有合同</span>
           </el-menu-item>
+          <el-menu-item index="/contracts/folders">
+            <el-icon><Folder /></el-icon>
+            <span>文件夹</span>
+          </el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="/settings-mobile">
           <template #title>
@@ -98,7 +106,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { CollectionTag, Document, House, OfficeBuilding, Setting, SwitchButton, Tickets } from '@element-plus/icons-vue'
+import { CollectionTag, Document, Folder, House, OfficeBuilding, Setting, SwitchButton, Tickets } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -117,6 +125,7 @@ const activePath = computed(() => route.path)
 
 const pageTitle = computed(() => {
   if (route.path === '/home') return '首页'
+  if (route.path === '/contracts/folders') return '文件夹'
   if (route.path.startsWith('/contracts')) return '合同管理'
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'

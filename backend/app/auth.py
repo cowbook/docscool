@@ -9,6 +9,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 _USER_PASSWORD_CACHE = {}
+EXTERNAL_API_TIMEOUT_SECONDS = 300
 
 
 def _synology_error_message(code: int) -> str:
@@ -53,7 +54,7 @@ def _synology_login(username: str, password: str, otp_code: str = ''):
                 response = requests.get(
                     endpoint,
                     params=params,
-                    timeout=8,
+                    timeout=EXTERNAL_API_TIMEOUT_SECONDS,
                     verify=current_app.config['SYNOLOGY_VERIFY_SSL'],
                 )
                 response.raise_for_status()
