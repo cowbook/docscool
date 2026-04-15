@@ -1,5 +1,5 @@
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from .extensions import db
 
@@ -9,10 +9,9 @@ def _decimal_to_string(value) -> str:
         return ''
 
     decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
-    text = format(decimal_value, 'f')
-    if '.' in text:
-        text = text.rstrip('0').rstrip('.')
-    return text or '0'
+    # Normalize money output to 2 decimals to avoid SQLite float artifacts like 0.19999999.
+    normalized = decimal_value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return format(normalized, 'f')
 
 
 class Contract(db.Model):

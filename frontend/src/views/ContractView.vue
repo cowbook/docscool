@@ -19,6 +19,9 @@
                 <el-icon><Document /></el-icon>
                 <span>{{ aiParsing ? '解析中...' : 'AI上传' }}</span>
               </el-button>
+              <el-button :loading="quickMatching" :disabled="aiParsing" @click="openQuickMatchDialog">
+                <span>快速批配</span>
+              </el-button>
               <el-button type="primary" :disabled="aiParsing" @click="openCreate">
                 <el-icon><Plus /></el-icon>
                 <span>新建</span>
@@ -318,14 +321,44 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1380px, 98vw)">
+    <el-dialog
+      v-model="quickMatchDialogVisible"
+      title="快速批配"
+      width="min(880px, 96vw)"
+      :close-on-click-modal="false"
+    >
+      <el-input
+        v-model="quickMatchLogText"
+        type="textarea"
+        class="quick-match-log"
+        :rows="18"
+        resize="none"
+        readonly
+      />
+
+      <template #footer>
+        <el-button @click="quickMatchDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="quickMatching" @click="startQuickMatch">开始</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog       top="2vh"
+ v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1380px, 98vw)">
       <el-form :model="form" label-width="120px" class="dialog-form">
         <div class="dialog-layout">
           <div class="preview-column">
             <div class="preview-header">
               <div class="preview-title">文件预览</div>
               <div class="preview-actions">
-
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="aiParsing"
+                  :disabled="aiParsing || (!form.file_path && !pendingAiUploadFile)"
+                  @click="runAiRecognitionFromPreview"
+                >
+                  {{ aiParsing ? '识别中...' : 'AI识别' }}
+                </el-button>
                 <el-button size="small" @click="textDialogVisible = true">文本</el-button>
 
                 <el-upload
@@ -334,6 +367,9 @@
                 >
                   <el-button :icon="Upload" size="small">上传文件</el-button>
                 </el-upload>
+
+                <el-button size="small" @click="openLinkFileDialog">链接文件</el-button>
+
               </div>
             </div>
             <div
@@ -351,10 +387,31 @@
               <div v-else class="preview-placeholder">{{ previewMessage }}</div>
             </div>
             <div v-if="previewUrl && !previewLoading" class="preview-hint">点击预览区域可全屏查看</div>
+            <div class="readonly-file-path" :title="form.file_path || ''">
+              <el-link
+                class="readonly-file-link"
+                type="primary"
+                :underline="!!form.file_path"
+                :disabled="!form.file_path"
+                @click="handleDialogFilePathDownload"
+              >
+                {{ form.file_path || '暂无文件路径' }}
+              </el-link>
+            </div>
           </div>
 
           <div class="form-column">
             <div class="form-grid">
+
+              <el-form-item label="是否归档" class="form-item-span-2">
+                <el-switch
+                  v-model="form.is_archived"
+                  active-text="已归档"
+                  inactive-text="未归档"
+                  active-value="已归档"
+                  inactive-value="未归档"
+                />
+              </el-form-item>
           
               <el-form-item label="合同名称"  class="form-item-span-2">
                 <el-input v-model="form.contract_name" />
@@ -412,20 +469,13 @@
                   <el-option v-for="item in options.pricing_method" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="是否归档">
-                <el-select v-model="form.is_archived" style="width: 100%">
-                  <el-option v-for="item in options.is_archived" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
               <el-form-item label="项目">
                 <el-select v-model="form.project" clearable placeholder="可留空" style="width: 100%" filterable>
                   <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
 
-              <el-form-item label="文件路径">
-                <el-input v-model="form.file_path" readonly placeholder="暂无文件路径" />
-              </el-form-item>
+              
             </div>
           </div>
         </div>
@@ -485,11 +535,134 @@
         <el-button @click="textDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      
+      v-model="linkFileDialogVisible"
+      class="link-file-dialog"
+      title="选择并链接文件"
+      width="min(1280px, 96vw)"
+      top="2vh"
+      :close-on-click-modal="false"
+    >
+      <div class="link-file-layout">
+        <div class="link-file-left">
+          <div class="panel-title">{{ linkRootName }}</div>
+          <el-tree
+            ref="linkTreeRef"
+            v-loading="linkTreeLoading"
+            :data="linkTreeData"
+            node-key="path"
+            :props="linkTreeProps"
+            lazy
+            :load="loadLinkTreeChildren"
+            :expand-on-click-node="true"
+            highlight-current
+            @node-click="onLinkTreeNodeClick"
+          >
+            <template #default="{ node, data }">
+              <span class="tree-node-content">
+                <span class="tree-folder-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
+                <span class="tree-node-label">{{ data.name }}</span>
+              </span>
+            </template>
+          </el-tree>
+        </div>
+
+        <div class="link-file-right">
+          <div class="panel-title">文件列表（当前目录：{{ linkSelectedFolderPath || '/' }}）</div>
+          <div class="link-file-table-wrap">
+            <el-table
+              v-loading="linkFilesLoading"
+              :data="linkFiles"
+              border
+              stripe
+              size="small"
+              class="link-file-table"
+              @row-click="handleLinkFileRowClick"
+            >
+              <el-table-column label="选择" width="72" align="center">
+                <template #default="scope">
+                  <input
+                    type="radio"
+                    name="link-file-selection"
+                    :checked="linkSelectedFilePath === scope.row.file_path"
+                    @change="handleLinkFileRowClick(scope.row)"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column label="文件" min-width="280">
+                <template #default="scope">
+                  <el-link class="file-cell link-file-name-link" type="primary" @click.stop="handleLinkFileRowClick(scope.row)">
+                    <Icon :icon="getFileIcon(scope.row.file_path)" class="file-ok" />
+                    <span class="file-name" :title="scope.row.name">{{ scope.row.name }}</span>
+                  </el-link>
+                </template>
+              </el-table-column>
+              <el-table-column prop="contract_name" label="匹配合同" min-width="220" show-overflow-tooltip />
+            </el-table>
+          </div>
+          
+        </div>
+
+
+        <!-- PDF预览面板 -->
+        <div
+          class="link-file-preview-panel"
+          :class="{ 'preview-panel-clickable': !!linkPreviewUrl && !linkPreviewLoading }"
+          style="margin-top: 12px; min-height: 320px; max-height: 480px; overflow: auto; border: 1px solid #eee; border-radius: 4px; background: #fafbfc; display: flex; align-items: center; justify-content: center;"
+          @click="openLinkFullscreenPreview"
+        >
+          <div v-if="linkPreviewLoading" class="preview-placeholder">预览加载中...</div>
+          <VuePdfEmbed
+            v-else-if="linkPreviewUrl"
+            :source="linkPreviewUrl"
+            class="pdf-preview-embed"
+            style="width: 100%; height: 400px;"
+            @rendering-failed="() => { linkPreviewMessage = 'PDF渲染失败'; }"
+          />
+          <div v-else class="preview-placeholder">{{ linkPreviewMessage }}</div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="() => { linkFileDialogVisible = false; if (linkPreviewUrl) { window.URL.revokeObjectURL(linkPreviewUrl); linkPreviewUrl = ''; linkPreviewMessage = '请选择PDF文件进行预览'; linkPreviewLoading = false; } }">取消</el-button>
+        <el-button type="primary" @click="confirmLinkFile">确认</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="linkFullPreviewVisible"
+      width="96vw"
+      top="2vh"
+      destroy-on-close
+      append-to-body
+    >
+      <template #header>
+        <div class="fullscreen-dialog-header">
+          <span class="fullscreen-dialog-title">文件预览 - {{ getFileName(linkSelectedFilePath || '') || '当前文件' }}</span>
+        </div>
+      </template>
+
+      <div class="fullscreen-preview-wrapper">
+        <VuePdfEmbed
+          v-if="linkPreviewUrl"
+          :source="linkPreviewUrl"
+          class="pdf-preview-embed fullscreen-pdf-preview"
+          @rendering-failed="() => { linkPreviewMessage = 'PDF组件渲染失败，请检查文件内容或浏览器兼容性'; }"
+        />
+        <div v-else class="preview-placeholder fullscreen-preview-placeholder">{{ linkPreviewMessage || '暂无可预览内容' }}</div>
+      </div>
+
+      <template #footer>
+        <el-button @click="linkFullPreviewVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
 import VuePdfEmbed from 'vue-pdf-embed'
@@ -511,6 +684,9 @@ const contracts = ref([])
 const departments = ref([])
 const saving = ref(false)
 const aiParsing = ref(false)
+const quickMatching = ref(false)
+const quickMatchDialogVisible = ref(false)
+const quickMatchLogText = ref('')
 const aiMatchDialogVisible = ref(false)
 const aiMatchProcessing = ref(false)
 const aiMatchCandidates = ref([])
@@ -573,6 +749,26 @@ const fullPreviewVisible = ref(false)
 const currentPreviewRow = ref(null)
 const pageSize = ref(100)
 
+// 链接文件弹窗专用预览状态
+const linkPreviewUrl = ref('')
+const linkPreviewLoading = ref(false)
+const linkPreviewMessage = ref('请选择PDF文件进行预览')
+const linkFullPreviewVisible = ref(false)
+const linkFileDialogVisible = ref(false)
+const linkTreeLoading = ref(false)
+const linkFilesLoading = ref(false)
+const linkTreeRef = ref(null)
+const linkTreeData = ref([])
+const linkRootName = ref('/')
+const linkSelectedFolderPath = ref('')
+const linkSelectedFilePath = ref('')
+const linkFiles = ref([])
+
+const linkTreeProps = {
+  label: 'name',
+  children: 'children',
+}
+
 const filters = reactive({
   handling_department: '',
   project: '',
@@ -593,6 +789,13 @@ const options = reactive({
 })
 
 const totalContracts = computed(() => sortedContracts.value ? sortedContracts.value.length : 0)
+
+const quickMatchTargetIds = computed(() => {
+  return (contracts.value || [])
+    .filter((row) => (row?.is_archived || '').trim() !== '已归档' && !String(row?.file_path || '').trim())
+    .map((row) => Number(row?.id))
+    .filter((id) => Number.isInteger(id) && id > 0)
+})
 
 const contractNameColumnWidth = computed(() => {
   if (!pagedContracts.value || pagedContracts.value.length === 0) return 220
@@ -708,6 +911,331 @@ const loadContracts = async () => {
   })
   contracts.value = data
   currentPage.value = 1
+}
+
+const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const fetchLinkFolderChildren = async (parentPath = '') => {
+  const { data } = await http.get('/folders/children', {
+    params: { parent_path: normalizePath(parentPath) },
+  })
+  return Array.isArray(data?.children) ? data.children : []
+}
+
+const buildPathChain = (path) => {
+  const normalized = normalizePath(path)
+  if (!normalized) {
+    return []
+  }
+
+  const parts = normalized.split('/').filter(Boolean)
+  const chain = []
+  let current = ''
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part
+    chain.push(current)
+  }
+  return chain
+}
+
+const expandLinkTreeToPath = async (path) => {
+  const targetPath = normalizePath(path)
+  const tree = linkTreeRef.value
+  if (!tree || !targetPath) {
+    tree?.setCurrentKey?.(null)
+    return
+  }
+
+  const chain = buildPathChain(targetPath)
+  let parentPath = ''
+  for (const currentPath of chain) {
+    const children = await fetchLinkFolderChildren(parentPath)
+    if (!parentPath) {
+      linkTreeData.value = children
+    } else {
+      tree.updateKeyChildren(parentPath, children)
+    }
+    parentPath = currentPath
+  }
+
+  await nextTick()
+  for (const currentPath of chain) {
+    tree.getNode(currentPath)?.expand?.()
+  }
+  tree.setCurrentKey?.(targetPath)
+}
+
+const loadLinkTreeChildren = async (node, resolve) => {
+  const parentPath = node?.level === 0 ? '' : (node?.data?.path || '')
+  try {
+    resolve(await fetchLinkFolderChildren(parentPath))
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '读取子目录失败')
+    resolve([])
+  }
+}
+
+const loadLinkFiles = async (folderPath = '') => {
+  linkFilesLoading.value = true
+  try {
+    const { data } = await http.get('/folders/files', {
+      params: { folder_path: normalizePath(folderPath) },
+    })
+    linkSelectedFolderPath.value = data?.folder_path || ''
+    const rows = Array.isArray(data?.files) ? data.files : []
+    linkFiles.value = rows
+    if (!rows.some((row) => row.file_path === linkSelectedFilePath.value)) {
+      linkSelectedFilePath.value = ''
+    }
+  } catch (error) {
+    linkFiles.value = []
+    ElMessage.error(error?.response?.data?.message || '读取文件失败')
+  } finally {
+    linkFilesLoading.value = false
+  }
+}
+
+const openLinkFileDialog = async () => {
+  linkFileDialogVisible.value = true
+  linkTreeLoading.value = true
+  linkSelectedFilePath.value = form.file_path || ''
+  // 弹窗打开时清空预览
+  if (linkPreviewUrl.value) {
+    window.URL.revokeObjectURL(linkPreviewUrl.value)
+  }
+  linkPreviewUrl.value = ''
+  linkPreviewMessage.value = '请选择PDF文件进行预览'
+  linkPreviewLoading.value = false
+  try {
+    const { data } = await http.get('/folders/tree')
+    const root = data?.root || { name: '/', path: '' }
+    linkRootName.value = root.name || '/'
+    linkTreeData.value = await fetchLinkFolderChildren('')
+
+    const initialFolder = normalizePath(getParentPath(form.file_path || ''))
+    await expandLinkTreeToPath(initialFolder)
+    await loadLinkFiles(initialFolder)
+  } catch (error) {
+    linkTreeData.value = []
+    linkFiles.value = []
+    ElMessage.error(error?.response?.data?.message || '加载文件选择器失败')
+  } finally {
+    linkTreeLoading.value = false
+  }
+}
+
+const onLinkTreeNodeClick = async (node) => {
+  await loadLinkFiles(node?.path || '')
+}
+
+const openLinkFilePreview = async (filePath) => {
+  const targetPath = String(filePath || '').trim()
+  if (!targetPath) {
+    return
+  }
+  // 只影响弹窗内预览，不影响主窗口
+  if (getFileExt(targetPath) !== 'pdf') {
+    linkPreviewUrl.value = ''
+    linkPreviewMessage.value = '该文件不是PDF，无法预览'
+    linkPreviewLoading.value = false
+    return
+  }
+  linkPreviewLoading.value = true
+  linkPreviewMessage.value = ''
+  try {
+    const response = await http.get('/folders/file-preview', {
+      params: { path: targetPath },
+      responseType: 'blob',
+    })
+    // 生成blob url
+    if (linkPreviewUrl.value) {
+      window.URL.revokeObjectURL(linkPreviewUrl.value)
+    }
+    const blob = response.data
+    linkPreviewUrl.value = window.URL.createObjectURL(blob)
+    linkPreviewMessage.value = ''
+  } catch (error) {
+    const message = await parseErrorMessage(error, '文件预览加载失败')
+    linkPreviewUrl.value = ''
+    linkPreviewMessage.value = `文件预览加载失败：${message}`
+    ElMessage.warning(message)
+  } finally {
+    linkPreviewLoading.value = false
+  }
+}
+
+const syncMainPreviewFromLinkedFile = async (filePath) => {
+  const targetPath = String(filePath || '').trim()
+  if (!targetPath) {
+    previewFileName.value = ''
+    resetPreview('暂无文件', false)
+    return
+  }
+
+  previewFileName.value = getFileName(targetPath)
+
+  if (editing.value?.id) {
+    if (currentPreviewRow.value?.id === editing.value.id) {
+      currentPreviewRow.value.file_path = targetPath
+    } else {
+      currentPreviewRow.value = {
+        ...(currentPreviewRow.value || {}),
+        id: editing.value.id,
+        file_path: targetPath,
+      }
+    }
+  }
+
+  
+
+  if (getFileExt(targetPath) !== 'pdf') {
+    resetPreview('该文件不是PDF，无法预览，请使用下方按钮下载原文件', false)
+    return
+  }
+
+  previewLoading.value = true
+  previewMessage.value = ''
+  try {
+    const response = await http.get('/folders/file-preview', {
+      params: { path: targetPath },
+      responseType: 'blob',
+    })
+    setPreviewFromBlob(response.data)
+  } catch (error) {
+    const message = await parseErrorMessage(error, 'PDF预览加载失败')
+    resetPreview(`PDF预览加载失败：${message}`, false)
+    ElMessage.warning(message)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+const handleLinkFileRowClick = async (row) => {
+  if (!row?.file_path) {
+    return
+  }
+  linkSelectedFilePath.value = row.file_path
+  await openLinkFilePreview(row.file_path)
+}
+
+const openLinkFullscreenPreview = () => {
+  if (!linkPreviewUrl.value || linkPreviewLoading.value) {
+    return
+  }
+  linkFullPreviewVisible.value = true
+}
+
+const getParentPath = (value) => {
+  const path = normalizePath(value)
+  if (!path) {
+    return ''
+  }
+  const idx = path.lastIndexOf('/')
+  return idx >= 0 ? path.slice(0, idx) : ''
+}
+
+const confirmLinkFile = async () => {
+  const selectedPath = linkSelectedFilePath.value || ''
+  if (!selectedPath) {
+    ElMessage.warning('请选择一个文件')
+    return
+  }
+
+  form.file_path = selectedPath
+  if (editing.value?.id) {
+    try {
+      await http.put(`/contracts/${editing.value.id}`, {
+        file_path: selectedPath,
+      })
+      if (editing.value) {
+        editing.value.file_path = selectedPath
+      }
+      if (currentPreviewRow.value?.id === editing.value?.id) {
+        currentPreviewRow.value.file_path = selectedPath
+      }
+      ElMessage.success('链接文件成功')
+      await loadContracts()
+    } catch (error) {
+      ElMessage.error(error?.response?.data?.message || '链接文件失败')
+      return
+    }
+  } else {
+    ElMessage.success('已选择文件，保存合同后生效')
+  }
+
+  await syncMainPreviewFromLinkedFile(selectedPath)
+
+  linkFileDialogVisible.value = false
+}
+
+const quickMatchInstructionText = () => {
+  return [
+    '快速批配说明：',
+    '1. 本功能会处理“未归档 且 无附件”的合同。',
+    '2. 处理方式：在合同管理存储空间中扫描所有文件夹/子文件夹的 PDF 文件。',
+    '3. 匹配规则：文件名包含合同名称时视为候选；仅 1 个候选则直接匹配；多个候选按文件名相似度选择最佳项。',
+    '4. 成功后会把匹配到的文件路径写入合同 file_path。',
+    '',
+    `当前可处理合同数量：${quickMatchTargetIds.value.length}`,
+    '',
+    '点击下方“开始”按钮执行批配。',
+  ].join('\n')
+}
+
+const appendQuickMatchLog = (line = '') => {
+  quickMatchLogText.value = `${quickMatchLogText.value}${quickMatchLogText.value ? '\n' : ''}${line}`
+}
+
+const openQuickMatchDialog = () => {
+  quickMatchLogText.value = quickMatchInstructionText()
+  quickMatchDialogVisible.value = true
+}
+
+const startQuickMatch = async () => {
+  if (quickMatching.value) {
+    return
+  }
+
+  const ids = quickMatchTargetIds.value
+  quickMatchLogText.value = quickMatchInstructionText()
+  appendQuickMatchLog('')
+  appendQuickMatchLog(`开始执行，待处理合同数：${ids.length}`)
+
+  if (!ids.length) {
+    appendQuickMatchLog('无可处理合同，任务结束。')
+    return
+  }
+
+  quickMatching.value = true
+  try {
+    const { data } = await http.post('/contracts/quick-match-files', { ids }, { timeout: 300000 })
+    const rows = Array.isArray(data?.results) ? data.results : []
+
+    rows.forEach((item, index) => {
+      const prefix = `[${index + 1}/${rows.length}]`
+      const code = item?.contract_number || `ID:${item?.id || ''}`
+      const name = item?.contract_name || ''
+      const base = `${prefix} ${code} ${name}`.trim()
+
+      if (item?.status === 'success') {
+        const filePath = item?.file_path || ''
+        const info = item?.matched_count > 1 ? `（多候选取最优，相似度:${item?.similarity}）` : ''
+        appendQuickMatchLog(`${base} -> 成功: ${filePath} ${info}`.trim())
+      } else {
+        appendQuickMatchLog(`${base} -> 失败: ${item?.message || '未知错误'}`)
+      }
+    })
+
+    appendQuickMatchLog('')
+    appendQuickMatchLog(`完成：成功 ${data?.success || 0}，失败 ${data?.failed || 0}，总计 ${data?.total || ids.length}`)
+    ElMessage.success('快速批配已完成')
+    await loadContracts()
+  } catch (error) {
+    appendQuickMatchLog(`执行失败：${error?.response?.data?.message || '请求失败'}`)
+    ElMessage.error(error?.response?.data?.message || '快速批配执行失败')
+  } finally {
+    quickMatching.value = false
+  }
 }
 
 const openCreate = () => {
@@ -911,6 +1439,93 @@ const applyParsedFields = (fields) => {
   form.is_archived = fields?.is_archived || '未归档'
   form.project = fields?.project || ''
   form.fullbody = fields?.fullbody || ''
+}
+
+const runAiRecognitionFromPreview = async () => {
+  if (aiParsing.value) {
+    return
+  }
+
+  let sourceFile = null
+  let fileName = ''
+
+  if (pendingAiUploadFile.value) {
+    sourceFile = pendingAiUploadFile.value
+    fileName = sourceFile.name || 'contract.pdf'
+  } else if (form.file_path) {
+    try {
+      if (editing.value?.id) {
+        const response = await http.get(`/contracts/${editing.value.id}/download`, {
+          responseType: 'blob',
+        })
+        const blob = response.data
+        fileName = getFileName(form.file_path) || `contract-${editing.value.id}.pdf`
+        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
+      } else {
+        const response = await http.get('/folders/file-preview', {
+          params: { path: normalizePath(form.file_path) },
+          responseType: 'blob',
+        })
+        const blob = response.data
+        fileName = getFileName(form.file_path) || 'contract.pdf'
+        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
+      }
+    } catch (error) {
+      const message = await parseErrorMessage(error, '获取文件内容失败，无法进行AI识别')
+      ElMessage.error(message)
+      return
+    }
+  } else {
+    ElMessage.warning('请先上传或链接合同文件后再进行AI识别')
+    return
+  }
+
+  if (!/\.pdf$/i.test(fileName)) {
+    ElMessage.warning('当前文件不是PDF，无法进行AI识别')
+    return
+  }
+
+  aiParsing.value = true
+  ElMessage.info('AI正在解析当前合同，请稍候')
+  try {
+    const fd = new FormData()
+    fd.append('file', sourceFile)
+
+    const { data } = await http.post('/contracts/ai-parse', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+
+    const parsedFullbody = data?.fullbody || ''
+    const parsedFields = {
+      ...(data?.fields || {}),
+      fullbody: parsedFullbody,
+    }
+
+    const sourceSnapshot = {
+      ...(editing.value || {}),
+      ...form,
+    }
+
+    applyAiSupplementalFields(parsedFields, sourceSnapshot)
+    ElMessage.success('AI解析成功，合同信息已根据识别结果更新')
+  } catch (error) {
+    if (error?.code === 'ECONNABORTED') {
+      ElMessage.error('AI解析超时，请稍后重试')
+      return
+    }
+
+    const baseMessage = error?.response?.data?.message || 'AI解析失败'
+    const previewLines = error?.response?.data?.ocr_preview_lines
+    if (Array.isArray(previewLines) && previewLines.length > 0) {
+      const preview = previewLines.slice(0, 3).join(' / ')
+      ElMessage.error(`${baseMessage}；识别预览：${preview}`)
+    } else {
+      ElMessage.error(baseMessage)
+    }
+  } finally {
+    aiParsing.value = false
+  }
 }
 
 const selectAiMatchCandidate = (contractId) => {
@@ -1206,6 +1821,7 @@ const saveContract = async () => {
   try {
     if (editing.value) {
       await http.put(`/contracts/${editing.value.id}`, {
+        file_path: form.file_path,
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
@@ -1226,6 +1842,7 @@ const saveContract = async () => {
       ElMessage.success('更新成功')
     } else {
       const { data: created } = await http.post('/contracts', {
+        file_path: form.file_path,
         contract_number: form.contract_number,
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
@@ -1463,6 +2080,25 @@ const downloadContractFile = async (row) => {
   }
 }
 
+const handleDialogFilePathDownload = async () => {
+  if (!form.file_path) {
+    ElMessage.warning('暂无可下载文件')
+    return
+  }
+
+  const contractId = editing.value?.id || currentPreviewRow.value?.id
+  if (!contractId) {
+    ElMessage.warning('请先保存合同后再下载文件')
+    return
+  }
+
+  await downloadContractFile({
+    id: contractId,
+    file_path: form.file_path,
+    contract_name: form.contract_name,
+  })
+}
+
 onMounted(async () => {
   try {
     await loadDepartments()
@@ -1489,6 +2125,17 @@ watch(aiMatchDialogVisible, (visible) => {
 <style>
 .el-scrollbar{
     padding-bottom:32px;
+}
+
+.el-link__inner{
+  max-width:100%;
+}
+
+.link-file-dialog {
+  height: 90vh;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
 }
 </style>
 
@@ -1563,9 +2210,9 @@ watch(aiMatchDialogVisible, (visible) => {
 
 .file-name {
   display: inline-block;
-  max-width: 170px;
+  flex-grow: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
+  
   white-space: nowrap;
   color: #374151;
   margin-left:4px;
@@ -1581,6 +2228,7 @@ watch(aiMatchDialogVisible, (visible) => {
   width: 18px;
   height: 18px;
   font-size: 18px;
+  flex-shrink: 0;
 }
 
 .file-download {
@@ -1697,6 +2345,11 @@ watch(aiMatchDialogVisible, (visible) => {
   cursor: pointer;
   color: #111827;
   font-weight: 500;
+}
+
+.quick-match-log :deep(textarea) {
+  font-family: Consolas, 'Courier New', monospace;
+  line-height: 1.55;
 }
 
 .dialog-layout {
@@ -1824,6 +2477,30 @@ watch(aiMatchDialogVisible, (visible) => {
     gap: 8px;
 }
 
+.readonly-file-path {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #4b5563;
+  font-size: 7px!important;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.readonly-file-link {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+  white-space: normal;
+}
+
 @media (min-width: 1280px) {
   .dialog-layout {
     grid-template-columns: minmax(360px, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -1873,5 +2550,63 @@ watch(aiMatchDialogVisible, (visible) => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+
+.link-file-dialog :deep(.el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 10px;
+  padding-bottom: 8px;
+}
+
+.link-file-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+.link-file-left,
+.link-file-right {
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+  height: calc(90vh - 118px);
+  max-width: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.link-file-left :deep(.el-tree) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.link-file-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.link-file-table {
+  height: 100%;
+}
+
+.link-file-name-link {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+@media (max-width: 1100px) {
+  .link-file-layout {
+    grid-template-columns: 1fr;
+    height: 100%;
+  }
 }
 </style>

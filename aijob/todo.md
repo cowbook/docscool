@@ -1,11 +1,14 @@
 # 待完善任务清单
 
-更新时间：2026-04-14
+更新时间：2026-04-15
 
-## 1. 修复 ContractView 模板语法错误
+## 1. 合同编辑弹窗 AI 识别回归
 - 当前位置：`frontend/src/views/ContractView.vue`
-- 问题代码：`@click.stop="javascript:void(0);"`
-- 现象：前端检查会报 `';' expected.`
+- 新增按钮：编辑/新建弹窗左侧“文件预览”上方 `AI识别`
+- 行为：在存在预览 PDF 时调用 `/contracts/ai-parse`，只补空字段，不覆盖已有值
+- 后续回归项：
+	- 使用真实 PDF 验证“AI上传”与“AI识别”两条链路兼容且字段一致
+	- 验证链接 NAS 文件、直接上传本地文件两种场景，都能正确触发预览和识别
 
 ## 2. 统一本地后端启动入口
 - 当前稳定方式是使用 `backend/.venv312/bin/python run.py`

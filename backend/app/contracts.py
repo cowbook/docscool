@@ -1188,6 +1188,84 @@ def _build_folder_file_items(relative_folder_path: str):
     return payload
 
 
+def _normalize_match_text(value: str) -> str:
+    text = str(value or '').strip().lower()
+    if not text:
+        return ''
+    text = re.sub(r'\.(pdf)$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'[^\w\u4e00-\u9fff]+', '', text)
+    return text
+
+
+def _collect_storage_pdf_files() -> list:
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        stack = ['']
+        result = []
+        while stack:
+            current_path = stack.pop()
+            directories, files = _list_remote_entries(current_path, sid=sid)
+            for item in files:
+                name = item.get('name') or ''
+                if name.lower().endswith('.pdf'):
+                    result.append({
+                        'name': name,
+                        'path': item.get('path') or '',
+                        'mtime': item.get('mtime') or 0,
+                    })
+            for directory in directories:
+                child_path = directory.get('path') or ''
+                if child_path:
+                    stack.append(child_path)
+        return result
+
+    root = os.path.abspath(current_app.config['CONTRACT_STORAGE_ROOT'])
+    result = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.lower().endswith('.pdf'):
+                continue
+            full_path = os.path.join(dirpath, filename)
+            relative_path = os.path.relpath(full_path, root).replace('\\', '/')
+            try:
+                mtime = int(os.path.getmtime(full_path))
+            except OSError:
+                mtime = 0
+            result.append({
+                'name': filename,
+                'path': relative_path,
+                'mtime': mtime,
+            })
+    return result
+
+
+def _select_best_pdf_match(contract_name: str, pdf_files: list):
+    normalized_contract = _normalize_match_text(contract_name)
+    if not normalized_contract:
+        return None, []
+
+    matched = []
+    for item in pdf_files:
+        file_name = item.get('name') or ''
+        normalized_file = _normalize_match_text(file_name)
+        if not normalized_file:
+            continue
+        if normalized_contract in normalized_file:
+            similarity = SequenceMatcher(None, normalized_contract, normalized_file).ratio()
+            matched.append({
+                'name': file_name,
+                'path': item.get('path') or '',
+                'similarity': similarity,
+                'mtime': item.get('mtime') or 0,
+            })
+
+    if not matched:
+        return None, []
+
+    matched.sort(key=lambda row: (-row['similarity'], -row['mtime'], row['name']))
+    return matched[0], matched
+
+
 def _create_storage_folder(parent_path: str, folder_name: str) -> str:
     normalized_parent = _normalize_relative_path(parent_path)
     name = (folder_name or '').strip()
@@ -1857,6 +1935,8 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         '返回的JSON键必须严格使用以下字段：'
         + ','.join(CONTRACT_FIELD_KEYS)
         + '\n'
+        'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的。\n'
+        'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
         'handling_date格式为 YYYY-MM-DD\n'
          'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。如果不好定位就返回文本里出现的非我公司的单位名称。\n'
@@ -2329,6 +2409,100 @@ def get_contract(contract_id):
     return jsonify(row.to_dict(include_fullbody=True))
 
 
+@contracts_bp.post('/contracts/quick-match-files')
+@require_auth
+def quick_match_contract_files():
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get('ids')
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return jsonify({'message': 'ids is required'}), 400
+
+    contract_ids = []
+    for item in raw_ids:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            contract_ids.append(value)
+
+    if not contract_ids:
+        return jsonify({'message': 'ids is invalid'}), 400
+
+    try:
+        pdf_files = _collect_storage_pdf_files()
+    except Exception as exc:
+        return jsonify({'message': f'读取存储目录失败: {exc}'}), 500
+
+    results = []
+    success_count = 0
+
+    for contract_id in contract_ids:
+        row = Contract.query.get(contract_id)
+        if not row:
+            results.append({
+                'id': contract_id,
+                'status': 'failed',
+                'message': '合同不存在',
+            })
+            continue
+
+        if (row.is_archived or '').strip() == '已归档':
+            results.append({
+                'id': row.id,
+                'contract_number': row.contract_number,
+                'contract_name': row.contract_name,
+                'status': 'failed',
+                'message': '合同已归档，跳过',
+            })
+            continue
+
+        if _normalize_contract_file_path(row.file_path):
+            results.append({
+                'id': row.id,
+                'contract_number': row.contract_number,
+                'contract_name': row.contract_name,
+                'status': 'failed',
+                'message': '合同已有附件，跳过',
+                'file_path': row.file_path,
+            })
+            continue
+
+        best_match, matched = _select_best_pdf_match(row.contract_name, pdf_files)
+        if not best_match:
+            results.append({
+                'id': row.id,
+                'contract_number': row.contract_number,
+                'contract_name': row.contract_name,
+                'status': 'failed',
+                'message': '未匹配到包含合同名称的PDF文件',
+            })
+            continue
+
+        row.file_path = best_match['path']
+        success_count += 1
+        results.append({
+            'id': row.id,
+            'contract_number': row.contract_number,
+            'contract_name': row.contract_name,
+            'status': 'success',
+            'message': '匹配成功',
+            'file_path': best_match['path'],
+            'matched_count': len(matched),
+            'matched_name': best_match['name'],
+            'similarity': round(best_match['similarity'], 6),
+        })
+
+    db.session.commit()
+
+    return jsonify({
+        'total': len(contract_ids),
+        'success': success_count,
+        'failed': len(contract_ids) - success_count,
+        'results': results,
+    })
+
+
 @contracts_bp.post('/contracts')
 @require_auth
 def create_contract():
@@ -2337,6 +2511,10 @@ def create_contract():
     record, message, status_code, _ = _build_contract_record(body, g.current_user)
     if record is None:
         return jsonify({'message': message}), status_code
+
+    if 'file_path' in body:
+        normalized_file_path = _normalize_contract_file_path(body.get('file_path'))
+        record.file_path = normalized_file_path or None
 
     db.session.add(record)
     db.session.commit()
@@ -2558,6 +2736,9 @@ def update_contract(contract_id):
         record.project = project
     if 'fullbody' in body:
         record.fullbody = (body.get('fullbody') or '').strip() or None
+    if 'file_path' in body:
+        normalized_file_path = _normalize_contract_file_path(body.get('file_path'))
+        record.file_path = normalized_file_path or None
     if 'start_date' in body:
         record.start_date = _parse_date(body.get('start_date'))
     if 'end_date' in body:
