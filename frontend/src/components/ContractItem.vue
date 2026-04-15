@@ -349,6 +349,10 @@ const props = defineProps({
     type: Object,
     default: () => ({}),
   },
+  linkTreeSnapshot: {
+    type: Object,
+    default: () => ({}),
+  },
   aiParsing: {
     type: Boolean,
     default: false,
@@ -384,6 +388,7 @@ const linkFilesLoading = ref(false)
 const linkTreeRef = ref(null)
 const linkTreeData = ref([])
 const linkRootName = ref('/')
+const linkTreeCache = reactive({})
 const linkSelectedFolderPath = ref('')
 const linkSelectedFilePath = ref('')
 const linkFiles = ref([])
@@ -891,11 +896,59 @@ const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
 
 const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
-const fetchLinkFolderChildren = async (parentPath = '') => {
+const resetLinkTreeCache = () => {
+  for (const key of Object.keys(linkTreeCache)) {
+    delete linkTreeCache[key]
+  }
+}
+
+const setCachedChildren = (parentPath, children) => {
+  linkTreeCache[normalizePath(parentPath)] = Array.isArray(children) ? children : []
+}
+
+const getCachedChildren = (parentPath) => {
+  const value = linkTreeCache[normalizePath(parentPath)]
+  return Array.isArray(value) ? value : null
+}
+
+const applyLinkTreeSnapshot = (snapshot = {}) => {
+  const root = snapshot?.root || {}
+  linkRootName.value = root?.name || '/'
+
+  resetLinkTreeCache()
+  const childrenByParent = snapshot?.childrenByParent
+  if (childrenByParent && typeof childrenByParent === 'object') {
+    Object.entries(childrenByParent).forEach(([parentPath, children]) => {
+      if (Array.isArray(children)) {
+        setCachedChildren(parentPath, children)
+      }
+    })
+  }
+
+  const rootChildren = Array.isArray(snapshot?.rootChildren)
+    ? snapshot.rootChildren
+    : (getCachedChildren('') || [])
+  setCachedChildren('', rootChildren)
+  linkTreeData.value = rootChildren
+}
+
+const fetchLinkFolderChildren = async (parentPath = '', options = {}) => {
+  const normalizedParentPath = normalizePath(parentPath)
+  const force = !!options?.force
+
+  if (!force) {
+    const cached = getCachedChildren(normalizedParentPath)
+    if (cached) {
+      return cached
+    }
+  }
+
   const { data } = await http.get('/folders/children', {
-    params: { parent_path: normalizePath(parentPath) },
+    params: { parent_path: normalizedParentPath },
   })
-  return Array.isArray(data?.children) ? data.children : []
+  const children = Array.isArray(data?.children) ? data.children : []
+  setCachedChildren(normalizedParentPath, children)
+  return children
 }
 
 const buildPathChain = (path) => {
@@ -951,6 +1004,22 @@ const loadLinkTreeChildren = async (node, resolve) => {
   }
 }
 
+const refreshLinkTreeNodeChildren = async (parentPath = '', silent = true) => {
+  const normalizedParentPath = normalizePath(parentPath)
+  try {
+    const children = await fetchLinkFolderChildren(normalizedParentPath, { force: true })
+    if (!normalizedParentPath) {
+      linkTreeData.value = children
+      return
+    }
+    linkTreeRef.value?.updateKeyChildren?.(normalizedParentPath, children)
+  } catch (error) {
+    if (!silent) {
+      ElMessage.error(error?.response?.data?.message || '读取子目录失败')
+    }
+  }
+}
+
 const loadLinkFiles = async (folderPath = '') => {
   linkFilesLoading.value = true
   try {
@@ -986,10 +1055,13 @@ const openLinkFileDialog = async () => {
   linkSelectedFilePath.value = form.file_path || ''
   cleanupLinkPreview()
   try {
-    const { data } = await http.get('/folders/tree')
-    const root = data?.root || { name: '/', path: '' }
-    linkRootName.value = root.name || '/'
-    linkTreeData.value = await fetchLinkFolderChildren('')
+    applyLinkTreeSnapshot(props.linkTreeSnapshot || {})
+    if (!linkTreeData.value.length) {
+      const { data } = await http.get('/folders/tree')
+      const root = data?.root || { name: '/', path: '' }
+      linkRootName.value = root?.name || '/'
+      linkTreeData.value = await fetchLinkFolderChildren('', { force: true })
+    }
 
     const initialFolder = normalizePath(getParentPath(form.file_path || ''))
     await expandLinkTreeToPath(initialFolder)
@@ -1004,7 +1076,15 @@ const openLinkFileDialog = async () => {
 }
 
 const onLinkTreeNodeClick = async (node) => {
-  await loadLinkFiles(node?.path || '')
+  const folderPath = node?.path || ''
+  const normalizedFolderPath = normalizePath(folderPath)
+  const cachedChildren = getCachedChildren(normalizedFolderPath)
+  if (cachedChildren) {
+    linkTreeRef.value?.updateKeyChildren?.(normalizedFolderPath, cachedChildren)
+  }
+  refreshLinkTreeNodeChildren(normalizedFolderPath)
+
+  await loadLinkFiles(folderPath)
 }
 
 const cleanupLinkPreview = () => {
@@ -1115,28 +1195,15 @@ const confirmLinkFile = async () => {
   }
 
   form.file_path = selectedPath
-  if (editing.value?.id) {
-    try {
-      await http.put(`/contracts/${editing.value.id}`, {
-        file_path: selectedPath,
-      })
-      if (editing.value) {
-        editing.value.file_path = selectedPath
-      }
-      if (currentPreviewRow.value?.id === editing.value?.id) {
-        currentPreviewRow.value.file_path = selectedPath
-      }
-      ElMessage.success('链接文件成功')
-      emit('saved')
-    } catch (error) {
-      ElMessage.error(error?.response?.data?.message || '链接文件失败')
-      return
-    }
-  } else {
-    ElMessage.success('已选择文件，保存合同后生效')
+  if (editing.value) {
+    editing.value.file_path = selectedPath
+  }
+  if (currentPreviewRow.value?.id === editing.value?.id) {
+    currentPreviewRow.value.file_path = selectedPath
   }
 
   await syncMainPreviewFromLinkedFile(selectedPath)
+  ElMessage.success('已选择文件，点击“保存”后生效')
   closeLinkFileDialog()
 }
 
@@ -1388,6 +1455,14 @@ watch(linkFileDialogVisible, (visible) => {
     cleanupLinkPreview()
   }
 })
+
+watch(
+  () => props.linkTreeSnapshot,
+  (snapshot) => {
+    applyLinkTreeSnapshot(snapshot || {})
+  },
+  { immediate: true, deep: true },
+)
 
 defineExpose({
   openCreate,

@@ -266,6 +266,7 @@
       ref="contractItemRef"
       :departments="departments"
       :options="options"
+      :link-tree-snapshot="linkTreeSnapshot"
       v-model:aiParsing="aiParsing"
       @saved="handleContractSaved"
     />
@@ -306,6 +307,12 @@ const importDialogVisible = ref(false)
 const currentPage = ref(1)
 const contractItemRef = ref(null)
 const sortState = reactive({ prop: '', order: '' })
+const linkTreeSnapshot = reactive({
+  root: { name: '/', path: '' },
+  rootChildren: [],
+  childrenByParent: {},
+  refreshedAt: 0,
+})
 
 const handleSortChange = ({ prop, order }) => {
   sortState.prop = prop
@@ -426,6 +433,35 @@ const loadFieldOptions = async () => {
   options.pricing_method = data?.pricing_method || []
   options.is_archived = data?.is_archived || []
   options.project = data?.project || []
+}
+
+const normalizeFolderPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const loadLinkTreeSnapshot = async () => {
+  try {
+    const [{ data: treeData }, { data: childrenData }] = await Promise.all([
+      http.get('/folders/tree'),
+      http.get('/folders/children', { params: { parent_path: '' } }),
+    ])
+
+    const root = treeData?.root || { name: '/', path: '' }
+    const rootChildren = Array.isArray(childrenData?.children) ? childrenData.children : []
+
+    linkTreeSnapshot.root = {
+      name: root?.name || '/',
+      path: normalizeFolderPath(root?.path || ''),
+    }
+    linkTreeSnapshot.rootChildren = rootChildren
+    linkTreeSnapshot.childrenByParent = {
+      '': rootChildren,
+    }
+    linkTreeSnapshot.refreshedAt = Date.now()
+  } catch (error) {
+    linkTreeSnapshot.root = { name: '/', path: '' }
+    linkTreeSnapshot.rootChildren = []
+    linkTreeSnapshot.childrenByParent = { '': [] }
+    ElMessage.warning(error?.response?.data?.message || '文件夹结构预加载失败，链接文件时将按需加载')
+  }
 }
 
 const loadContracts = async () => {
@@ -829,9 +865,12 @@ const parseErrorMessage = async (error, fallbackMessage) => {
 
 onMounted(async () => {
   try {
-    await loadDepartments()
-    await loadFieldOptions()
-    await loadContracts()
+    await Promise.all([
+      loadDepartments(),
+      loadFieldOptions(),
+      loadContracts(),
+      loadLinkTreeSnapshot(),
+    ])
   } catch (_error) {
     ElMessage.error('数据加载失败')
   }

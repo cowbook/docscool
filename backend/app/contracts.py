@@ -1480,6 +1480,128 @@ def _load_storage_file_payload(relative_file_path: str):
         return f.read(), file_name, mime
 
 
+def _delete_storage_file(relative_file_path: str) -> str:
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        remote_file_path = _remote_folder_path(normalized)
+        sid = _synology_upload_login()
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.Delete',
+                'version': '2',
+                'method': 'delete',
+            },
+            data={
+                'path': f'["{remote_file_path}"]',
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        return normalized
+
+    local_file_path = _safe_local_file_path(normalized)
+    if not os.path.isfile(local_file_path):
+        raise FileNotFoundError('文件不存在')
+
+    os.remove(local_file_path)
+    return normalized
+
+
+def _rename_storage_file(relative_file_path: str, new_name: str) -> tuple[str, str]:
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    target_name = (new_name or '').strip()
+    if not target_name:
+        raise ValueError('文件名不能为空')
+    if '/' in target_name or '\\' in target_name:
+        raise ValueError('文件名不能包含斜杠')
+
+    parent_path = posixpath.dirname(normalized)
+    if parent_path == '.':
+        parent_path = ''
+    new_relative_path = _build_synology_file_path(parent_path, target_name)
+
+    if new_relative_path == normalized:
+        return normalized, normalized
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        old_remote_path = _remote_folder_path(normalized)
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.Rename',
+                'version': '2',
+                'method': 'rename',
+            },
+            data={
+                'path': f'["{old_remote_path}"]',
+                'name': _synology_json_array(target_name),
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在')
+            if code in {405, 408}:
+                raise FileExistsError('同名文件已存在')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        return normalized, new_relative_path
+
+    old_local_path = _safe_local_file_path(normalized)
+    if not os.path.isfile(old_local_path):
+        raise FileNotFoundError('文件不存在')
+
+    new_local_path = _safe_local_file_path(new_relative_path)
+    if os.path.exists(new_local_path):
+        raise FileExistsError('同名文件已存在')
+
+    os.rename(old_local_path, new_local_path)
+    return normalized, new_relative_path
+
+
+def _clear_contract_file_path_by_relative_path(relative_file_path: str) -> list[int]:
+    normalized_target = _normalize_relative_path(relative_file_path)
+    if not normalized_target:
+        return []
+
+    affected_ids = []
+    rows = Contract.query.filter(Contract.file_path.isnot(None)).all()
+    for row in rows:
+        if _normalize_contract_file_path(row.file_path) != normalized_target:
+            continue
+        row.file_path = None
+        affected_ids.append(row.id)
+
+    return affected_ids
+
+
+def _replace_contract_file_path_by_relative_path(old_relative_path: str, new_relative_path: str) -> list[int]:
+    normalized_old = _normalize_relative_path(old_relative_path)
+    normalized_new = _normalize_relative_path(new_relative_path)
+    if not normalized_old or not normalized_new:
+        return []
+
+    affected_ids = []
+    rows = Contract.query.filter(Contract.file_path.isnot(None)).all()
+    for row in rows:
+        if _normalize_contract_file_path(row.file_path) != normalized_old:
+            continue
+        row.file_path = normalized_new
+        affected_ids.append(row.id)
+
+    return affected_ids
+
+
 def _get_department_names():
     rows = Department.query.order_by(Department.name.asc()).all()
     return [row.name for row in rows]
@@ -1998,11 +2120,46 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     api_url = (current_app.config.get('MINIMAX_API_URL') or '').strip()
     model = (current_app.config.get('MINIMAX_MODEL') or '').strip()
 
+    TAX_TEXT = '''
+不同发票类型（主要针对增值税发票）的税率因纳税人类型（一般纳税人或小规模纳税人）及业务性质而异，以下是具体税率分类及说明：
+13%税率
+适用范围：销售货物、修理修配劳务、有形动产租赁服务、进口货物（除特殊规定外）。
+常见场景：制造业销售产品、批发零售商品、设备租赁等。
+
+9%税率
+适用范围：
+交通运输服务（如公路、铁路、航空运输）；
+邮政服务、基础电信服务；
+建筑服务、不动产租赁服务；
+销售不动产、转让土地使用权；
+销售或进口23类特殊货物（如粮食、农产品、自来水、图书、饲料等）。
+常见场景：物流运输、建筑工程、房地产销售、农产品加工等。
+
+6%税率
+适用范围：销售现代服务（如研发、信息技术、物流辅助、文化创意等）、金融服务（如贷款、保险、金融商品转让）、居民服务、销售无形资产（除土地使用权外）。
+常见场景：软件开发、咨询服务、金融服务、知识产权转让等。
+
+0%税率（零税率）
+适用范围：纳税人出口货物、境内单位和个人跨境销售国务院规定范围内的服务或无形资产。
+说明：零税率不等于免税，出口货物可享受退税政策。
+
+3%征收率
+适用范围：小规模纳税人销售货物、提供应税劳务或发生应税行为（除特殊规定外）。
+常见场景：小微企业销售商品、提供劳务等。
+优惠政策：
+2023年1月1日至2027年12月31日，增值税小规模纳税人适用3%征收率的应税销售收入，减按1%征收率征收增值税；
+适用3%预征率的预缴增值税项目，减按1%预征率预缴增值税。
+
+'''
+
     prompt = (
         '返回的JSON键必须严格使用以下字段：'
         + ','.join(CONTRACT_FIELD_KEYS)
         + '\n'
-        'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的。\n'
+        'tax_rate指的是合同里涉及的不同发票的税率，返回10%、13%这样的百分比文本，' + TAX_TEXT + '，分析本合同属于什么类型，如果实在分析不到找不到就返回9%""。\n'
+        'invoice_type指的是发票类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['invoice_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么发票类型的，如果讲到了增值税专用发票（专用发票、专票）、增值税普通发票（普票）就返回对应的发票类型，如果没有明确提到发票类型但讲到了税率、价税合计等税务相关内容就返回增值税普通发票，其它默认都返回其它发票。\n'
+        'contract_type指的是合同类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么类型的，如果讲到了开挖、定向钻、补偿、折迁等施工作业就是工程类，如果讲到了设计、可研、咨询、测量、价格、贷款、会议就是服务类，如果讲到了设备、材料、工具等就是物资类，拿不准就直接返回服务类。\n'
+        'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的，如果讲到了综合单价暂定工程量就是单价合同，其它默认都返回总价合同。\n'
         'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
         'handling_date格式为 YYYY-MM-DD\n'
@@ -2512,6 +2669,66 @@ def rename_folder():
         return jsonify({'message': f'重命名文件夹失败: {exc}'}), 500
 
     return jsonify({'path': new_relative_path})
+
+
+@contracts_bp.delete('/folders/file')
+@require_auth
+def delete_folder_file():
+    body = request.get_json(silent=True) or {}
+    file_path = body.get('path') or request.args.get('path') or request.args.get('file_path') or ''
+
+    try:
+        normalized_path = _delete_storage_file(file_path)
+        affected_ids = _clear_contract_file_path_by_relative_path(normalized_path)
+        db.session.commit()
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'message': f'删除文件失败: {exc}'}), 500
+
+    return jsonify({
+        'success': True,
+        'path': normalized_path,
+        'affected_contract_count': len(affected_ids),
+        'affected_contract_ids': affected_ids,
+    })
+
+
+@contracts_bp.put('/folders/file')
+@require_auth
+def rename_folder_file():
+    body = request.get_json(silent=True) or {}
+    file_path = body.get('path') or body.get('file_path') or ''
+    new_name = body.get('name') or body.get('new_name') or ''
+
+    try:
+        old_path, new_path = _rename_storage_file(file_path, new_name)
+        affected_ids = _replace_contract_file_path_by_relative_path(old_path, new_path)
+        db.session.commit()
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileExistsError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'message': f'重命名文件失败: {exc}'}), 500
+
+    return jsonify({
+        'success': True,
+        'old_path': old_path,
+        'path': new_path,
+        'affected_contract_count': len(affected_ids),
+        'affected_contract_ids': affected_ids,
+    })
 
 
 @contracts_bp.get('/folders/file-download')

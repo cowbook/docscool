@@ -103,7 +103,8 @@
               </el-button>
             </div>
           </div>
-          
+
+          <div class="file-table-wrap" @contextmenu.prevent>
           <el-table
             v-loading="loadingFiles"
             :data="filteredFiles"
@@ -121,7 +122,11 @@
               :resizable="true"
             >
               <template #default="scope">
-                <el-link class="file-cell" @click.stop="openFilePreview(scope.row)">
+                <el-link
+                  class="file-cell"
+                  @click.stop="openFilePreview(scope.row)"
+                  @contextmenu.prevent.stop="onFileCellContextMenu($event, scope.row)"
+                >
                   <span class="file-cell-inner">
                     <Icon :icon="getFileIcon(scope.row.file_path)" class="file-icon" />
                     <span class="file-name" :title="scope.row.name">{{ scope.row.name }}</span>
@@ -167,6 +172,12 @@
             <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
 
           </el-table>
+
+            <div v-if="fileContextMenuVisible" class="file-context-menu" :style="fileContextMenuStyle">
+              <button type="button" class="menu-item" :disabled="!fileContextTarget" @click="handleFileContextCommand('rename')">改名</button>
+              <button type="button" class="menu-item menu-item-danger" :disabled="!fileContextTarget" @click="handleFileContextCommand('delete')">删除</button>
+            </div>
+          </div>
         </div>
       </div>
     </el-card>
@@ -291,6 +302,9 @@ const options = ref({
 const contextMenuVisible = ref(false)
 const contextMenuStyle = ref({ left: '0px', top: '0px' })
 const contextTargetPath = ref('')
+const fileContextMenuVisible = ref(false)
+const fileContextMenuStyle = ref({ left: '0px', top: '0px' })
+const fileContextTarget = ref(null)
 const folderUploadInputRef = ref(null)
 const uploadingFolderFiles = ref(false)
 const folderLayoutRef = ref(null)
@@ -368,8 +382,19 @@ const hideContextMenu = () => {
   contextMenuVisible.value = false
 }
 
+const hideFileContextMenu = () => {
+  fileContextMenuVisible.value = false
+  fileContextTarget.value = null
+}
+
+const hideAllContextMenus = () => {
+  hideContextMenu()
+  hideFileContextMenu()
+}
+
 const showContextMenu = (event, path = '') => {
   event.preventDefault()
+  hideFileContextMenu()
   contextTargetPath.value = path || ''
 
   const container = event.target?.closest?.('.tree-wrap')
@@ -382,6 +407,23 @@ const showContextMenu = (event, path = '') => {
     top: `${top}px`,
   }
   contextMenuVisible.value = true
+}
+
+const showFileContextMenu = (event, row) => {
+  event.preventDefault()
+  hideContextMenu()
+
+  fileContextTarget.value = row || null
+  const container = event.target?.closest?.('.file-table-wrap')
+  const rect = container?.getBoundingClientRect?.()
+  const left = rect ? event.clientX - rect.left : 0
+  const top = rect ? event.clientY - rect.top : 0
+
+  fileContextMenuStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+  }
+  fileContextMenuVisible.value = true
 }
 
 const onPanelContextMenu = (event) => {
@@ -411,6 +453,31 @@ const handleContextCommand = async (command) => {
   }
   if (command === 'delete') {
     await deleteFolder(targetPath)
+  }
+}
+
+const onFileCellContextMenu = (event, row) => {
+  if (!row?.file_path) {
+    return
+  }
+  showFileContextMenu(event, row)
+}
+
+const handleFileContextCommand = async (command) => {
+  const row = fileContextTarget.value
+  hideFileContextMenu()
+
+  if (!row?.file_path) {
+    return
+  }
+
+  if (command === 'delete') {
+    await deleteFileRow(row)
+    return
+  }
+
+  if (command === 'rename') {
+    await renameFileRow(row)
   }
 }
 
@@ -1067,6 +1134,93 @@ const openFilePreview = async (row) => {
   }
 }
 
+const deleteFileRow = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  const fileName = row?.name || filePath
+  if (!filePath) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除文件「${fileName}」吗？\n删除后会自动清空关联合同的 file_path。`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+
+    const { data } = await http.delete('/folders/file', {
+      data: { path: filePath },
+    })
+
+    if (previewRow.value?.file_path === filePath) {
+      previewDialogVisible.value = false
+      resetPreview()
+    }
+
+    await loadFolderFiles(selectedFolderPath.value)
+    const affectedCount = Number(data?.affected_contract_count) || 0
+    ElMessage.success(`删除成功，已清空 ${affectedCount} 个关联合同文件路径`)
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+    ElMessage.error(error?.response?.data?.message || '删除文件失败')
+  }
+}
+
+const renameFileRow = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    return
+  }
+
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的文件名', '重命名文件', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputPlaceholder: '新文件名',
+      inputValue: String(row?.name || ''),
+      inputValidator: (val) => {
+        if (!String(val || '').trim()) {
+          return '文件名不能为空'
+        }
+        if (/[/\\]/.test(val)) {
+          return '文件名不能包含斜杠'
+        }
+        return true
+      },
+    })
+
+    const { data } = await http.put('/folders/file', {
+      path: filePath,
+      name: value,
+    })
+
+    const newPath = String(data?.path || '').trim()
+    const newName = String(value || '').trim()
+    if (previewRow.value?.file_path === filePath) {
+      previewRow.value = {
+        ...(previewRow.value || {}),
+        file_path: newPath || filePath,
+        name: newName,
+      }
+    }
+
+    await loadFolderFiles(selectedFolderPath.value)
+    const affectedCount = Number(data?.affected_contract_count) || 0
+    ElMessage.success(`改名成功，已同步 ${affectedCount} 个关联合同文件路径`)
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+    ElMessage.error(error?.response?.data?.message || '重命名文件失败')
+  }
+}
+
 const onPdfRenderFailed = () => {
   ElMessage.warning('PDF 渲染失败，请尝试下载原文件')
 }
@@ -1119,7 +1273,7 @@ const startPanelResize = () => {
 }
 
 onMounted(async () => {
-  window.addEventListener('click', hideContextMenu)
+  window.addEventListener('click', hideAllContextMenus)
   await Promise.all([
     loadDepartments(),
     loadFieldOptions(),
@@ -1128,7 +1282,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('click', hideContextMenu)
+  window.removeEventListener('click', hideAllContextMenus)
   stopPanelResize()
 })
 
@@ -1196,6 +1350,10 @@ watch(previewDialogVisible, (visible) => {
   position: relative;
 }
 
+.file-table-wrap {
+  position: relative;
+}
+
 .tree-wrap :deep(.el-tree-node__expand-icon) {
   display: none;
 }
@@ -1219,6 +1377,17 @@ watch(previewDialogVisible, (visible) => {
   position: absolute;
   z-index: 20;
   min-width: 140px;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+}
+
+.file-context-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 120px;
   background: #ffffff;
   border: 1px solid #d1d5db;
   border-radius: 8px;
