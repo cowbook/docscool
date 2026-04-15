@@ -197,94 +197,14 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="aiMatchDialogVisible" title="识别结果确认" width="min(1080px, 96vw)">
-      <div class="ai-match-dialog">
-        <div class="ai-match-preview-column">
-          <div class="preview-header">
-            <div class="preview-title">上传文件预览</div>
-          </div>
-          <div
-            class="preview-panel"
-            :class="{ 'preview-panel-clickable': !!previewUrl && !previewLoading }"
-            @click="openFullscreenPreview"
-          >
-            <div v-if="previewLoading" class="preview-placeholder">预览加载中...</div>
-            <VuePdfEmbed
-              v-else-if="previewUrl"
-              :source="previewUrl"
-              class="pdf-preview-embed"
-              @rendering-failed="handlePdfRenderFailed"
-            />
-            <div v-else class="preview-placeholder">{{ previewMessage }}</div>
-          </div>
-          <div v-if="previewUrl && !previewLoading" class="preview-hint">点击预览区域可全屏查看</div>
-        </div>
-
-        <div class="ai-match-content">
-          <div class="ai-match-summary">
-            <div class="ai-match-title">AI 已完成解析，请先确认这是新合同还是已有合同。</div>
-            <div class="ai-match-subtitle">系统已按合同标题相似度和金额相同规则筛出候选合同。</div>
-          </div>
-
-          <el-table
-            :data="aiMatchCandidates"
-            stripe
-            border
-            resizable
-            size="small"
-            class="ai-match-table"
-            empty-text="未找到相似合同，可直接选择“这是新合同”"
-            @row-click="handleAiMatchRowClick"
-          >
-            <el-table-column label="选择" width="74" align="center">
-              <template #default="scope">
-                <input
-                  class="ai-match-radio"
-                  type="radio"
-                  name="ai-match-selection"
-                  :checked="aiMatchSelection === String(scope.row.id)"
-                  @change="selectAiMatchCandidate(scope.row.id)"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="文件" min-width="240">
-              <template #default="scope">
-                <el-link v-if="scope.row.file_path" class="file-cell" @click.stop="openFilePreview(scope.row)">
-                  <Icon :icon="getFileIcon(scope.row.file_path)" class="file-ok file-download" />
-                  <span class="file-name" :title="getFileName(scope.row.file_path)">
-                    {{ getFileName(scope.row.file_path) }}
-                  </span>
-                </el-link>
-                <span v-else class="no-file-name">未上传</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="contract_name" label="合同名称" min-width="280" show-overflow-tooltip />
-            <el-table-column prop="contract_amount" label="金额" min-width="130" />
-            <el-table-column label="匹配依据" min-width="160">
-              <template #default="scope">
-                {{ formatAiMatchReasons(scope.row) }}
-              </template>
-            </el-table-column>
-          </el-table>
-
-          <label class="ai-match-new-option" @click="selectAiMatchAsNew">
-            <input
-              class="ai-match-radio"
-              type="radio"
-              name="ai-match-selection"
-              :checked="aiMatchSelection === AI_NEW_CONTRACT_VALUE"
-              @change="selectAiMatchAsNew"
-            />
-            <span>这是新合同</span>
-          </label>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="closeAiMatchDialog">取消</el-button>
-        <el-button type="primary" :loading="aiMatchProcessing" @click="proceedAiMatchSelection">下一步</el-button>
-      </template>
-    </el-dialog>
+    <AiMatchDialog
+      v-model="aiMatchDialogVisible"
+      :candidates="aiMatchCandidates"
+      :processing="aiMatchProcessing"
+      :file="aiParsedUploadFile"
+      @confirm-selection="proceedAiMatchSelection"
+      @cancel="closeAiMatchDialog"
+    />
 
     <el-dialog v-model="importDialogVisible" title="导入合同" width="500px" :close-on-click-modal="false">
       <div class="import-dialog-content">
@@ -342,347 +262,35 @@
       </template>
     </el-dialog>
 
-    <el-dialog       top="2vh"
- v-model="dialogVisible" :title="editing ? '编辑合同' : '新建合同'" width="min(1380px, 98vw)">
-      <el-form :model="form" label-width="120px" class="dialog-form">
-        <div class="dialog-layout">
-          <div class="preview-column">
-            <div class="preview-header">
-              <div class="preview-title">文件预览</div>
-              <div class="preview-actions">
-                <el-button
-                  size="small"
-                  type="primary"
-                  :loading="aiParsing"
-                  :disabled="aiParsing || (!form.file_path && !pendingAiUploadFile)"
-                  @click="runAiRecognitionFromPreview"
-                >
-                  {{ aiParsing ? '识别中...' : 'AI识别' }}
-                </el-button>
-                <el-button size="small" @click="textDialogVisible = true">文本</el-button>
+    <ContractItem
+      ref="contractItemRef"
+      :departments="departments"
+      :options="options"
+      v-model:aiParsing="aiParsing"
+      @saved="handleContractSaved"
+    />
 
-                <el-upload
-                  :show-file-list="false"
-                  :http-request="(options) => handleDialogUpload(options.file)"
-                >
-                  <el-button :icon="Upload" size="small">上传文件</el-button>
-                </el-upload>
-
-                <el-button size="small" @click="openLinkFileDialog">链接文件</el-button>
-
-              </div>
-            </div>
-            <div
-              class="preview-panel"
-              :class="{ 'preview-panel-clickable': !!previewUrl && !previewLoading }"
-              @click="openFullscreenPreview"
-            >
-              <div v-if="previewLoading" class="preview-placeholder">预览加载中...</div>
-              <VuePdfEmbed
-                v-else-if="previewUrl"
-                :source="previewUrl"
-                class="pdf-preview-embed"
-                @rendering-failed="handlePdfRenderFailed"
-              />
-              <div v-else class="preview-placeholder">{{ previewMessage }}</div>
-            </div>
-            <div v-if="previewUrl && !previewLoading" class="preview-hint">点击预览区域可全屏查看</div>
-            <div class="readonly-file-path" :title="form.file_path || ''">
-              <el-link
-                class="readonly-file-link"
-                type="primary"
-                :underline="!!form.file_path"
-                :disabled="!form.file_path"
-                @click="handleDialogFilePathDownload"
-              >
-                {{ form.file_path || '暂无文件路径' }}
-              </el-link>
-            </div>
-          </div>
-
-          <div class="form-column">
-            <div class="form-grid">
-
-              <el-form-item label="是否归档" class="form-item-span-2">
-                <el-switch
-                  v-model="form.is_archived"
-                  active-text="已归档"
-                  inactive-text="未归档"
-                  active-value="已归档"
-                  inactive-value="未归档"
-                />
-              </el-form-item>
-          
-              <el-form-item label="合同名称"  class="form-item-span-2">
-                <el-input v-model="form.contract_name" />
-              </el-form-item>
-              <el-form-item label="合同编号">
-                <el-input v-model="form.contract_number" />
-              </el-form-item>
-              <el-form-item label="合同单位">
-                <el-input v-model="form.contract_unit" />
-              </el-form-item>
-              <el-form-item label="合同金额">
-                <el-input
-                  v-model="form.contract_amount"
-                  inputmode="decimal"
-                  placeholder="支持最多 8 位及以上精确小数输入"
-                  @blur="normalizeContractAmount"
-                />
-              </el-form-item>
-              <el-form-item label="审批状态">
-                <el-select v-model="form.approval_status" clearable placeholder="可留空" style="width: 100%">
-                  <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="承办人">
-                <el-input v-model="form.handler" clearable placeholder="可留空" />
-              </el-form-item>
-              <el-form-item label="承办部门">
-                <el-select v-model="form.handling_department" placeholder="请选择部门" style="width: 100%">
-                  <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="合同确定方式">
-                <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
-                  <el-option v-for="item in options.contract_determination_method" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="承办日期">
-                <el-date-picker v-model="form.handling_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-              </el-form-item>
-              <el-form-item label="合同类型">
-                <el-select v-model="form.contract_type" placeholder="请选择合同类型" style="width: 100%">
-                  <el-option v-for="item in options.contract_type" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="发票类型">
-                <el-select v-model="form.invoice_type" placeholder="请选择发票类型" style="width: 100%">
-                  <el-option v-for="item in options.invoice_type" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="税率">
-                <el-input v-model="form.tax_rate" />
-              </el-form-item>
-              <el-form-item label="计价方式">
-                <el-select v-model="form.pricing_method" placeholder="请选择计价方式" style="width: 100%">
-                  <el-option v-for="item in options.pricing_method" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="项目">
-                <el-select v-model="form.project" clearable placeholder="可留空" style="width: 100%" filterable>
-                  <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-
-              
-            </div>
-          </div>
-        </div>
-      </el-form>
-
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button :loading="saving" type="primary" @click="saveContract">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="fullPreviewVisible"
-      width="96vw"
-      top="2vh"
-      destroy-on-close
-      append-to-body
-    >
-      <template #header>
-        <div class="fullscreen-dialog-header">
-          <span class="fullscreen-dialog-title">{{ fullPreviewTitle }}</span>
-          <el-button
-            type="primary"
-            :disabled="!currentPreviewRow?.file_path"
-            @click="downloadContractFile(currentPreviewRow)"
-          >
-            下载原文件
-          </el-button>
-        </div>
-      </template>
-
-      <div class="fullscreen-preview-wrapper">
-        <VuePdfEmbed
-          v-if="previewUrl"
-          :source="previewUrl"
-          class="pdf-preview-embed fullscreen-pdf-preview"
-          @rendering-failed="handlePdfRenderFailed"
-        />
-        <div v-else class="preview-placeholder fullscreen-preview-placeholder">暂无可预览内容</div>
-      </div>
-
-      <template #footer>
-        <el-button @click="fullPreviewVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="textDialogVisible" title="合同文本" width="min(960px, 96vw)">
-      <el-input
-        v-model="form.fullbody"
-        type="textarea"
-        :rows="24"
-        resize="vertical"
-        placeholder="暂无文本内容"
-      />
-
-      <template #footer>
-        <el-button @click="textDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      
-      v-model="linkFileDialogVisible"
-      class="link-file-dialog"
-      title="选择并链接文件"
-      width="min(1280px, 96vw)"
-      top="2vh"
-      :close-on-click-modal="false"
-    >
-      <div class="link-file-layout">
-        <div class="link-file-left">
-          <div class="panel-title">{{ linkRootName }}</div>
-          <el-tree
-            ref="linkTreeRef"
-            v-loading="linkTreeLoading"
-            :data="linkTreeData"
-            node-key="path"
-            :props="linkTreeProps"
-            lazy
-            :load="loadLinkTreeChildren"
-            :expand-on-click-node="true"
-            highlight-current
-            @node-click="onLinkTreeNodeClick"
-          >
-            <template #default="{ node, data }">
-              <span class="tree-node-content">
-                <span class="tree-folder-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
-                <span class="tree-node-label">{{ data.name }}</span>
-              </span>
-            </template>
-          </el-tree>
-        </div>
-
-        <div class="link-file-right">
-          <div class="panel-title">文件列表（当前目录：{{ linkSelectedFolderPath || '/' }}）</div>
-          <div class="link-file-table-wrap">
-            <el-table
-              v-loading="linkFilesLoading"
-              :data="linkFiles"
-              border
-              stripe
-              size="small"
-              class="link-file-table"
-              @row-click="handleLinkFileRowClick"
-            >
-              <el-table-column label="选择" width="72" align="center">
-                <template #default="scope">
-                  <input
-                    type="radio"
-                    name="link-file-selection"
-                    :checked="linkSelectedFilePath === scope.row.file_path"
-                    @change="handleLinkFileRowClick(scope.row)"
-                  />
-                </template>
-              </el-table-column>
-              <el-table-column label="文件" min-width="280">
-                <template #default="scope">
-                  <el-link class="file-cell link-file-name-link" type="primary" @click.stop="handleLinkFileRowClick(scope.row)">
-                    <Icon :icon="getFileIcon(scope.row.file_path)" class="file-ok" />
-                    <span class="file-name" :title="scope.row.name">{{ scope.row.name }}</span>
-                  </el-link>
-                </template>
-              </el-table-column>
-              <el-table-column prop="contract_name" label="匹配合同" min-width="220" show-overflow-tooltip />
-            </el-table>
-          </div>
-          
-        </div>
-
-
-        <!-- PDF预览面板 -->
-        <div
-          class="link-file-preview-panel"
-          :class="{ 'preview-panel-clickable': !!linkPreviewUrl && !linkPreviewLoading }"
-          style="margin-top: 12px; min-height: 320px; max-height: 480px; overflow: auto; border: 1px solid #eee; border-radius: 4px; background: #fafbfc; display: flex; align-items: center; justify-content: center;"
-          @click="openLinkFullscreenPreview"
-        >
-          <div v-if="linkPreviewLoading" class="preview-placeholder">预览加载中...</div>
-          <VuePdfEmbed
-            v-else-if="linkPreviewUrl"
-            :source="linkPreviewUrl"
-            class="pdf-preview-embed"
-            style="width: 100%; height: 400px;"
-            @rendering-failed="() => { linkPreviewMessage = 'PDF渲染失败'; }"
-          />
-          <div v-else class="preview-placeholder">{{ linkPreviewMessage }}</div>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="() => { linkFileDialogVisible = false; if (linkPreviewUrl) { window.URL.revokeObjectURL(linkPreviewUrl); linkPreviewUrl = ''; linkPreviewMessage = '请选择PDF文件进行预览'; linkPreviewLoading = false; } }">取消</el-button>
-        <el-button type="primary" @click="confirmLinkFile">确认</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="linkFullPreviewVisible"
-      width="96vw"
-      top="2vh"
-      destroy-on-close
-      append-to-body
-    >
-      <template #header>
-        <div class="fullscreen-dialog-header">
-          <span class="fullscreen-dialog-title">文件预览 - {{ getFileName(linkSelectedFilePath || '') || '当前文件' }}</span>
-        </div>
-      </template>
-
-      <div class="fullscreen-preview-wrapper">
-        <VuePdfEmbed
-          v-if="linkPreviewUrl"
-          :source="linkPreviewUrl"
-          class="pdf-preview-embed fullscreen-pdf-preview"
-          @rendering-failed="() => { linkPreviewMessage = 'PDF组件渲染失败，请检查文件内容或浏览器兼容性'; }"
-        />
-        <div v-else class="preview-placeholder fullscreen-preview-placeholder">{{ linkPreviewMessage || '暂无可预览内容' }}</div>
-      </div>
-
-      <template #footer>
-        <el-button @click="linkFullPreviewVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
-import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
 import { CircleCloseFilled, Delete, Document, Download, Edit, Plus, Upload } from '@element-plus/icons-vue'
-import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 import http from '../api/http'
-
-GlobalWorkerOptions.workerSrc = PdfWorker
+import ContractItem from '../components/ContractItem.vue'
+import AiMatchDialog from '../components/AiMatchDialog.vue'
 
 const AI_NEW_CONTRACT_VALUE = '__new_contract__'
 
 const contracts = ref([])
 const departments = ref([])
-const saving = ref(false)
 const aiParsing = ref(false)
 const quickMatching = ref(false)
 const quickMatchDialogVisible = ref(false)
@@ -690,17 +298,13 @@ const quickMatchLogText = ref('')
 const aiMatchDialogVisible = ref(false)
 const aiMatchProcessing = ref(false)
 const aiMatchCandidates = ref([])
-const aiMatchSelection = ref(AI_NEW_CONTRACT_VALUE)
 const aiParsedFields = ref(null)
 const aiParsedFullbody = ref('')
 const aiParsedUploadFile = ref(null)
-const previewFileName = ref('')
 const importingExcel = ref(false)
 const importDialogVisible = ref(false)
-const dialogVisible = ref(false)
-const textDialogVisible = ref(false)
-const editing = ref(null)
 const currentPage = ref(1)
+const contractItemRef = ref(null)
 const sortState = reactive({ prop: '', order: '' })
 
 const handleSortChange = ({ prop, order }) => {
@@ -741,33 +345,7 @@ const pagedContracts = computed(() => {
 })
 const excelUploadInput = ref(null)
 const aiUploadInput = ref(null)
-const pendingAiUploadFile = ref(null)
-const previewUrl = ref('')
-const previewLoading = ref(false)
-const previewMessage = ref('暂无文件')
-const fullPreviewVisible = ref(false)
-const currentPreviewRow = ref(null)
 const pageSize = ref(100)
-
-// 链接文件弹窗专用预览状态
-const linkPreviewUrl = ref('')
-const linkPreviewLoading = ref(false)
-const linkPreviewMessage = ref('请选择PDF文件进行预览')
-const linkFullPreviewVisible = ref(false)
-const linkFileDialogVisible = ref(false)
-const linkTreeLoading = ref(false)
-const linkFilesLoading = ref(false)
-const linkTreeRef = ref(null)
-const linkTreeData = ref([])
-const linkRootName = ref('/')
-const linkSelectedFolderPath = ref('')
-const linkSelectedFilePath = ref('')
-const linkFiles = ref([])
-
-const linkTreeProps = {
-  label: 'name',
-  children: 'children',
-}
 
 const filters = reactive({
   handling_department: '',
@@ -820,57 +398,9 @@ const contractNumberColumnWidth = computed(() => {
 
   return Math.min(maxWidth, Math.max(baseWidth, longestLength * 7 + 16))
 })
-const fullPreviewTitle = computed(() => {
-  if (previewFileName.value) {
-    return `文件预览 - ${previewFileName.value}`
-  }
-  const name = getFileName(currentPreviewRow.value?.file_path || '')
-  return name ? `文件预览 - ${name}` : '文件预览'
-})
-
-const form = reactive({
-  file_path: '',
-  contract_name: '',
-  contract_number: '',
-  contract_unit: '',
-  contract_amount: '',
-  approval_status: '',
-  handler: '',
-  handling_department: '',
-  contract_determination_method: '',
-  handling_date: '',
-  contract_type: '',
-  invoice_type: '',
-  tax_rate: '',
-  pricing_method: '',
-  is_archived: '未归档',
-  project: '',
-  fullbody: '',
-})
-
-const resetForm = () => {
-  form.file_path = ''
-  form.contract_name = ''
-  form.contract_number = ''
-  form.contract_unit = ''
-  form.contract_amount = ''
-  form.approval_status = ''
-  form.handler = ''
-  form.handling_department = ''
-  form.contract_determination_method = ''
-  form.handling_date = ''
-  form.contract_type = ''
-  form.invoice_type = ''
-  form.tax_rate = ''
-  form.pricing_method = ''
-  form.is_archived = '未归档'
-  form.project = ''
-  form.fullbody = ''
-}
 
 const resetAiMatchState = () => {
   aiMatchCandidates.value = []
-  aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
   aiParsedFields.value = null
   aiParsedFullbody.value = ''
   aiParsedUploadFile.value = null
@@ -913,259 +443,10 @@ const loadContracts = async () => {
   currentPage.value = 1
 }
 
-const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-
-const fetchLinkFolderChildren = async (parentPath = '') => {
-  const { data } = await http.get('/folders/children', {
-    params: { parent_path: normalizePath(parentPath) },
-  })
-  return Array.isArray(data?.children) ? data.children : []
-}
-
-const buildPathChain = (path) => {
-  const normalized = normalizePath(path)
-  if (!normalized) {
-    return []
-  }
-
-  const parts = normalized.split('/').filter(Boolean)
-  const chain = []
-  let current = ''
-  for (const part of parts) {
-    current = current ? `${current}/${part}` : part
-    chain.push(current)
-  }
-  return chain
-}
-
-const expandLinkTreeToPath = async (path) => {
-  const targetPath = normalizePath(path)
-  const tree = linkTreeRef.value
-  if (!tree || !targetPath) {
-    tree?.setCurrentKey?.(null)
-    return
-  }
-
-  const chain = buildPathChain(targetPath)
-  let parentPath = ''
-  for (const currentPath of chain) {
-    const children = await fetchLinkFolderChildren(parentPath)
-    if (!parentPath) {
-      linkTreeData.value = children
-    } else {
-      tree.updateKeyChildren(parentPath, children)
-    }
-    parentPath = currentPath
-  }
-
-  await nextTick()
-  for (const currentPath of chain) {
-    tree.getNode(currentPath)?.expand?.()
-  }
-  tree.setCurrentKey?.(targetPath)
-}
-
-const loadLinkTreeChildren = async (node, resolve) => {
-  const parentPath = node?.level === 0 ? '' : (node?.data?.path || '')
-  try {
-    resolve(await fetchLinkFolderChildren(parentPath))
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '读取子目录失败')
-    resolve([])
-  }
-}
-
-const loadLinkFiles = async (folderPath = '') => {
-  linkFilesLoading.value = true
-  try {
-    const { data } = await http.get('/folders/files', {
-      params: { folder_path: normalizePath(folderPath) },
-    })
-    linkSelectedFolderPath.value = data?.folder_path || ''
-    const rows = Array.isArray(data?.files) ? data.files : []
-    linkFiles.value = rows
-    if (!rows.some((row) => row.file_path === linkSelectedFilePath.value)) {
-      linkSelectedFilePath.value = ''
-    }
-  } catch (error) {
-    linkFiles.value = []
-    ElMessage.error(error?.response?.data?.message || '读取文件失败')
-  } finally {
-    linkFilesLoading.value = false
-  }
-}
-
-const openLinkFileDialog = async () => {
-  linkFileDialogVisible.value = true
-  linkTreeLoading.value = true
-  linkSelectedFilePath.value = form.file_path || ''
-  // 弹窗打开时清空预览
-  if (linkPreviewUrl.value) {
-    window.URL.revokeObjectURL(linkPreviewUrl.value)
-  }
-  linkPreviewUrl.value = ''
-  linkPreviewMessage.value = '请选择PDF文件进行预览'
-  linkPreviewLoading.value = false
-  try {
-    const { data } = await http.get('/folders/tree')
-    const root = data?.root || { name: '/', path: '' }
-    linkRootName.value = root.name || '/'
-    linkTreeData.value = await fetchLinkFolderChildren('')
-
-    const initialFolder = normalizePath(getParentPath(form.file_path || ''))
-    await expandLinkTreeToPath(initialFolder)
-    await loadLinkFiles(initialFolder)
-  } catch (error) {
-    linkTreeData.value = []
-    linkFiles.value = []
-    ElMessage.error(error?.response?.data?.message || '加载文件选择器失败')
-  } finally {
-    linkTreeLoading.value = false
-  }
-}
-
-const onLinkTreeNodeClick = async (node) => {
-  await loadLinkFiles(node?.path || '')
-}
-
-const openLinkFilePreview = async (filePath) => {
-  const targetPath = String(filePath || '').trim()
-  if (!targetPath) {
-    return
-  }
-  // 只影响弹窗内预览，不影响主窗口
-  if (getFileExt(targetPath) !== 'pdf') {
-    linkPreviewUrl.value = ''
-    linkPreviewMessage.value = '该文件不是PDF，无法预览'
-    linkPreviewLoading.value = false
-    return
-  }
-  linkPreviewLoading.value = true
-  linkPreviewMessage.value = ''
-  try {
-    const response = await http.get('/folders/file-preview', {
-      params: { path: targetPath },
-      responseType: 'blob',
-    })
-    // 生成blob url
-    if (linkPreviewUrl.value) {
-      window.URL.revokeObjectURL(linkPreviewUrl.value)
-    }
-    const blob = response.data
-    linkPreviewUrl.value = window.URL.createObjectURL(blob)
-    linkPreviewMessage.value = ''
-  } catch (error) {
-    const message = await parseErrorMessage(error, '文件预览加载失败')
-    linkPreviewUrl.value = ''
-    linkPreviewMessage.value = `文件预览加载失败：${message}`
-    ElMessage.warning(message)
-  } finally {
-    linkPreviewLoading.value = false
-  }
-}
-
-const syncMainPreviewFromLinkedFile = async (filePath) => {
-  const targetPath = String(filePath || '').trim()
-  if (!targetPath) {
-    previewFileName.value = ''
-    resetPreview('暂无文件', false)
-    return
-  }
-
-  previewFileName.value = getFileName(targetPath)
-
-  if (editing.value?.id) {
-    if (currentPreviewRow.value?.id === editing.value.id) {
-      currentPreviewRow.value.file_path = targetPath
-    } else {
-      currentPreviewRow.value = {
-        ...(currentPreviewRow.value || {}),
-        id: editing.value.id,
-        file_path: targetPath,
-      }
-    }
-  }
-
-  
-
-  if (getFileExt(targetPath) !== 'pdf') {
-    resetPreview('该文件不是PDF，无法预览，请使用下方按钮下载原文件', false)
-    return
-  }
-
-  previewLoading.value = true
-  previewMessage.value = ''
-  try {
-    const response = await http.get('/folders/file-preview', {
-      params: { path: targetPath },
-      responseType: 'blob',
-    })
-    setPreviewFromBlob(response.data)
-  } catch (error) {
-    const message = await parseErrorMessage(error, 'PDF预览加载失败')
-    resetPreview(`PDF预览加载失败：${message}`, false)
-    ElMessage.warning(message)
-  } finally {
-    previewLoading.value = false
-  }
-}
-
-const handleLinkFileRowClick = async (row) => {
-  if (!row?.file_path) {
-    return
-  }
-  linkSelectedFilePath.value = row.file_path
-  await openLinkFilePreview(row.file_path)
-}
-
-const openLinkFullscreenPreview = () => {
-  if (!linkPreviewUrl.value || linkPreviewLoading.value) {
-    return
-  }
-  linkFullPreviewVisible.value = true
-}
-
-const getParentPath = (value) => {
-  const path = normalizePath(value)
-  if (!path) {
-    return ''
-  }
-  const idx = path.lastIndexOf('/')
-  return idx >= 0 ? path.slice(0, idx) : ''
-}
-
-const confirmLinkFile = async () => {
-  const selectedPath = linkSelectedFilePath.value || ''
-  if (!selectedPath) {
-    ElMessage.warning('请选择一个文件')
-    return
-  }
-
-  form.file_path = selectedPath
-  if (editing.value?.id) {
-    try {
-      await http.put(`/contracts/${editing.value.id}`, {
-        file_path: selectedPath,
-      })
-      if (editing.value) {
-        editing.value.file_path = selectedPath
-      }
-      if (currentPreviewRow.value?.id === editing.value?.id) {
-        currentPreviewRow.value.file_path = selectedPath
-      }
-      ElMessage.success('链接文件成功')
-      await loadContracts()
-    } catch (error) {
-      ElMessage.error(error?.response?.data?.message || '链接文件失败')
-      return
-    }
-  } else {
-    ElMessage.success('已选择文件，保存合同后生效')
-  }
-
-  await syncMainPreviewFromLinkedFile(selectedPath)
-
-  linkFileDialogVisible.value = false
+const handleContractSaved = async () => {
+  await loadDepartments()
+  await loadFieldOptions()
+  await loadContracts()
 }
 
 const quickMatchInstructionText = () => {
@@ -1239,102 +520,15 @@ const startQuickMatch = async () => {
 }
 
 const openCreate = () => {
-  editing.value = null
-  pendingAiUploadFile.value = null
-  currentPreviewRow.value = null
-  previewFileName.value = ''
-  resetForm()
-  resetPreview('暂无文件')
-  dialogVisible.value = true
-}
-
-const isBlankValue = (value) => String(value ?? '').trim() === ''
-
-const populateFormFromContract = (row) => {
-  form.file_path = row.file_path || ''
-  form.contract_name = row.contract_name || ''
-  form.contract_number = row.contract_number || ''
-  form.contract_unit = row.contract_unit || ''
-  form.contract_amount = normalizeAmountInputValue(row.contract_amount)
-  form.approval_status = row.approval_status || ''
-  form.handler = row.handler || ''
-  form.handling_department = row.handling_department || row.department || ''
-  form.contract_determination_method = row.contract_determination_method || ''
-  form.handling_date = row.handling_date || ''
-  form.contract_type = row.contract_type || ''
-  form.invoice_type = row.invoice_type || ''
-  form.tax_rate = row.tax_rate || ''
-  form.pricing_method = row.pricing_method || ''
-  form.is_archived = row.is_archived || '未归档'
-  form.project = row.project || ''
-  form.fullbody = row.fullbody || ''
-}
-
-const applyAiSupplementalFields = (fields, sourceRow = {}) => {
-  const mapping = [
-    ['contract_name', 'contract_name'],
-    ['contract_number', 'contract_number'],
-    ['contract_unit', 'contract_unit'],
-    ['contract_amount', 'contract_amount'],
-    ['approval_status', 'approval_status'],
-    ['handler', 'handler'],
-    ['handling_department', 'handling_department'],
-    ['contract_determination_method', 'contract_determination_method'],
-    ['handling_date', 'handling_date'],
-    ['contract_type', 'contract_type'],
-    ['invoice_type', 'invoice_type'],
-    ['tax_rate', 'tax_rate'],
-    ['pricing_method', 'pricing_method'],
-    ['is_archived', 'is_archived'],
-    ['project', 'project'],
-    ['fullbody', 'fullbody'],
-  ]
-
-  for (const [formKey, fieldKey] of mapping) {
-    const incomingRaw = fields?.[fieldKey]
-    const incomingValue = formKey === 'contract_amount'
-      ? normalizeAmountInputValue(incomingRaw)
-      : String(incomingRaw ?? '').trim()
-
-    if (isBlankValue(incomingValue)) {
-      continue
-    }
-
-    const existingValue = formKey === 'handling_department'
-      ? (sourceRow?.handling_department || sourceRow?.department || '')
-      : sourceRow?.[formKey]
-
-    if (!isBlankValue(existingValue)) {
-      continue
-    }
-
-    form[formKey] = incomingValue
-  }
+  contractItemRef.value?.openCreate()
 }
 
 const openCreateFromAi = (file, fields) => {
-  editing.value = null
-  pendingAiUploadFile.value = file
-  currentPreviewRow.value = null
-  previewFileName.value = file?.name || ''
-  resetForm()
-  form.file_path = file?.name || ''
-  applyParsedFields(fields || {})
-  form.fullbody = aiParsedFullbody.value || ''
-  setPreviewFromFile(file)
-  dialogVisible.value = true
+  contractItemRef.value?.openCreateFromAi(file, fields)
 }
 
 const openEditWithSupplementalFields = async (row, fields) => {
-  const detail = row?.id ? await loadContractDetail(row.id) : row
-  editing.value = detail
-  currentPreviewRow.value = detail
-  previewFileName.value = ''
-  pendingAiUploadFile.value = null
-  populateFormFromContract(detail)
-  applyAiSupplementalFields(fields || {}, detail)
-  loadPdfPreviewForRow(detail)
-  dialogVisible.value = true
+  await contractItemRef.value?.openEditWithSupplementalFields(row, fields)
 }
 
 const triggerExcelUpload = () => {
@@ -1422,153 +616,12 @@ const downloadImportErrorReport = async (token, fallbackName = '合同导入失�
   triggerBrowserDownload(response.data, headerName || fallbackName)
 }
 
-const applyParsedFields = (fields) => {
-  form.contract_name = fields?.contract_name || ''
-  form.contract_number = fields?.contract_number || ''
-  form.contract_unit = fields?.contract_unit || ''
-  form.contract_amount = normalizeAmountInputValue(fields?.contract_amount || '')
-  form.approval_status = fields?.approval_status || ''
-  form.handler = fields?.handler || ''
-  form.handling_department = fields?.handling_department || ''
-  form.contract_determination_method = fields?.contract_determination_method || ''
-  form.handling_date = fields?.handling_date || ''
-  form.contract_type = fields?.contract_type || ''
-  form.invoice_type = fields?.invoice_type || ''
-  form.tax_rate = fields?.tax_rate || ''
-  form.pricing_method = fields?.pricing_method || ''
-  form.is_archived = fields?.is_archived || '未归档'
-  form.project = fields?.project || ''
-  form.fullbody = fields?.fullbody || ''
-}
-
-const runAiRecognitionFromPreview = async () => {
-  if (aiParsing.value) {
-    return
-  }
-
-  let sourceFile = null
-  let fileName = ''
-
-  if (pendingAiUploadFile.value) {
-    sourceFile = pendingAiUploadFile.value
-    fileName = sourceFile.name || 'contract.pdf'
-  } else if (form.file_path) {
-    try {
-      if (editing.value?.id) {
-        const response = await http.get(`/contracts/${editing.value.id}/download`, {
-          responseType: 'blob',
-        })
-        const blob = response.data
-        fileName = getFileName(form.file_path) || `contract-${editing.value.id}.pdf`
-        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
-      } else {
-        const response = await http.get('/folders/file-preview', {
-          params: { path: normalizePath(form.file_path) },
-          responseType: 'blob',
-        })
-        const blob = response.data
-        fileName = getFileName(form.file_path) || 'contract.pdf'
-        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
-      }
-    } catch (error) {
-      const message = await parseErrorMessage(error, '获取文件内容失败，无法进行AI识别')
-      ElMessage.error(message)
-      return
-    }
-  } else {
-    ElMessage.warning('请先上传或链接合同文件后再进行AI识别')
-    return
-  }
-
-  if (!/\.pdf$/i.test(fileName)) {
-    ElMessage.warning('当前文件不是PDF，无法进行AI识别')
-    return
-  }
-
-  aiParsing.value = true
-  ElMessage.info('AI正在解析当前合同，请稍候')
-  try {
-    const fd = new FormData()
-    fd.append('file', sourceFile)
-
-    const { data } = await http.post('/contracts/ai-parse', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 300000,
-    })
-
-    const parsedFullbody = data?.fullbody || ''
-    const parsedFields = {
-      ...(data?.fields || {}),
-      fullbody: parsedFullbody,
-    }
-
-    const sourceSnapshot = {
-      ...(editing.value || {}),
-      ...form,
-    }
-
-    applyAiSupplementalFields(parsedFields, sourceSnapshot)
-    ElMessage.success('AI解析成功，合同信息已根据识别结果更新')
-  } catch (error) {
-    if (error?.code === 'ECONNABORTED') {
-      ElMessage.error('AI解析超时，请稍后重试')
-      return
-    }
-
-    const baseMessage = error?.response?.data?.message || 'AI解析失败'
-    const previewLines = error?.response?.data?.ocr_preview_lines
-    if (Array.isArray(previewLines) && previewLines.length > 0) {
-      const preview = previewLines.slice(0, 3).join(' / ')
-      ElMessage.error(`${baseMessage}；识别预览：${preview}`)
-    } else {
-      ElMessage.error(baseMessage)
-    }
-  } finally {
-    aiParsing.value = false
-  }
-}
-
-const selectAiMatchCandidate = (contractId) => {
-  aiMatchSelection.value = String(contractId)
-}
-
-const selectAiMatchAsNew = () => {
-  aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
-}
-
-const handleAiMatchRowClick = (row) => {
-  if (row?.id) {
-    selectAiMatchCandidate(row.id)
-  }
-}
-
-const formatAiMatchReasons = (row) => {
-  const reasons = Array.isArray(row?.match_reasons)
-    ? row.match_reasons.filter((item) => String(item || '').trim())
-    : []
-
-  if (reasons.length > 0) {
-    return reasons.join(' / ')
-  }
-
-  const fallback = []
-  if (row?.name_similarity > 0) {
-    fallback.push('标题相似')
-  }
-  if (row?.same_amount) {
-    fallback.push('金额相同')
-  }
-  return fallback.join(' / ')
-}
-
 const closeAiMatchDialog = () => {
   aiMatchDialogVisible.value = false
   resetAiMatchState()
-  previewFileName.value = ''
 }
 
-const proceedAiMatchSelection = async () => {
-  const selectedValue = aiMatchSelection.value
+const proceedAiMatchSelection = async (selectedValue) => {
   const selectedFile = aiParsedUploadFile.value
   const parsedFields = aiParsedFields.value || {}
 
@@ -1622,7 +675,6 @@ const handleAiPdfSelected = async (event) => {
   }
 
   resetAiMatchState()
-  pendingAiUploadFile.value = null
   aiParsing.value = true
   ElMessage.info('AI正在解析PDF，请稍候')
   try {
@@ -1643,9 +695,6 @@ const handleAiPdfSelected = async (event) => {
     aiParsedFields.value = parsedFields
     aiParsedFullbody.value = parsedFullbody
     aiMatchCandidates.value = Array.isArray(data?.match_candidates) ? data.match_candidates : []
-    aiMatchSelection.value = AI_NEW_CONTRACT_VALUE
-    previewFileName.value = file.name
-    setPreviewFromFile(file)
     aiMatchDialogVisible.value = true
     ElMessage.success('AI解析完成，请先确认是否匹配到已有合同')
   } catch (error) {
@@ -1668,238 +717,10 @@ const handleAiPdfSelected = async (event) => {
   }
 }
 
-const openEdit = (row) => {
-  openEditWithSupplementalFields(row, null)
-}
-
-const revokePreviewUrl = () => {
-  if (previewUrl.value) {
-    window.URL.revokeObjectURL(previewUrl.value)
-    previewUrl.value = ''
-  }
-}
-
-const resetPreview = (message = '暂无文件', closeFullscreen = true) => {
-  previewLoading.value = false
-  previewMessage.value = message
-  if (closeFullscreen) {
-    fullPreviewVisible.value = false
-  }
-  revokePreviewUrl()
-}
-
-const isPdfFilePath = (filePath) => getFileExt(filePath) === 'pdf'
-
-const setPreviewFromBlob = (blob) => {
-  revokePreviewUrl()
-  const source = blob instanceof Blob ? blob : new Blob([blob], { type: 'application/pdf' })
-  const safeBlob = source.type && source.type.includes('pdf')
-    ? source
-    : new Blob([source], { type: 'application/pdf' })
-  previewUrl.value = window.URL.createObjectURL(safeBlob)
-  previewMessage.value = ''
-}
-
-const setPreviewFromFile = (file) => {
-  if (!file) {
-    previewFileName.value = ''
-    resetPreview('暂无文件')
-    return
-  }
-  previewFileName.value = file.name || ''
-  if (!/\.pdf$/i.test(file.name)) {
-    resetPreview('该文件不是PDF，无法预览')
-    return
-  }
-  setPreviewFromBlob(file)
-}
-
-const handlePdfRenderFailed = () => {
-  resetPreview('PDF组件渲染失败，请检查文件内容或浏览器兼容性')
-}
-
-const openFullscreenPreview = () => {
-  if (!previewUrl.value || previewLoading.value) {
-    return
-  }
-  fullPreviewVisible.value = true
-}
+const openEdit = (row) => openEditWithSupplementalFields(row, null)
 
 const openFilePreview = async (row) => {
-  if (!row?.file_path) {
-    ElMessage.warning('该合同未上传文件')
-    return
-  }
-
-  currentPreviewRow.value = row
-  previewFileName.value = ''
-  fullPreviewVisible.value = true
-
-  if (!isPdfFilePath(row.file_path)) {
-    resetPreview('该文件不是PDF，无法预览，请使用下方按钮下载原文件', false)
-    return
-  }
-
-  await loadPdfPreviewForRow(row, false)
-}
-
-const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
-  if (!row?.file_path) {
-    resetPreview('暂无文件', closeFullscreenOnError)
-    return
-  }
-
-  if (!isPdfFilePath(row.file_path)) {
-    resetPreview('该文件不是PDF，无法预览', closeFullscreenOnError)
-    return
-  }
-
-  previewLoading.value = true
-  previewFileName.value = getFileName(row.file_path)
-  previewMessage.value = ''
-  try {
-    const response = await http.get(`/contracts/${row.id}/preview`, {
-      responseType: 'blob',
-    })
-    setPreviewFromBlob(response.data)
-  } catch (error) {
-    const message = await parseErrorMessage(error, 'PDF预览加载失败')
-    resetPreview(`PDF预览加载失败：${message}`, closeFullscreenOnError)
-    ElMessage.warning(message)
-  } finally {
-    previewLoading.value = false
-  }
-}
-
-const normalizeAmountInputValue = (value) => {
-  const raw = String(value ?? '').trim()
-  if (!raw) {
-    return ''
-  }
-
-  const normalized = raw
-    .replace(/[，,\s]/g, '')
-    .replace(/。/g, '.')
-
-  if (/^\d*(?:\.\d*)?$/.test(normalized)) {
-    return normalized
-  }
-
-  return raw
-}
-
-const normalizeContractAmount = () => {
-  form.contract_amount = normalizeAmountInputValue(form.contract_amount)
-}
-
-const saveContract = async () => {
-  const normalizedAmount = normalizeAmountInputValue(form.contract_amount)
-
-  if (!form.contract_name || !form.handling_department || !normalizedAmount) {
-    ElMessage.warning('请填写必要字段')
-    return
-  }
-
-  if (!/^\d+(?:\.\d+)?$/.test(normalizedAmount)) {
-    ElMessage.warning('合同金额请输入纯数字，可带小数点')
-    return
-  }
-
-  form.contract_amount = normalizedAmount
-
-  if (!departments.value.includes(form.handling_department)) {
-    ElMessage.warning('请选择系统设置中的有效部门')
-    return
-  }
-
-  if (form.project && !options.project.includes(form.project)) {
-    ElMessage.warning('请选择项目设置中的有效项目')
-    return
-  }
-
-  saving.value = true
-  try {
-    if (editing.value) {
-      await http.put(`/contracts/${editing.value.id}`, {
-        file_path: form.file_path,
-        contract_number: form.contract_number,
-        contract_name: form.contract_name,
-        contract_unit: form.contract_unit,
-        contract_amount: normalizedAmount,
-        approval_status: form.approval_status,
-        handler: form.handler,
-        handling_department: form.handling_department,
-        contract_determination_method: form.contract_determination_method,
-        handling_date: form.handling_date,
-        contract_type: form.contract_type,
-        invoice_type: form.invoice_type,
-        tax_rate: form.tax_rate,
-        pricing_method: form.pricing_method,
-        is_archived: form.is_archived,
-        project: form.project,
-        fullbody: form.fullbody,
-      })
-      ElMessage.success('更新成功')
-    } else {
-      const { data: created } = await http.post('/contracts', {
-        file_path: form.file_path,
-        contract_number: form.contract_number,
-        contract_name: form.contract_name,
-        contract_unit: form.contract_unit,
-        contract_amount: normalizedAmount,
-        approval_status: form.approval_status,
-        handler: form.handler,
-        handling_department: form.handling_department,
-        contract_determination_method: form.contract_determination_method,
-        handling_date: form.handling_date,
-        contract_type: form.contract_type,
-        invoice_type: form.invoice_type,
-        tax_rate: form.tax_rate,
-        pricing_method: form.pricing_method,
-        is_archived: form.is_archived,
-        project: form.project,
-        fullbody: form.fullbody,
-      })
-
-      if (pendingAiUploadFile.value) {
-        const fd = new FormData()
-        fd.append('file', pendingAiUploadFile.value)
-        await http.post(`/contracts/${created.id}/upload`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        })
-      }
-
-      pendingAiUploadFile.value = null
-      ElMessage.success('创建成功')
-    }
-    dialogVisible.value = false
-    await loadDepartments()
-    await loadFieldOptions()
-    await loadContracts()
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-const syncEditingFileState = async (filePath) => {
-  const normalizedFilePath = filePath || ''
-  form.file_path = normalizedFilePath
-
-  if (editing.value) {
-    editing.value.file_path = normalizedFilePath
-  }
-  if (currentPreviewRow.value?.id === editing.value?.id) {
-    currentPreviewRow.value.file_path = normalizedFilePath
-  }
-
-  if (!normalizedFilePath) {
-    resetPreview('暂无文件', false)
-    return
-  }
-
-  await loadPdfPreviewForRow({ id: editing.value.id, file_path: normalizedFilePath }, false)
+  await contractItemRef.value?.openFilePreview(row)
 }
 
 const doUpload = async (contractId, file) => {
@@ -1936,19 +757,7 @@ const handleDelete = async (row) => {
 
     await http.delete(`/contracts/${row.id}`)
 
-    if (editing.value?.id === row.id) {
-      dialogVisible.value = false
-      textDialogVisible.value = false
-      editing.value = null
-      pendingAiUploadFile.value = null
-      resetForm()
-    }
-
-    if (currentPreviewRow.value?.id === row.id) {
-      currentPreviewRow.value = null
-      previewFileName.value = ''
-      resetPreview('暂无文件')
-    }
+    contractItemRef.value?.handleContractDeleted(row.id)
 
     ElMessage.success('删除成功')
     await loadContracts()
@@ -1958,38 +767,6 @@ const handleDelete = async (row) => {
     }
     ElMessage.error(error?.response?.data?.message || '删除失败')
   }
-}
-
-const handleDialogUpload = async (file) => {
-  if (!editing.value?.id) {
-    pendingAiUploadFile.value = file
-    form.file_path = file?.name || ''
-    currentPreviewRow.value = null
-    setPreviewFromFile(file)
-    ElMessage.success('文件已选择，保存合同后会自动上传')
-    return
-  }
-
-  const data = await doUpload(editing.value.id, file)
-  await syncEditingFileState(data?.file_path)
-}
-
-const parseFilenameFromDisposition = (value) => {
-  if (!value) {
-    return ''
-  }
-
-  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i)
-  if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1].replace(/"/g, '').trim())
-  }
-
-  const plainMatch = value.match(/filename=([^;]+)/i)
-  if (plainMatch?.[1]) {
-    return plainMatch[1].replace(/"/g, '').trim()
-  }
-
-  return ''
 }
 
 const getFileName = (filePath) => {
@@ -2027,17 +804,6 @@ const getFileIcon = (filePath) => {
   return fileTypeWord
 }
 
-const triggerBrowserDownload = (blob, filename) => {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename || 'download.bin'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  window.URL.revokeObjectURL(url)
-}
-
 const parseErrorMessage = async (error, fallbackMessage) => {
   const directMessage = error?.response?.data?.message
   if (directMessage) {
@@ -2060,44 +826,6 @@ const parseErrorMessage = async (error, fallbackMessage) => {
   return fallbackMessage
 }
 
-const downloadContractFile = async (row) => {
-  if (!row?.file_path) {
-    ElMessage.warning('该合同未上传文件')
-    return
-  }
-
-  try {
-    const response = await http.get(`/contracts/${row.id}/download`, {
-      responseType: 'blob',
-    })
-
-    const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
-    const fallbackName = row.file_path.split('/').pop() || `${row.contract_name || 'contract'}.bin`
-    triggerBrowserDownload(response.data, headerName || fallbackName)
-  } catch (error) {
-    const message = await parseErrorMessage(error, '下载失败')
-    ElMessage.error(message)
-  }
-}
-
-const handleDialogFilePathDownload = async () => {
-  if (!form.file_path) {
-    ElMessage.warning('暂无可下载文件')
-    return
-  }
-
-  const contractId = editing.value?.id || currentPreviewRow.value?.id
-  if (!contractId) {
-    ElMessage.warning('请先保存合同后再下载文件')
-    return
-  }
-
-  await downloadContractFile({
-    id: contractId,
-    file_path: form.file_path,
-    contract_name: form.contract_name,
-  })
-}
 
 onMounted(async () => {
   try {
@@ -2106,12 +834,6 @@ onMounted(async () => {
     await loadContracts()
   } catch (_error) {
     ElMessage.error('数据加载失败')
-  }
-})
-
-watch(dialogVisible, (visible) => {
-  if (!visible) {
-    resetPreview('暂无文件')
   }
 })
 

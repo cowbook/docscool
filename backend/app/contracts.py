@@ -539,8 +539,14 @@ def _build_import_payload_from_row(row, field_indexes, header_labels, option_set
     return _normalize_excel_option_fields(payload, option_sets)
 
 
+'''
+
+'''
 def _build_contract_record(body: dict, created_by: str, pending_contract_numbers=None, update_mode=True):
     payload = body or {}
+    has_file_path_input = 'file_path' in payload or 'path' in payload
+    raw_file_path = payload.get('file_path', payload.get('path'))
+    normalized_file_path = _normalize_contract_file_path(raw_file_path) if has_file_path_input else None
 
     required = ['contract_name', 'contract_amount', 'handling_department']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
@@ -564,15 +570,20 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         
         existing_contract = Contract.query.filter_by(contract_number=contract_number).first()
         if existing_contract:
+            # Allow update if contract_number exists but belongs to the same record (e.g. during import with multiple rows sharing the same contract_number)
             if update_mode:
+                '''
                 if existing_contract.is_archived == '已归档':
                     return None, '已归档的合同只能由管理员进行修改', 403, False
+                '''
                 existing_contract.contract_name = (payload.get('contract_name') or '').strip()
                 existing_contract.contract_unit = (payload.get('contract_unit') or '').strip() or None
                 existing_contract.amount = amount
                 existing_contract.currency = 'CNY'
                 existing_contract.approval_status = (payload.get('approval_status') or '').strip() or None
                 existing_contract.handler = (payload.get('handler') or '').strip() or None
+                if has_file_path_input:
+                    existing_contract.file_path = normalized_file_path or None
                 existing_contract.department = (payload.get('handling_department') or '').strip()
                 existing_contract.contract_determination_method = (payload.get('contract_determination_method') or '').strip() or None
                 existing_contract.handling_date = _parse_date(payload.get('handling_date'))
@@ -618,6 +629,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
         is_archived='未归档',
         project=project,
+        file_path=normalized_file_path or None,
         fullbody=(payload.get('fullbody') or '').strip() or None,
         start_date=_parse_date(payload.get('start_date')),
         end_date=_parse_date(payload.get('end_date')),
@@ -1192,9 +1204,64 @@ def _normalize_match_text(value: str) -> str:
     text = str(value or '').strip().lower()
     if not text:
         return ''
-    text = re.sub(r'\.(pdf)$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\.(pdf|PDF)$', '', text, flags=re.IGNORECASE)
     text = re.sub(r'[^\w\u4e00-\u9fff]+', '', text)
     return text
+
+
+def _extract_match_key_from_filename(file_name: str) -> str:
+    base_name = os.path.splitext(os.path.basename(str(file_name or '')))[0]
+    if not base_name:
+        return ''
+
+    chinese_indexes = [idx for idx, ch in enumerate(base_name) if re.match(r'[\u4e00-\u9fff]', ch)]
+    if not chinese_indexes:
+        return ''
+
+    start_idx = chinese_indexes[0]
+    end_idx = chinese_indexes[-1]
+    return base_name[start_idx:end_idx + 1].strip()
+
+
+def _select_best_contract_by_key(match_key: str, candidates: list):
+    normalized_key = _normalize_match_text(match_key)
+    if not normalized_key:
+        return None, '', []
+
+    scored = []
+    for row in candidates:
+        normalized_contract_name = _normalize_match_text(row.contract_name)
+        if not normalized_contract_name:
+            continue
+
+        exact = normalized_contract_name == normalized_key
+        contains = normalized_key in normalized_contract_name
+        if not exact and not contains:
+            continue
+
+        similarity = SequenceMatcher(None, normalized_key, normalized_contract_name).ratio()
+        scored.append({
+            'row': row,
+            'normalized_name': normalized_contract_name,
+            'exact': exact,
+            'contains': contains,
+            'similarity': similarity,
+        })
+
+    if not scored:
+        return None, '', []
+
+    exact_rows = [item for item in scored if item['exact']]
+    if exact_rows:
+        exact_rows.sort(key=lambda item: (-item['similarity'], item['row'].id))
+        return exact_rows[0]['row'], 'exact', exact_rows
+
+    contains_rows = [item for item in scored if item['contains']]
+    if len(contains_rows) == 1:
+        return contains_rows[0]['row'], 'contains-single', contains_rows
+
+    contains_rows.sort(key=lambda item: (-item['similarity'], item['row'].id))
+    return contains_rows[0]['row'], 'contains-best', contains_rows
 
 
 def _collect_storage_pdf_files() -> list:
@@ -2179,6 +2246,159 @@ def list_folder_files():
     })
 
 
+@contracts_bp.post('/folders/batch-match')
+@require_auth
+def batch_match_folder_files():
+    body = request.get_json(silent=True) or {}
+    folder_path = body.get('folder_path') or body.get('folder') or ''
+
+    try:
+        normalized = _normalize_relative_path(folder_path)
+        _directories, files = _list_storage_entries(normalized)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'读取目录文件失败: {exc}'}), 500
+
+    candidate_contracts = Contract.query.filter(
+        Contract.is_archived != '已归档',
+        or_(Contract.file_path.is_(None), Contract.file_path == ''),
+    ).all()
+    contract_index = _build_contract_file_index()
+
+    used_contract_ids = set()
+    results = []
+    success_count = 0
+
+    for item in files:
+        file_name = item.get('name') or ''
+        file_path = item.get('path') or ''
+
+        linked_contract = contract_index.get(file_path)
+        if linked_contract:
+            results.append({
+                'name': file_name,
+                'file_path': file_path,
+                'status': 'skipped',
+                'message': '文件已有关联合同，跳过',
+                'matched_contract_id': linked_contract.id,
+                'matched_contract_name': linked_contract.contract_name,
+            })
+            continue
+
+        match_key = _extract_match_key_from_filename(file_name)
+
+        if not match_key:
+            results.append({
+                'name': file_name,
+                'file_path': file_path,
+                'status': 'failed',
+                'message': '文件名中未找到可用中文关键名称',
+            })
+            continue
+
+        available_contracts = [row for row in candidate_contracts if row.id not in used_contract_ids]
+        best_contract, match_method, matched_rows = _select_best_contract_by_key(match_key, available_contracts)
+
+        if not best_contract:
+            results.append({
+                'name': file_name,
+                'file_path': file_path,
+                'match_key': match_key,
+                'status': 'failed',
+                'message': '未匹配到候选合同',
+            })
+            continue
+
+        best_contract.file_path = file_path
+        used_contract_ids.add(best_contract.id)
+        success_count += 1
+        results.append({
+            'name': file_name,
+            'file_path': file_path,
+            'match_key': match_key,
+            'status': 'success',
+            'message': '匹配成功',
+            'matched_contract_id': best_contract.id,
+            'matched_contract_name': best_contract.contract_name,
+            'match_method': match_method,
+            'candidate_count': len(matched_rows),
+        })
+
+    db.session.commit()
+
+    return jsonify({
+        'folder_path': normalized,
+        'total': len(files),
+        'success': success_count,
+        'failed': len(files) - success_count,
+        'results': results,
+    })
+
+
+@contracts_bp.post('/folders/upload')
+@require_auth
+def upload_folder_files():
+    folder_path = request.form.get('folder_path') or request.form.get('folder') or ''
+    try:
+        normalized = _normalize_relative_path(folder_path)
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+
+    uploads = request.files.getlist('files')
+    if not uploads and 'file' in request.files:
+        uploads = request.files.getlist('file')
+
+    valid_uploads = [item for item in uploads if item and (item.filename or '').strip()]
+    if not valid_uploads:
+        return jsonify({'message': 'files is required'}), 400
+
+    results = []
+    try:
+        if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+            remote_folder = _remote_folder_path(normalized)
+            for uploaded in valid_uploads:
+                filename = _sanitize_upload_filename(uploaded.filename)
+                final_name = _synology_upload_file(remote_folder, filename, uploaded)
+                results.append({
+                    'name': final_name,
+                    'file_path': _build_synology_file_path(normalized, final_name),
+                })
+        else:
+            target_folder = _safe_local_folder_path(normalized)
+            if not os.path.isdir(target_folder):
+                raise FileNotFoundError('目录不存在')
+
+            existing_names = [
+                name for name in os.listdir(target_folder)
+                if os.path.isfile(os.path.join(target_folder, name))
+            ]
+            for uploaded in valid_uploads:
+                filename = _sanitize_upload_filename(uploaded.filename)
+                final_name = _next_available_filename(existing_names, filename)
+                existing_names.append(final_name)
+                target_path = os.path.join(target_folder, final_name)
+                uploaded.save(target_path)
+                results.append({
+                    'name': final_name,
+                    'file_path': _build_synology_file_path(normalized, final_name),
+                })
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'文件上传失败: {exc}'}), 500
+
+    return jsonify({
+        'folder_path': normalized,
+        'uploaded_count': len(results),
+        'uploaded': results,
+    })
+
+
 @contracts_bp.post('/folders')
 @require_auth
 def create_folder():
@@ -2508,13 +2728,9 @@ def quick_match_contract_files():
 def create_contract():
     body = request.get_json(silent=True) or {}
 
-    record, message, status_code, _ = _build_contract_record(body, g.current_user)
+    record, message, status_code, _ = _build_contract_record(body, g.current_user, update_mode=False)
     if record is None:
         return jsonify({'message': message}), status_code
-
-    if 'file_path' in body:
-        normalized_file_path = _normalize_contract_file_path(body.get('file_path'))
-        record.file_path = normalized_file_path or None
 
     db.session.add(record)
     db.session.commit()

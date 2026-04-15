@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-14
+更新时间：2026-04-16
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -88,11 +88,16 @@
 - `POST /api/contracts/import-excel`：EXCEL 导入
 - `GET /api/contracts/import-template`：下载导入模板
 - `GET /api/contracts/import-error-report/<token>`：下载导入失败明细
+- `POST /api/folders/upload`：向当前目录批量上传文件
+- `POST /api/folders/batch-match`：按文件名中文关键名称批量匹配合同（仅处理未关联合同的文件）
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页
 - `frontend/src/views/HomeView.vue`：首页汇总
 - `frontend/src/views/ContractView.vue`：合同列表、创建、编辑、AI 上传、EXCEL 导入、PDF 预览、正文查看
+- `frontend/src/views/FolderView.vue`：目录树、目录文件列表、文件合同关联、批量匹配
+- `frontend/src/components/ContractItem.vue`：合同新建/编辑/预览复用组件
+- `frontend/src/components/AiMatchDialog.vue`：AI 识别结果确认复用组件
 
 ## 当前前端交互约定
 - 合同名称列点击进入编辑，不再依赖整行点击
@@ -104,6 +109,14 @@
 - 新建合同未保存前选择文件，会先进入待上传状态，保存合同后再自动上传
 - “文本”弹窗内容直接绑定 `form.fullbody`
 - 导入弹窗底部保留：`下载模板` 链接样式按钮、`取消` 按钮、`选择文件` 按钮
+
+### FolderView 文件关联工作台交互
+- 文件列表中存在真实匹配合同时，合同名称可点击并直接打开编辑弹窗
+- 文件列表中 `<无匹配>` 行提供：`新建` 与 `AI` 两个快捷入口
+- 文件列表标题栏提供：`上传文件`（多选上传到当前目录）和 `批量匹配`
+- 左右面板之间支持拖拽分隔，桌面端可调整目录树宽度
+- 当 `ContractItem` 在 FolderView 中使用时隐藏“上传文件/链接文件”按钮，并新增“解绑合同”按钮
+- “新建并带文件路径”时，弹窗进入即加载预览，不再提示“保存后再看”
 
 ### 合同编辑/新建弹窗中的文件预览与 AI
 - 编辑/新建弹窗左侧为“文件预览”区域：
@@ -127,6 +140,17 @@
   - 标题相似最多补前 5 个
 - 候选列表展示“匹配依据”
 - 候选窗口左侧展示上传文件预览
+
+## 目录批量匹配固定约定
+- 入口：`POST /api/folders/batch-match`
+- 作用范围：仅匹配当前目录下“没有关联合同”的文件；已有关联合同文件会跳过并记录
+- 关键名称规则：取文件名中第一个中文字符到最后一个中文字符之间的文本
+- 候选范围：仅 `未归档` 且 `file_path` 为空的合同
+- 匹配优先级：
+  - 合同名与关键名称完全相同（`exact`）
+  - 否则若“包含关键名称”候选只有 1 个（`contains-single`）
+  - 否则按相似度最高取第 1 个（`contains-best`）
+- 单次匹配中同一合同仅会被分配给一个文件，避免重复占用
 
 ## 后续文档维护规则
 - 新增固定端口、环境变量、表结构、核心接口时，优先更新本文件

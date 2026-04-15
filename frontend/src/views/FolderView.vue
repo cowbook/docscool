@@ -21,7 +21,7 @@
         </div>
       </template>
 
-      <div class="folder-layout">
+      <div ref="folderLayoutRef" class="folder-layout" :style="folderLayoutStyle">
         <div class="left-panel">
           <div class="panel-title">{{ rootName }}</div>
           <div class="tree-wrap" @contextmenu.prevent="onPanelContextMenu">
@@ -68,8 +68,42 @@
           </div>
         </div>
 
+        <div
+          class="panel-splitter"
+          :class="{ 'panel-splitter-active': isResizingPanels }"
+          @mousedown.prevent="startPanelResize"
+        ></div>
+
         <div class="right-panel">
-          <div class="panel-title">文件列表（当前目录：）</div>
+          <div class="panel-title-row">
+            <div class="panel-title">文件列表</div>
+            <div class="panel-title-actions">
+              <el-button
+                size="small"
+                :loading="batchMatching"
+                @click="openBatchMatchDialog"
+              >
+                批量匹配
+              </el-button>
+              <input
+                ref="folderUploadInputRef"
+                type="file"
+                multiple
+                class="folder-upload-input"
+                @change="handleFolderFilesSelected"
+              />
+              <el-button
+                size="small"
+                type="primary"
+                :icon="Upload"
+                :loading="uploadingFolderFiles"
+                @click="triggerFolderUpload"
+              >
+                上传文件
+              </el-button>
+            </div>
+          </div>
+          
           <el-table
             v-loading="loadingFiles"
             :data="filteredFiles"
@@ -96,7 +130,31 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="contract_name" label="名称" min-width="260" show-overflow-tooltip />
+            <el-table-column label="合同名称" min-width="260" show-overflow-tooltip>
+              <template #default="scope">
+                <el-link
+                  v-if="hasRealContractName(scope.row)"
+                  class="contract-name-link"
+                  type="primary"
+                  @click.stop="openContractEditFromFileRow(scope.row)"
+                >
+                  <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
+                </el-link>
+                <div v-else class="unmatched-contract-actions">
+                  <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
+                  <el-button size="small" type="primary" link @click.stop="openCreateFromFileRow(scope.row)">新建</el-button>
+                  <el-button
+                    size="small"
+                    type="success"
+                    link
+                    :loading="aiParsingFilePath === scope.row.file_path"
+                    @click.stop="startAiMatchFromFileRow(scope.row)"
+                  >
+                    AI
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="contract_number" label="合同编号" min-width="140" />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
@@ -108,25 +166,6 @@
             <el-table-column prop="is_archived" label="是否归档" min-width="100" />
             <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
 
-            <el-table-column label="操作" width="150" fixed="right" align="center">
-              <template #default="scope">
-                <div class="action-buttons">
-                  <el-tooltip content="下载" placement="top">
-                    <el-button circle size="small" :icon="Download" @click.stop="downloadFile(scope.row)" />
-                  </el-tooltip>
-                  <el-tooltip content="预览" placement="top">
-                    <el-button
-                      circle
-                      size="small"
-                      type="primary"
-                      :icon="View"
-                      :disabled="!isPdfFile(scope.row.file_path)"
-                      @click.stop="openFilePreview(scope.row)"
-                    />
-                  </el-tooltip>
-                </div>
-              </template>
-            </el-table-column>
           </el-table>
         </div>
       </div>
@@ -160,6 +199,45 @@
       </template>
 
     </el-dialog>
+
+    <el-dialog
+      v-model="batchMatchDialogVisible"
+      title="批量匹配"
+      width="min(980px, 96vw)"
+      :close-on-click-modal="false"
+    >
+      <el-input
+        v-model="batchMatchLogText"
+        type="textarea"
+        class="batch-match-log"
+        :rows="18"
+        resize="none"
+        readonly
+      />
+
+      <template #footer>
+        <el-button @click="batchMatchDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchMatching" @click="startBatchMatch">开始匹配</el-button>
+      </template>
+    </el-dialog>
+
+    <ContractItem
+      ref="contractItemRef"
+      :departments="departments"
+      :options="options"
+      v-model:aiParsing="contractItemAiParsing"
+      :show-file-actions="false"
+      @saved="handleContractSaved"
+    />
+
+    <AiMatchDialog
+      v-model="aiMatchDialogVisible"
+      :candidates="aiMatchCandidates"
+      :processing="aiMatchProcessing"
+      :file="aiParsedUploadFile"
+      @confirm-selection="proceedAiMatchSelection"
+      @cancel="closeAiMatchDialog"
+    />
     
   </div>
 
@@ -168,7 +246,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, View } from '@element-plus/icons-vue'
+import { Upload } from '@element-plus/icons-vue'
 import { Icon } from '@iconify/vue'
 import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
@@ -179,6 +257,8 @@ import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 import http from '../api/http'
+import ContractItem from '../components/ContractItem.vue'
+import AiMatchDialog from '../components/AiMatchDialog.vue'
 
 GlobalWorkerOptions.workerSrc = PdfWorker
 
@@ -196,9 +276,43 @@ const fileColumnManualWidth = ref(0)
 const previewDialogVisible = ref(false)
 const previewUrl = ref('')
 const previewRow = ref(null)
+const contractItemRef = ref(null)
+const contractItemAiParsing = ref(false)
+const departments = ref([])
+const options = ref({
+  approval_status: [],
+  contract_determination_method: [],
+  contract_type: [],
+  invoice_type: [],
+  pricing_method: [],
+  is_archived: [],
+  project: [],
+})
 const contextMenuVisible = ref(false)
 const contextMenuStyle = ref({ left: '0px', top: '0px' })
 const contextTargetPath = ref('')
+const folderUploadInputRef = ref(null)
+const uploadingFolderFiles = ref(false)
+const folderLayoutRef = ref(null)
+const leftPanelWidth = ref(190)
+const isResizingPanels = ref(false)
+const aiMatchDialogVisible = ref(false)
+const aiMatchProcessing = ref(false)
+const aiMatchCandidates = ref([])
+const aiParsedFields = ref(null)
+const aiParsedUploadFile = ref(null)
+const aiMatchSourceRow = ref(null)
+const aiParsingFilePath = ref('')
+const AI_NEW_CONTRACT_VALUE = '__new_contract__'
+const batchMatching = ref(false)
+const batchMatchDialogVisible = ref(false)
+const batchMatchLogText = ref('')
+
+const folderLayoutStyle = computed(() => {
+  return {
+    gridTemplateColumns: `${leftPanelWidth.value}px 12px minmax(0, 1fr)`,
+  }
+})
 
 const treeProps = {
   label: 'name',
@@ -438,6 +552,307 @@ const getFileIcon = (filePath) => {
   return fileTypeWord
 }
 
+const getMatchedContractId = (row) => {
+  if (!row || typeof row !== 'object') {
+    return 0
+  }
+  const fromMatched = Number(row.matched_contract_id)
+  if (Number.isInteger(fromMatched) && fromMatched > 0) {
+    return fromMatched
+  }
+  const fromContract = Number(row.contract?.id)
+  if (Number.isInteger(fromContract) && fromContract > 0) {
+    return fromContract
+  }
+  return 0
+}
+
+const hasRealContractName = (row) => {
+  const name = String(row?.contract_name || '').trim()
+  return !!name && name !== '<无匹配>' && getMatchedContractId(row) > 0
+}
+
+const openContractEditFromFileRow = async (row) => {
+  const contractId = getMatchedContractId(row)
+  if (!contractId) {
+    return
+  }
+  await contractItemRef.value?.openEdit({ id: contractId })
+}
+
+const openCreateFromFileRow = (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    ElMessage.warning('当前文件路径为空，无法新建')
+    return
+  }
+  contractItemRef.value?.openCreateWithFilePath(filePath)
+}
+
+const resetAiMatchState = () => {
+  aiMatchCandidates.value = []
+  aiParsedFields.value = null
+  aiParsedUploadFile.value = null
+  aiMatchSourceRow.value = null
+  aiMatchProcessing.value = false
+  aiParsingFilePath.value = ''
+}
+
+const closeAiMatchDialog = () => {
+  aiMatchDialogVisible.value = false
+  resetAiMatchState()
+}
+
+const buildFileFromFolderRow = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    throw new Error('该文件路径为空')
+  }
+
+  const response = await http.get('/folders/file-download', {
+    params: { path: filePath },
+    responseType: 'blob',
+  })
+
+  const blob = response.data instanceof Blob ? response.data : new Blob([response.data])
+  const filename = row?.name || filePath.split('/').pop() || 'contract.pdf'
+  return new File([blob], filename, { type: blob.type || 'application/pdf' })
+}
+
+const startAiMatchFromFileRow = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    ElMessage.warning('当前文件路径为空，无法AI识别')
+    return
+  }
+
+  if (!isPdfFile(filePath)) {
+    ElMessage.warning('当前文件不是PDF，无法AI识别')
+    return
+  }
+
+  aiParsingFilePath.value = filePath
+  try {
+    const file = await buildFileFromFolderRow(row)
+    const fd = new FormData()
+    fd.append('file', file)
+
+    const { data } = await http.post('/contracts/ai-parse', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+
+    const parsedFullbody = data?.fullbody || ''
+    const parsedFields = {
+      ...(data?.fields || {}),
+      fullbody: parsedFullbody,
+    }
+
+    aiParsedUploadFile.value = file
+    aiParsedFields.value = parsedFields
+    aiMatchCandidates.value = Array.isArray(data?.match_candidates) ? data.match_candidates : []
+    aiMatchSourceRow.value = row
+    aiMatchDialogVisible.value = true
+    ElMessage.success('AI解析完成，请确认匹配结果')
+  } catch (error) {
+    if (error?.code === 'ECONNABORTED') {
+      ElMessage.error('AI解析超时，请稍后重试')
+      return
+    }
+
+    ElMessage.error(error?.response?.data?.message || error?.message || 'AI解析失败')
+  } finally {
+    aiParsingFilePath.value = ''
+  }
+}
+
+const proceedAiMatchSelection = async (selectedValue) => {
+  const sourceRow = aiMatchSourceRow.value
+  const sourceFilePath = String(sourceRow?.file_path || '').trim()
+  const parsedFields = aiParsedFields.value || {}
+
+  if (!sourceFilePath) {
+    ElMessage.error('源文件路径丢失，请重新操作')
+    closeAiMatchDialog()
+    return
+  }
+
+  aiMatchProcessing.value = true
+  try {
+    if (selectedValue === AI_NEW_CONTRACT_VALUE) {
+      aiMatchDialogVisible.value = false
+      contractItemRef.value?.openCreateWithFilePath(sourceFilePath, parsedFields)
+      resetAiMatchState()
+      return
+    }
+
+    const selectedId = Number(selectedValue)
+    const matchedRow = aiMatchCandidates.value.find((item) => Number(item?.id) === selectedId)
+    if (!matchedRow) {
+      ElMessage.warning('请选择要关联的已有合同，或选择“这是新合同”')
+      return
+    }
+
+    await http.put(`/contracts/${selectedId}`, {
+      file_path: sourceFilePath,
+    })
+
+    const mergedRow = {
+      ...matchedRow,
+      file_path: sourceFilePath,
+    }
+
+    aiMatchDialogVisible.value = false
+    await contractItemRef.value?.openEditWithSupplementalFields(mergedRow, parsedFields)
+    ElMessage.success('已关联到已有合同，请确认补充字段后保存')
+    resetAiMatchState()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '处理失败')
+  } finally {
+    aiMatchProcessing.value = false
+  }
+}
+
+const loadDepartments = async () => {
+  const { data } = await http.get('/settings/departments')
+  departments.value = (Array.isArray(data) ? data : []).map((item) => item.name)
+}
+
+const loadFieldOptions = async () => {
+  const { data } = await http.get('/options/contract-fields')
+  options.value = {
+    approval_status: data?.approval_status || [],
+    contract_determination_method: data?.contract_determination_method || [],
+    contract_type: data?.contract_type || [],
+    invoice_type: data?.invoice_type || [],
+    pricing_method: data?.pricing_method || [],
+    is_archived: data?.is_archived || [],
+    project: data?.project || [],
+  }
+}
+
+const handleContractSaved = async () => {
+  await Promise.all([
+    loadDepartments(),
+    loadFieldOptions(),
+    loadFolderFiles(selectedFolderPath.value),
+  ])
+}
+
+const batchMatchInstructionText = () => {
+  return [
+    '匹配说明：',
+    '1. 本次批量匹配本目录下“没有关联合同”的文件。',
+    '2. 会把文件名当中的第1个中文和最后1个中文之间所有的文本作为关键名称。',
+    '3. 关键名称会与所有“没有文件并且没有归档”的合同名称进行对比。',
+    '4. 若完全一样则直接匹配。',
+    '5. 若没有完全一样：',
+    '   - 包含关键名称的候选只有1个则直接匹配。',
+    '   - 若有多个候选则匹配最相似的第1个。',
+    '6. 匹配后会把该合同的 file_path 设置成文件路径。',
+    '',
+    `当前目录：${selectedFolderPath.value || '/'}`,
+    '',
+    '点击下方“开始匹配”执行。',
+  ].join('\n')
+}
+
+const appendBatchMatchLog = (line = '') => {
+  batchMatchLogText.value = `${batchMatchLogText.value}${batchMatchLogText.value ? '\n' : ''}${line}`
+}
+
+const openBatchMatchDialog = () => {
+  batchMatchLogText.value = batchMatchInstructionText()
+  batchMatchDialogVisible.value = true
+}
+
+const startBatchMatch = async () => {
+  if (batchMatching.value) {
+    return
+  }
+
+  batchMatching.value = true
+  batchMatchLogText.value = batchMatchInstructionText()
+  appendBatchMatchLog('')
+  appendBatchMatchLog('开始匹配...')
+
+  try {
+    const { data } = await http.post('/folders/batch-match', {
+      folder_path: selectedFolderPath.value || '',
+    }, {
+      timeout: 300000,
+    })
+
+    const rows = Array.isArray(data?.results) ? data.results : []
+    rows.forEach((item, index) => {
+      const prefix = `[${index + 1}/${rows.length}]`
+      if (item?.status === 'success') {
+        appendBatchMatchLog(
+          `${prefix} ${item.name || ''} -> 匹配成功: ${item.matched_contract_name || ''} (ID:${item.matched_contract_id || ''}, 规则:${item.match_method || ''})`
+        )
+      } else {
+        appendBatchMatchLog(
+          `${prefix} ${item.name || ''} -> 失败: ${item.message || '未匹配'}`
+        )
+      }
+    })
+
+    appendBatchMatchLog('')
+    appendBatchMatchLog(`完成：成功 ${data?.success || 0}，失败 ${data?.failed || 0}，总计 ${data?.total || rows.length}`)
+    await loadFolderFiles(selectedFolderPath.value)
+    ElMessage.success('批量匹配完成')
+  } catch (error) {
+    appendBatchMatchLog(`执行失败：${error?.response?.data?.message || '请求失败'}`)
+    ElMessage.error(error?.response?.data?.message || '批量匹配失败')
+  } finally {
+    batchMatching.value = false
+  }
+}
+
+const triggerFolderUpload = () => {
+  if (uploadingFolderFiles.value) {
+    return
+  }
+  folderUploadInputRef.value?.click()
+}
+
+const handleFolderFilesSelected = async (event) => {
+  const picked = Array.from(event?.target?.files || [])
+  if (!picked.length) {
+    return
+  }
+
+  const filesToUpload = picked.filter((item) => !!String(item?.name || '').trim())
+  if (!filesToUpload.length) {
+    ElMessage.warning('请选择有效文件')
+    event.target.value = ''
+    return
+  }
+
+  uploadingFolderFiles.value = true
+  try {
+    const fd = new FormData()
+    fd.append('folder_path', selectedFolderPath.value || '')
+    filesToUpload.forEach((file) => {
+      fd.append('files', file)
+    })
+
+    const { data } = await http.post('/folders/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+
+    await loadFolderFiles(selectedFolderPath.value)
+    const uploadedCount = Number(data?.uploaded_count) || filesToUpload.length
+    ElMessage.success(`上传成功，共 ${uploadedCount} 个文件`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '文件上传失败')
+  } finally {
+    uploadingFolderFiles.value = false
+    event.target.value = ''
+  }
+}
+
 const loadFolderFiles = async (folderPath) => {
   loadingFiles.value = true
   try {
@@ -656,13 +1071,65 @@ const onPdfRenderFailed = () => {
   ElMessage.warning('PDF 渲染失败，请尝试下载原文件')
 }
 
+const onPanelResizeMove = (event) => {
+  if (!isResizingPanels.value) {
+    return
+  }
+
+  const layout = folderLayoutRef.value
+  if (!layout) {
+    return
+  }
+
+  const rect = layout.getBoundingClientRect()
+  const minWidth = 160
+  const maxWidth = Math.max(minWidth, rect.width - 320)
+  let nextWidth = event.clientX - rect.left
+
+  if (nextWidth < minWidth) {
+    nextWidth = minWidth
+  }
+  if (nextWidth > maxWidth) {
+    nextWidth = maxWidth
+  }
+
+  leftPanelWidth.value = Math.round(nextWidth)
+}
+
+const stopPanelResize = () => {
+  if (!isResizingPanels.value) {
+    return
+  }
+
+  isResizingPanels.value = false
+  document.body.classList.remove('is-resizing-panels')
+  window.removeEventListener('mousemove', onPanelResizeMove)
+  window.removeEventListener('mouseup', stopPanelResize)
+}
+
+const startPanelResize = () => {
+  if (window.matchMedia('(max-width: 1100px)').matches) {
+    return
+  }
+
+  isResizingPanels.value = true
+  document.body.classList.add('is-resizing-panels')
+  window.addEventListener('mousemove', onPanelResizeMove)
+  window.addEventListener('mouseup', stopPanelResize)
+}
+
 onMounted(async () => {
   window.addEventListener('click', hideContextMenu)
-  await loadTree(false)
+  await Promise.all([
+    loadDepartments(),
+    loadFieldOptions(),
+    loadTree(false),
+  ])
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', hideContextMenu)
+  stopPanelResize()
 })
 
 watch(previewDialogVisible, (visible) => {
@@ -675,8 +1142,7 @@ watch(previewDialogVisible, (visible) => {
 <style scoped>
 .folder-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 16px;
+  gap: 0;
 }
 
 .left-panel,
@@ -686,6 +1152,44 @@ watch(previewDialogVisible, (visible) => {
   padding: 12px;
   background: #fff;
   min-height: 68vh;
+}
+
+.left-panel {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.right-panel {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.panel-splitter {
+  position: relative;
+  cursor: col-resize;
+}
+
+.panel-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: #d1d5db;
+}
+
+.panel-splitter:hover::before,
+.panel-splitter-active::before {
+  background: #2563eb;
+}
+
+:global(body.is-resizing-panels) {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .tree-wrap {
@@ -750,6 +1254,33 @@ watch(previewDialogVisible, (visible) => {
   margin-bottom: 10px;
   color: #374151;
   font-weight: 600;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-title-row .panel-title {
+  margin-bottom: 0;
+}
+
+.panel-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.folder-upload-input {
+  display: none;
+}
+
+.batch-match-log :deep(textarea) {
+  font-family: Consolas, 'Courier New', monospace;
+  line-height: 1.55;
 }
 
 .card-header {
@@ -840,6 +1371,26 @@ watch(previewDialogVisible, (visible) => {
   text-align: left;
 }
 
+.contract-name-link {
+  max-width: 100%;
+  display: inline-flex;
+}
+
+.contract-name-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unmatched-contract-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
 .action-buttons {
   display: inline-flex;
   gap: 6px;
@@ -895,11 +1446,18 @@ watch(previewDialogVisible, (visible) => {
 @media (max-width: 1100px) {
   .folder-layout {
     grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .panel-splitter {
+    display: none;
   }
 
   .left-panel,
   .right-panel {
     min-height: auto;
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
   }
 }
 </style>
