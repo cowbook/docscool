@@ -2,21 +2,6 @@
 
 更新时间：2026-04-16
 
-## 0. 本轮已完成（2026-04-16）
-- `ContractView` 已完成组件化拆分：`ContractItem` + `AiMatchDialog`
-- `FolderView` 已完成：
-	- 合同名点击编辑
-	- `<无匹配>` 新建/AI
-	- 当前目录多文件上传
-	- 左右面板拖拽分隔
-	- 批量匹配弹窗与日志
-- 后端已完成：
-	- `POST /folders/upload`
-	- `POST /folders/batch-match`
-	- 批量匹配仅处理“未关联合同文件”，已关联文件跳过
-- 创建合同重复编号不再覆盖已有合同（普通创建场景）
-- 创建/更新合同已稳定支持 `file_path` 入库
-
 ## 1. 合同编辑弹窗 AI 识别回归
 - 当前位置：`frontend/src/views/ContractView.vue`
 - 新增按钮：编辑/新建弹窗左侧“文件预览”上方 `AI识别`
