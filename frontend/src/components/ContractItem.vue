@@ -1217,6 +1217,57 @@ const runAiRecognitionFromPreview = async () => {
     return
   }
 
+  ElMessage({
+    type: 'info',
+    message: 'AI识别结果只会自动填写空白的字段',
+    duration: 5000,
+  })
+
+  const existingFullbody = String(form.fullbody || '').trim()
+  if (existingFullbody.length > 20) {
+    setAiParsing(true)
+    ElMessage.info('检测到已有合同文本，跳过OCR，直接进行AI结构化解析')
+    try {
+      const { data } = await http.post('/contracts/ai-parse', {
+        fullbody: existingFullbody,
+      }, {
+        timeout: 300000,
+      })
+
+      const parsedFullbody = data?.fullbody || existingFullbody
+      const parsedFields = {
+        ...(data?.fields || {}),
+        fullbody: parsedFullbody,
+      }
+
+      const sourceSnapshot = {
+        ...(editing.value || {}),
+        ...form,
+      }
+
+      applyAiSupplementalFields(parsedFields, sourceSnapshot)
+      ElMessage.success('AI解析成功，合同信息已根据识别结果更新')
+      return
+    } catch (error) {
+      if (error?.code === 'ECONNABORTED') {
+        ElMessage.error('AI解析超时，请稍后重试')
+        return
+      }
+
+      const baseMessage = error?.response?.data?.message || 'AI解析失败'
+      const previewLines = error?.response?.data?.ocr_preview_lines
+      if (Array.isArray(previewLines) && previewLines.length > 0) {
+        const preview = previewLines.slice(0, 3).join(' / ')
+        ElMessage.error(`${baseMessage}；识别预览：${preview}`)
+      } else {
+        ElMessage.error(baseMessage)
+      }
+      return
+    } finally {
+      setAiParsing(false)
+    }
+  }
+
   let sourceFile = null
   let fileName = ''
 

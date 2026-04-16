@@ -84,7 +84,7 @@
 - `POST /api/contracts/<id>/upload`：上传合同文件
 - `GET /api/contracts/<id>/preview`：预览合同 PDF
 - `GET /api/contracts/<id>/download`：下载原文件
-- `POST /api/contracts/ai-parse`：AI OCR / 字段提取 / 返回 `fullbody`
+- `POST /api/contracts/ai-parse`：AI OCR / 字段提取 / 返回 `fullbody`，同时支持直接提交 `fullbody` 文本跳过 OCR
 - `POST /api/contracts/import-excel`：EXCEL 导入
 - `GET /api/contracts/import-template`：下载导入模板
 - `GET /api/contracts/import-error-report/<token>`：下载导入失败明细
@@ -123,7 +123,7 @@
   - 支持已上传合同 PDF 的预览和全屏查看
   - 支持从 NAS 目录中“链接文件”并即时在左侧预览
 - 预览区域上方按钮现包含：
-  - `AI识别`：在有预览文件（已上传或已链接 PDF，或本次待上传 PDF）时可点击，将当前文件提交到 `/contracts/ai-parse` 进行识别，仅对空白字段做补全，不覆盖用户已经手工填写的合同字段
+  - `AI识别`：点击后先提示“AI识别结果只会自动填写空白的字段”并停留约 5 秒；在有预览文件（已上传或已链接 PDF，或本次待上传 PDF）时可点击，将当前文件提交到 `/contracts/ai-parse` 进行识别，仅对空白字段做补全，不覆盖用户已经手工填写的合同字段；若 `form.fullbody` 已有超过 20 个字符，则直接提交 `fullbody` 给后端 AI 结构化，跳过 OCR
   - `文本`：打开正文弹窗，直接编辑和查看 `form.fullbody`
   - `上传文件`：上传或选择本地合同文件
   - `链接文件`：从 NAS 目录选择并绑定已有 PDF 合同文件
@@ -134,6 +134,9 @@
   - `fields`
   - `fullbody`
   - `match_candidates`
+- `POST /api/contracts/ai-parse` 支持两种入口：
+  - 上传 PDF 文件：后端先做直接文本提取，必要时再 OCR
+  - 直接传 `fullbody`：当文本长度超过 20 时直接走 AI 结构化，不再 OCR
 - AI 候选匹配排序：
   - 先金额相同
   - 再标题相似度降序

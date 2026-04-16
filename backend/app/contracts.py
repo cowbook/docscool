@@ -2154,7 +2154,7 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
 
     prompt = (
         '返回的JSON键必须严格使用以下字段：'
-        + ','.join(CONTRACT_FIELD_KEYS)
+        + 'fullbody,' + ','.join(CONTRACT_FIELD_KEYS)
         + '\n'
         'tax_rate指的是合同里涉及的不同发票的税率，返回10%、13%这样的百分比文本，' + TAX_TEXT + '，分析本合同属于什么类型，如果实在分析不到找不到就返回9%""。\n'
         'invoice_type指的是发票类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['invoice_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么发票类型的，如果讲到了增值税专用发票（专用发票、专票）、增值税普通发票（普票）就返回对应的发票类型，如果没有明确提到发票类型但讲到了税率、价税合计等税务相关内容就返回增值税普通发票，其它默认都返回其它发票。\n'
@@ -2163,12 +2163,13 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
         'handling_date格式为 YYYY-MM-DD\n'
-         'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。如果不好定位就返回文本里出现的非我公司的单位名称。\n'
+        'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。如果不好定位就返回文本里出现的非我公司的单位名称。\n'
                     'contract_amount 必须始终返回元单位的纯数字字符串不能带单位。；'
                     '如果原文是万元、千元、亿元等其它单位，必须做精确换算为元；'
                     '不得四舍五入，不得截断，不得省略任何有效数字。\n' + \
                     'project是合同属于什么工程或项目，请尽量从标题或是其它文本中识别出项目相关信息， 从全文解理本合同是不是属于如下项目列表，不需要要强匹配找意思相似的标题或文本, 必须值返回如下的项目名称文本，如果合同真的不属于项目或是工程请返回空""：'+ ','.join(_get_project_names()) + ',\n' + \
                     'handling_department必须返回如下的部门列表其中之一文本（如果能从标题或是其它文本中识别出部门相关信息的话最好，不能的话先判断这个合同一般是列表中的哪个部门职责，通过判断来返回），实在靠不上部门请返回空""：' + ','.join(_get_department_names()) + ',\n' + \
+                    'fullbody指的是合同文本的准确完整内容，请根据下面的OCR文本，根据上下文只把文中可能识别错误文字替换成正确的文字，把OCR当中不应该出现的回车、符号等删除，纠正OCR出现的文本顺序错误，形成并整理成合适的格式，不要删除文本，必须返回，不能返回摘要或是提炼的内容，如果文本过长请尽量返回前20000字符的内容。\n'
         '以下是PDF文本：\\n'
         + pdf_text[:20000]
     )
@@ -3235,30 +3236,44 @@ def upload_contract_file(contract_id):
 @contracts_bp.post('/contracts/ai-parse')
 @require_auth
 def parse_contract_pdf():
-    if 'file' not in request.files:
-        return jsonify({'message': 'file is required'}), 400
+    body = request.get_json(silent=True) or {}
+    incoming_fullbody = str(body.get('fullbody') or '').strip()
+    use_fullbody_directly = len(incoming_fullbody) > 20
 
-    uploaded = request.files['file']
-    if uploaded.filename == '':
-        return jsonify({'message': 'empty filename'}), 400
+    if use_fullbody_directly:
+        pdf_text = incoming_fullbody
+        preview_lines = _preview_lines(pdf_text)
+        current_app.logger.info(
+            'AI parse: direct-fullbody mode user=%s chars=%s content_length=%s',
+            g.current_user,
+            len(pdf_text),
+            request.content_length,
+        )
+    else:
+        if 'file' not in request.files:
+            return jsonify({'message': 'file is required（或提供长度超过20的fullbody）'}), 400
 
-    current_app.logger.info(
-        'AI parse: request user=%s filename=%s mimetype=%s content_length=%s',
-        g.current_user,
-        uploaded.filename,
-        uploaded.mimetype,
-        request.content_length,
-    )
+        uploaded = request.files['file']
+        if uploaded.filename == '':
+            return jsonify({'message': 'empty filename'}), 400
 
-    filename = (uploaded.filename or '').lower()
-    if not filename.endswith('.pdf'):
-        return jsonify({'message': '仅支持上传PDF文件'}), 400
+        current_app.logger.info(
+            'AI parse: request user=%s filename=%s mimetype=%s content_length=%s',
+            g.current_user,
+            uploaded.filename,
+            uploaded.mimetype,
+            request.content_length,
+        )
 
-    try:
-        pdf_text, preview_lines = _extract_pdf_text(uploaded)
-    except Exception as exc:
-        current_app.logger.exception('AI parse: PDF extraction failed')
-        return jsonify({'message': f'PDF解析失败: {exc}'}), 400
+        filename = (uploaded.filename or '').lower()
+        if not filename.endswith('.pdf'):
+            return jsonify({'message': '仅支持上传PDF文件'}), 400
+
+        try:
+            pdf_text, preview_lines = _extract_pdf_text(uploaded)
+        except Exception as exc:
+            current_app.logger.exception('AI parse: PDF extraction failed')
+            return jsonify({'message': f'PDF解析失败: {exc}'}), 400
 
     if not pdf_text:
         current_app.logger.warning('AI parse: no text extracted, preview_lines=%s', preview_lines)

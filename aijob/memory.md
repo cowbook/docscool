@@ -9,6 +9,19 @@
 
 ## 时间线
 
+### 2026-04-16 本轮补充更新
+- 调整合同编辑/新建弹窗中的 `AI识别` 交互：
+	- 点击按钮后会先弹出提示：`AI识别结果只会自动填写空白的字段`，约 5 秒自动消失
+	- 若当前 `form.fullbody` 文本长度大于 20，则前端不再下载/解析 PDF，而是直接把 `fullbody` 提交给 `/contracts/ai-parse`
+	- 仍然保持“只补空字段、不覆盖已填写字段”的表单合并策略
+- 扩展后端 `POST /contracts/ai-parse`：
+	- 新增 JSON `fullbody` 直解析模式，长度大于 20 时直接进入 AI 结构化流程
+	- 未提供足够 `fullbody` 时，仍按原流程处理上传 PDF，并在必要时走 OCR
+	- 当前 prompt 也要求 AI 返回整理后的 `fullbody`，用于纠正 OCR 文本中的顺序、换行和明显识别错误
+- 验证结果：
+	- 前端 `npm run build` 通过
+	- 后端 `backend/.venv312/bin/python -m py_compile backend/app/contracts.py` 通过
+
 ### 2026-04-16 本轮更新
 - 完成 `ContractView` 组件化重构落地：
 	- 新增 `frontend/src/components/ContractItem.vue`，承接合同新建/编辑/预览、文本弹窗、链接文件与 AI识别等能力
