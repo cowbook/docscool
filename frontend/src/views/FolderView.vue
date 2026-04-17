@@ -122,11 +122,15 @@
               :resizable="true"
             >
               <template #default="scope">
+
+              
+
                 <el-link
                   class="file-cell"
                   @click.stop="openFilePreview(scope.row)"
                   @contextmenu.prevent.stop="onFileCellContextMenu($event, scope.row)"
                 >
+             
                   <span class="file-cell-inner">
                     <Icon :icon="getFileIcon(scope.row.file_path)" class="file-icon" />
                     <span class="file-name" :title="scope.row.name">{{ scope.row.name }}</span>
@@ -135,16 +139,35 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="合同名称" min-width="260" show-overflow-tooltip>
+         
+
+            <el-table-column label="合同名称" min-width="260">
               <template #default="scope">
-                <el-link
+                <el-tooltip
                   v-if="hasRealContractName(scope.row)"
+                  :content="(isArchivedValue(scope.row?.is_archived) ? '已归档' : '未归档') + '-' + scope.row.contract_name"
+                >
+                  <el-link
                   class="contract-name-link"
                   type="primary"
                   @click.stop="openContractEditFromFileRow(scope.row)"
                 >
-                  <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
-                </el-link>
+                <span
+                  class="archive-status-icon"
+                  :class="isArchivedValue(scope.row?.is_archived) ? 'archive-status-icon-archived' : 'archive-status-icon-unarchived'"
+                >
+                  <Icon :icon="isArchivedValue(scope.row?.is_archived) ? mdiArchive : mdiHelp" />
+                </span>
+
+                  <span class="contract-name-text">{{ scope.row.contract_name }}</span>
+              </el-link>
+
+
+                </el-tooltip>
+                
+
+
+
                 <div v-else class="unmatched-contract-actions">
                   <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
                   <el-button size="small" type="primary" link @click.stop="openCreateFromFileRow(scope.row)">新建</el-button>
@@ -160,6 +183,8 @@
                 </div>
               </template>
             </el-table-column>
+  
+
             <el-table-column prop="contract_number" label="合同编号" min-width="140" />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
@@ -168,7 +193,7 @@
             <el-table-column prop="handling_department" label="承办部门" min-width="130" />
             <el-table-column prop="handling_date" label="承办日期" min-width="120" />
             <el-table-column prop="contract_type" label="合同类型" min-width="110" />
-            <el-table-column prop="is_archived" label="是否归档" min-width="100" />
+         
             <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
 
           </el-table>
@@ -259,6 +284,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import { Icon } from '@iconify/vue'
+import mdiArchive from '@iconify-icons/mdi/archive-check-outline'
+import mdiHelp from '@iconify-icons/mdi/help-circle-outline'
 import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
@@ -637,6 +664,11 @@ const getMatchedContractId = (row) => {
 const hasRealContractName = (row) => {
   const name = String(row?.contract_name || '').trim()
   return !!name && name !== '<无匹配>' && getMatchedContractId(row) > 0
+}
+
+const isArchivedValue = (value) => {
+  const text = String(value ?? '').trim().toLowerCase()
+  return ['已归档', '是', 'yes', 'true', '1', 'y'].includes(text)
 }
 
 const openContractEditFromFileRow = async (row) => {
@@ -1543,6 +1575,7 @@ watch(previewDialogVisible, (visible) => {
 .contract-name-link {
   max-width: 100%;
   display: inline-flex;
+  font-size:12px;
 }
 
 .contract-name-text {
@@ -1558,6 +1591,26 @@ watch(previewDialogVisible, (visible) => {
   align-items: center;
   gap: 6px;
   max-width: 100%;
+}
+
+.archive-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 50%;
+}
+
+.archive-status-icon-archived {
+  color: #16a34a;
+}
+
+.archive-status-icon-unarchived {
+  color: #9ca3af;
 }
 
 .action-buttons {
@@ -1630,3 +1683,15 @@ watch(previewDialogVisible, (visible) => {
   }
 }
 </style>
+
+<!--
+  Icon imports for archive and help icons from iconify/mdi.
+  These are not included in the main file because they are not used in the main code.
+  They are only used in the preview and help sections.
+  You can import them directly in your project.
+  For example:
+  import mdiArchive from '@iconify-icons/mdi/archive-check-outline'
+  import mdiHelp from '@iconify-icons/mdi/help-circle-outline'
+-->
+
+

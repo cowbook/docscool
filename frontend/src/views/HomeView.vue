@@ -1,13 +1,42 @@
 <template>
   <div class="home-page">
+
     <div class="card-grid">
       <el-card class="stat-card">
-        <div class="stat-title">总数量</div>
-        <div class="stat-value">{{ totalCount }}</div>
+        <div class="stat-content">
+          <span class="stat-icon stat-icon-users" />
+          <div>
+            <div class="stat-title">总数量</div>
+            <div class="stat-value">{{ statistics.total_count }}</div>
+          </div>
+        </div>
       </el-card>
       <el-card class="stat-card">
-        <div class="stat-title">总金额</div>
-        <div class="stat-value">{{ totalAmountText }}</div>
+        <div class="stat-content">
+          <span class="stat-icon stat-icon-money" />
+          <div>
+            <div class="stat-title">总金额</div>
+            <div class="stat-value">{{ formatAmount(statistics.total_amount) }}</div>
+          </div>
+        </div>
+      </el-card>
+      <el-card class="stat-card">
+        <div class="stat-content">
+          <span class="stat-icon stat-icon-archive" />
+          <div>
+            <div class="stat-title">归档数量</div>
+            <div class="stat-value">{{ statistics.archived_count }}</div>
+          </div>
+        </div>
+      </el-card>
+      <el-card class="stat-card">
+        <div class="stat-content">
+          <span class="stat-icon stat-icon-archivemoney" />
+          <div>
+            <div class="stat-title">归档金额</div>
+            <div class="stat-value">{{ formatAmount(statistics.archived_amount) }}</div>
+          </div>
+        </div>
       </el-card>
     </div>
 
@@ -21,92 +50,91 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-
 import http from '../api/http'
 
-const contracts = ref([])
+const statistics = ref({
+  total_count: 0,
+  total_amount: '0',
+  archived_count: 0,
+  archived_amount: '0',
+})
 
-const parseDecimalParts = (value) => {
-  const normalized = String(value ?? '')
-    .trim()
-    .replace(/[，,\s]/g, '')
-    .replace(/。/g, '.')
-
-  const match = normalized.match(/^([+-]?)(\d+)(?:\.(\d+))?$/)
-  if (!match) {
-    return null
-  }
-
-  return {
-    negative: match[1] === '-',
-    integer: match[2],
-    fraction: match[3] || '',
-  }
+function formatAmount(val) {
+  // Add thousands separator and two decimals
+  const num = Number(val)
+  if (isNaN(num)) return val
+  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const sumDecimalStrings = (values) => {
-  const parsedValues = values
-    .map(parseDecimalParts)
-    .filter(Boolean)
-
-  if (!parsedValues.length) {
-    return { total: 0n, scale: 0 }
-  }
-
-  const scale = parsedValues.reduce((maxScale, item) => Math.max(maxScale, item.fraction.length), 0)
-  const total = parsedValues.reduce((sum, item) => {
-    const digits = `${item.integer}${item.fraction.padEnd(scale, '0')}`
-    const scaled = BigInt(digits || '0')
-    return item.negative ? sum - scaled : sum + scaled
-  }, 0n)
-
-  return { total, scale }
-}
-
-const formatScaledDecimal = (total, scale) => {
-  const negative = total < 0n
-  const absolute = negative ? -total : total
-  const raw = absolute.toString().padStart(scale + 1, '0')
-  const integerPart = scale > 0 ? raw.slice(0, -scale) : raw
-  const fractionPart = scale > 0 ? raw.slice(-scale) : ''
-  const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-
-  if (!fractionPart) {
-    return `${negative ? '-' : ''}${groupedInteger}.00`
-  }
-
-  const trimmedFraction = fractionPart.replace(/0+$/, '')
-  if (!trimmedFraction) {
-    return `${negative ? '-' : ''}${groupedInteger}.00`
-  }
-  if (trimmedFraction.length === 1) {
-    return `${negative ? '-' : ''}${groupedInteger}.${trimmedFraction}0`
-  }
-
-  return `${negative ? '-' : ''}${groupedInteger}.${trimmedFraction}`
-}
-
-const totalCount = computed(() => contracts.value.length)
-const totalAmountState = computed(() => sumDecimalStrings(
-  contracts.value.map((item) => item.contract_amount_wan ?? item.amount),
-))
-const totalAmountText = computed(() => formatScaledDecimal(totalAmountState.value.total, totalAmountState.value.scale))
-
-const loadData = async () => {
+const loadStatistics = async () => {
   try {
-    const { data } = await http.get('/contracts')
-    contracts.value = Array.isArray(data) ? data : []
+    const { data } = await http.get('/contracts/statistics')
+    statistics.value = data || statistics.value
   } catch (_error) {
-    ElMessage.error('首页数据加载失败')
+    ElMessage.error('统计数据加载失败')
   }
 }
 
-onMounted(loadData)
+onMounted(loadStatistics)
 </script>
 
 <style scoped>
+.stat-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.stat-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  min-height: 56px;
+  background: #f3f4f6;
+  border-radius: 16px;
+  margin-right: 8px;
+}
+.stat-icon-users::before {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 48px;
+  background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 12c2.761 0 5-2.239 5-5s-2.239-5-5-5-5 2.239-5 5 2.239 5 5 5zm0 2c-3.314 0-10 1.657-10 5v3h20v-3c0-3.343-6.686-5-10-5z" fill="%234F8EF7"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+.stat-icon-money::before {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 48px;
+  background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="20" height="12" rx="2" fill="%2334C759"/><path d="M12 8v8m0 0a2 2 0 100-4 2 2 0 000 4z" stroke="%23fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+.stat-icon-archive::before {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 48px;
+  background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="4" rx="2" fill="%23F7B731"/><rect x="5" y="8" width="14" height="12" rx="2" fill="%23F7B731"/><path d="M9 12h6" stroke="%23fff" stroke-width="2" stroke-linecap="round"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+.stat-icon-archivemoney::before {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 48px;
+  background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="4" rx="2" fill="%23A259F7"/><rect x="5" y="8" width="14" height="12" rx="2" fill="%23A259F7"/><path d="M12 14v-2m0 0a2 2 0 100 4 2 2 0 000-4z" stroke="%23fff" stroke-width="2" stroke-linecap="round"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+}
 .home-page {
   display: grid;
   gap: 16px;
@@ -114,7 +142,7 @@ onMounted(loadData)
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 

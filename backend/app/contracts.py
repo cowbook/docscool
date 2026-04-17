@@ -23,11 +23,40 @@ from .extensions import db
 from .models import Contract, Department, ProjectOption
 
 
+
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 _OCR_ENGINE = None
 _IMPORT_ERROR_REPORTS = {}
 EXTERNAL_API_TIMEOUT_SECONDS = 300
 DEFAULT_DEPARTMENT_NAME = '财务部'
+
+# --- Move statistics endpoint here so contracts_bp is defined ---
+@contracts_bp.get('/contracts/statistics')
+@require_auth
+def contract_statistics():
+    # Query all contracts
+    all_contracts = Contract.query.all()
+    total_count = len(all_contracts)
+    total_amount = sum([c.amount or 0 for c in all_contracts])
+
+    # Archived contracts
+    archived_contracts = [c for c in all_contracts if (c.is_archived or '').strip() == '已归档']
+    archived_count = len(archived_contracts)
+    archived_amount = sum([c.amount or 0 for c in archived_contracts])
+
+    # Format as string for frontend compatibility
+    def decimal_to_str(val):
+        try:
+            return format(val, 'f')
+        except Exception:
+            return str(val)
+
+    return jsonify({
+        'total_count': total_count,
+        'total_amount': decimal_to_str(total_amount),
+        'archived_count': archived_count,
+        'archived_amount': decimal_to_str(archived_amount),
+    })
 
 
 CONTRACT_FIELD_KEYS = [

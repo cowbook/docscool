@@ -2,41 +2,44 @@
   <div class="shell">
     <el-container class="shell-container">
       <el-aside v-if="!isMobile" width="240px" class="sidebar">
-        <div class="logo">DocsCool</div>
+        <div class="logo">
+          <Icon :icon="docIcon" style="font-size:28px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
+          <span style="vertical-align:middle;">DocsCool</span>
+        </div>
         <el-menu :default-active="activePath" router class="menu">
           <el-menu-item index="/home">
-            <el-icon><House /></el-icon>
+            <Icon :icon="homeIcon" style="font-size:20px;vertical-align:middle;" />
             <span>首页</span>
           </el-menu-item>
           <el-sub-menu index="/contracts">
             <template #title>
-              <el-icon><Document /></el-icon>
+              <Icon :icon="docIcon" style="font-size:20px;vertical-align:middle;" />
               <span>合同管理</span>
             </template>
             <el-menu-item index="/contracts/all">
-              <el-icon><Tickets /></el-icon>
+              <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
               <span>所有合同</span>
             </el-menu-item>
             <el-menu-item index="/contracts/folders">
-              <el-icon><Folder /></el-icon>
+              <Icon :icon="folderIcon" style="font-size:20px;vertical-align:middle;" />
               <span>文件夹</span>
             </el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="/settings">
             <template #title>
-              <el-icon><Setting /></el-icon>
+              <Icon :icon="settingIcon" style="font-size:20px;vertical-align:middle;" />
               <span>系统设置</span>
             </template>
             <el-menu-item index="/settings/departments">
-              <el-icon><OfficeBuilding /></el-icon>
+              <Icon :icon="officeIcon" style="font-size:20px;vertical-align:middle;" />
               <span>部门设置</span>
             </el-menu-item>
             <el-menu-item index="/settings/projects">
-              <el-icon><CollectionTag /></el-icon>
+              <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
               <span>项目设置</span>
             </el-menu-item>
             <el-menu-item index="/settings/logout">
-              <el-icon><SwitchButton /></el-icon>
+              <Icon :icon="logoutIcon" style="font-size:20px;vertical-align:middle;" />
               <span>退出</span>
             </el-menu-item>
           </el-sub-menu>
@@ -61,41 +64,44 @@
     </el-container>
 
     <el-drawer v-model="drawer" :with-header="false" size="240px" direction="ltr">
-      <div class="logo">DocsCool</div>
+      <div class="logo">
+        <Icon :icon="docIcon" style="font-size:28px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
+        <span style="vertical-align:middle;">DocsCool</span>
+      </div>
       <el-menu :default-active="activePath" router class="menu" @select="onSelectMenu">
         <el-menu-item index="/home">
-          <el-icon><House /></el-icon>
+          <Icon :icon="homeIcon" style="font-size:20px;vertical-align:middle;" />
           <span>首页</span>
         </el-menu-item>
         <el-sub-menu index="/contracts-mobile">
           <template #title>
-            <el-icon><Document /></el-icon>
+            <Icon :icon="docIcon" style="font-size:20px;vertical-align:middle;" />
             <span>合同管理</span>
           </template>
           <el-menu-item index="/contracts/all">
-            <el-icon><Tickets /></el-icon>
+            <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
             <span>所有合同</span>
           </el-menu-item>
           <el-menu-item index="/contracts/folders">
-            <el-icon><Folder /></el-icon>
+            <Icon :icon="folderIcon" style="font-size:20px;vertical-align:middle;" />
             <span>文件夹</span>
           </el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="/settings-mobile">
           <template #title>
-            <el-icon><Setting /></el-icon>
+            <Icon :icon="settingIcon" style="font-size:20px;vertical-align:middle;" />
             <span>系统设置</span>
           </template>
           <el-menu-item index="/settings/departments">
-            <el-icon><OfficeBuilding /></el-icon>
+            <Icon :icon="officeIcon" style="font-size:20px;vertical-align:middle;" />
             <span>部门设置</span>
           </el-menu-item>
           <el-menu-item index="/settings/projects">
-            <el-icon><CollectionTag /></el-icon>
+            <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
           </el-menu-item>
           <el-menu-item index="/settings/logout">
-            <el-icon><SwitchButton /></el-icon>
+            <Icon :icon="logoutIcon" style="font-size:20px;vertical-align:middle;" />
             <span>退出</span>
           </el-menu-item>
         </el-sub-menu>
@@ -106,8 +112,15 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { CollectionTag, Document, Folder, House, OfficeBuilding, Setting, SwitchButton, Tickets } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
+import homeIcon from '@iconify-icons/tabler/home'
+import docIcon from '@iconify-icons/tabler/file-text'
+import ticketsIcon from '@iconify-icons/tabler/certificate'
+import folderIcon from '@iconify-icons/tabler/folder'
+import settingIcon from '@iconify-icons/tabler/settings'
+import officeIcon from '@iconify-icons/tabler/building'
+import projectIcon from '@iconify-icons/tabler/tag'
+import logoutIcon from '@iconify-icons/tabler/logout'
 
 const route = useRoute()
 const drawer = ref(false)
