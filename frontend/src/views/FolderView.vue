@@ -23,7 +23,15 @@
 
       <div ref="folderLayoutRef" class="folder-layout" :style="folderLayoutStyle">
         <div class="left-panel">
-          <div class="panel-title">{{ rootName }}</div>
+          <div class="panel-title">
+            <div class="panel-title-main">
+              {{ rootName }} 
+            </div>
+            <div class="panel-subtitle">
+                <span v-if="loadingRecursiveCount">文件总数...</span>
+                <span v-else>{{ recursiveFileCount }}</span>
+              </div>
+          </div>
           <div class="tree-wrap" @contextmenu.prevent="onPanelContextMenu">
           <el-tree
             ref="treeRef"
@@ -76,7 +84,19 @@
 
         <div class="right-panel">
           <div class="panel-title-row">
-            <div class="panel-title">文件列表</div>
+            <div class="panel-title-block">
+              <div class="panel-title">
+                
+                <div class="panel-title-main">文件列表</div>
+
+              
+                <div class="panel-subtitle">
+                  <span>{{ currentFileCount }}</span>
+                </div>
+
+              </div>
+            
+            </div>
             <div class="panel-title-actions">
               <el-button
                 size="small"
@@ -348,6 +368,9 @@ const AI_NEW_CONTRACT_VALUE = '__new_contract__'
 const batchMatching = ref(false)
 const batchMatchDialogVisible = ref(false)
 const batchMatchLogText = ref('')
+const recursiveFileCount = ref(0)
+const loadingRecursiveCount = ref(false)
+let recursiveCountToken = 0
 
 const folderLayoutStyle = computed(() => {
   return {
@@ -539,6 +562,10 @@ const filteredFiles = computed(() => {
 
     return text.includes(keyword)
   })
+})
+
+const currentFileCount = computed(() => {
+  return Array.isArray(files.value) ? files.value.length : 0
 })
 
 const fileColumnAutoWidth = computed(() => {
@@ -952,6 +979,8 @@ const handleFolderFilesSelected = async (event) => {
   }
 }
 
+
+
 const loadFolderFiles = async (folderPath) => {
   loadingFiles.value = true
   try {
@@ -967,6 +996,38 @@ const loadFolderFiles = async (folderPath) => {
     loadingFiles.value = false
   }
 }
+
+
+
+const loadRecursiveFileCount = async (folderPath) => {
+  const token = ++recursiveCountToken
+  loadingRecursiveCount.value = true
+
+  try {
+    const { data } = await http.get('/folders/file-count', {
+      params: { folder_path: normalizePath(folderPath) },
+    })
+    const total = Number(data?.total_files) || 0
+    if (token !== recursiveCountToken) {
+      return
+    }
+    recursiveFileCount.value = total
+  } catch (_error) {
+    if (token !== recursiveCountToken) {
+      return
+    }
+    recursiveFileCount.value = 0
+  } finally {
+    if (token === recursiveCountToken) {
+      loadingRecursiveCount.value = false
+    }
+  }
+}
+
+
+watch(selectedFolderPath, (path) => {
+  loadRecursiveFileCount(path)
+}, { immediate: true })
 
 const loadTree = async (keepSelected = true) => {
   loadingTree.value = true
@@ -1323,6 +1384,8 @@ watch(previewDialogVisible, (visible) => {
     resetPreview()
   }
 })
+
+
 </script>
 
 <style scoped>
@@ -1451,10 +1514,16 @@ watch(previewDialogVisible, (visible) => {
   color: #b91c1c;
 }
 
-.panel-title {
+.panel-title-main {
   margin-bottom: 10px;
   color: #374151;
   font-weight: 600;
+}
+
+.panel-title {
+  display:flex;
+  gap:24px;
+  
 }
 
 .panel-title-row {
@@ -1465,8 +1534,19 @@ watch(previewDialogVisible, (visible) => {
   margin-bottom: 10px;
 }
 
+.panel-title-block {
+  min-width: 0;
+}
+
 .panel-title-row .panel-title {
   margin-bottom: 0;
+}
+
+.panel-subtitle {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .panel-title-actions {

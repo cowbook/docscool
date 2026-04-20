@@ -1,3 +1,6 @@
+# --- 文件末尾追加 ---
+
+# 仪表盘统计接口，需在 contracts_bp 定义后声明
 import os
 import posixpath
 import re
@@ -16,13 +19,11 @@ import fitz
 import numpy as np
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, cast, func, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from .auth import get_cached_user_password, require_auth
 from .extensions import db
 from .models import Contract, Department, ProjectOption
-
-
 
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 _OCR_ENGINE = None
@@ -30,33 +31,6 @@ _IMPORT_ERROR_REPORTS = {}
 EXTERNAL_API_TIMEOUT_SECONDS = 300
 DEFAULT_DEPARTMENT_NAME = '财务部'
 
-# --- Move statistics endpoint here so contracts_bp is defined ---
-@contracts_bp.get('/contracts/statistics')
-@require_auth
-def contract_statistics():
-    # Query all contracts
-    all_contracts = Contract.query.all()
-    total_count = len(all_contracts)
-    total_amount = sum([c.amount or 0 for c in all_contracts])
-
-    # Archived contracts
-    archived_contracts = [c for c in all_contracts if (c.is_archived or '').strip() == '已归档']
-    archived_count = len(archived_contracts)
-    archived_amount = sum([c.amount or 0 for c in archived_contracts])
-
-    # Format as string for frontend compatibility
-    def decimal_to_str(val):
-        try:
-            return format(val, 'f')
-        except Exception:
-            return str(val)
-
-    return jsonify({
-        'total_count': total_count,
-        'total_amount': decimal_to_str(total_amount),
-        'archived_count': archived_count,
-        'archived_amount': decimal_to_str(archived_amount),
-    })
 
 
 CONTRACT_FIELD_KEYS = [
@@ -1164,6 +1138,44 @@ def _list_folder_children_nodes(relative_path: str):
     ]
 
 
+def _count_storage_files_recursive(relative_path: str) -> int:
+    normalized = _normalize_relative_path(relative_path)
+    queue = [normalized]
+    visited = set()
+    total = 0
+
+    # Reuse one Synology session for the entire traversal to avoid repeated
+    # login/list cycles that may trigger session invalidation (error code 119).
+    remote_mode = current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote'
+    sid = _synology_upload_login() if remote_mode else ''
+
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+
+        if remote_mode:
+            try:
+                directories, files = _list_remote_entries(current, sid=sid)
+            except RuntimeError as exc:
+                # Session may expire during long traversals; re-login once.
+                if '错误码: 119' not in str(exc):
+                    raise
+                sid = _synology_upload_login()
+                directories, files = _list_remote_entries(current, sid=sid)
+        else:
+            directories, files = _list_local_entries(current)
+
+        total += len(files)
+        for item in directories:
+            child_path = _normalize_relative_path(item.get('path') or '')
+            if child_path not in visited:
+                queue.append(child_path)
+
+    return total
+
+
 def _build_folder_tree(relative_path: str):
     directories, _files = _list_storage_entries(relative_path)
     children = [_build_folder_tree(item['path']) for item in directories]
@@ -1321,6 +1333,44 @@ def _collect_storage_pdf_files() -> list:
         for filename in filenames:
             if not filename.lower().endswith('.pdf'):
                 continue
+            full_path = os.path.join(dirpath, filename)
+            relative_path = os.path.relpath(full_path, root).replace('\\', '/')
+            try:
+                mtime = int(os.path.getmtime(full_path))
+            except OSError:
+                mtime = 0
+            result.append({
+                'name': filename,
+                'path': relative_path,
+                'mtime': mtime,
+            })
+    return result
+
+
+def _collect_storage_files() -> list:
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        stack = ['']
+        result = []
+        while stack:
+            current_path = stack.pop()
+            directories, files = _list_remote_entries(current_path, sid=sid)
+            for item in files:
+                result.append({
+                    'name': item.get('name') or '',
+                    'path': item.get('path') or '',
+                    'mtime': item.get('mtime') or 0,
+                })
+            for directory in directories:
+                child_path = directory.get('path') or ''
+                if child_path:
+                    stack.append(child_path)
+        return result
+
+    root = os.path.abspath(current_app.config['CONTRACT_STORAGE_ROOT'])
+    result = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
             full_path = os.path.join(dirpath, filename)
             relative_path = os.path.relpath(full_path, root).replace('\\', '/')
             try:
@@ -2433,6 +2483,26 @@ def list_folder_files():
     })
 
 
+@contracts_bp.get('/folders/file-count')
+@require_auth
+def count_folder_files_recursive():
+    folder_path = request.args.get('folder_path') or request.args.get('folder') or ''
+    try:
+        normalized = _normalize_relative_path(folder_path)
+        total = _count_storage_files_recursive(normalized)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': '目录路径非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'统计目录文件失败: {exc}'}), 500
+
+    return jsonify({
+        'folder_path': normalized,
+        'total_files': total,
+    })
+
+
 @contracts_bp.post('/folders/batch-match')
 @require_auth
 def batch_match_folder_files():
@@ -2867,6 +2937,80 @@ def list_contracts():
 
     rows = query.order_by(Contract.updated_at.desc()).all()
     return jsonify([row.to_dict() for row in rows])
+
+
+@contracts_bp.get('/contracts/statistics')
+@require_auth
+def get_contract_statistics():
+    total_count = Contract.query.count()
+    total_amount = db.session.query(func.coalesce(func.sum(Contract.amount), 0)).scalar()
+
+    archived_count = Contract.query.filter(Contract.is_archived == '已归档').count()
+    archived_amount = db.session.query(
+        func.coalesce(func.sum(Contract.amount), 0)
+    ).filter(Contract.is_archived == '已归档').scalar()
+
+    return jsonify({
+        'total_count': int(total_count or 0),
+        'total_amount': _format_decimal_plain(Decimal(str(total_amount or 0))),
+        'archived_count': int(archived_count or 0),
+        'archived_amount': _format_decimal_plain(Decimal(str(archived_amount or 0))),
+    })
+
+
+@contracts_bp.get('/contracts/dashboard-charts')
+@require_auth
+def get_dashboard_charts():
+    with_file = Contract.query.filter(Contract.file_path.isnot(None), Contract.file_path != '').count()
+    total_contract_count = Contract.query.count()
+    contract_file_pie = {
+        'with_file': int(with_file),
+        'without_file': int(max(total_contract_count - with_file, 0)),
+    }
+
+    contract_file_paths = {
+        _normalize_contract_file_path(row.file_path)
+        for row in Contract.query.filter(Contract.file_path.isnot(None), Contract.file_path != '').all()
+        if _normalize_contract_file_path(row.file_path)
+    }
+    try:
+        storage_files = _collect_storage_files()
+    except Exception:
+        storage_files = []
+
+    storage_paths = {
+        _normalize_relative_path(item.get('path') or '')
+        for item in storage_files
+        if (item.get('path') or '').strip()
+    }
+    with_contract = len(storage_paths.intersection(contract_file_paths))
+    file_contract_pie = {
+        'with_contract': int(with_contract),
+        'without_contract': int(max(len(storage_paths) - with_contract, 0)),
+    }
+
+    departments = _get_department_names()
+    contract_counts = []
+    file_counts = []
+    for name in departments:
+        contract_counts.append(Contract.query.filter(Contract.department == name).count())
+        file_counts.append(
+            Contract.query.filter(
+                Contract.department == name,
+                Contract.file_path.isnot(None),
+                Contract.file_path != '',
+            ).count()
+        )
+
+    return jsonify({
+        'contract_file_pie': contract_file_pie,
+        'file_contract_pie': file_contract_pie,
+        'dept_bar': {
+            'departments': departments,
+            'contract_counts': contract_counts,
+            'file_counts': file_counts,
+        },
+    })
 
 
 @contracts_bp.get('/contracts/<int:contract_id>')

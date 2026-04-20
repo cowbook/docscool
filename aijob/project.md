@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-16
+更新时间：2026-04-20
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -78,6 +78,8 @@
 ## 当前重要接口
 - `GET /api/health`：健康检查
 - `GET /api/contracts`：合同列表
+- `GET /api/contracts/statistics`：首页统计卡片数据
+- `GET /api/contracts/dashboard-charts`：首页图表数据
 - `GET /api/contracts/<id>`：合同详情，返回 `fullbody`
 - `POST /api/contracts`：新建合同
 - `PUT /api/contracts/<id>`：更新合同
@@ -90,6 +92,7 @@
 - `GET /api/contracts/import-error-report/<token>`：下载导入失败明细
 - `POST /api/folders/upload`：向当前目录批量上传文件
 - `POST /api/folders/batch-match`：按文件名中文关键名称批量匹配合同（仅处理未关联合同的文件）
+- `GET /api/folders/file-count`：返回当前目录及子目录文件总数
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页
@@ -117,6 +120,13 @@
 - 左右面板之间支持拖拽分隔，桌面端可调整目录树宽度
 - 当 `ContractItem` 在 FolderView 中使用时隐藏“上传文件/链接文件”按钮，并新增“解绑合同”按钮
 - “新建并带文件路径”时，弹窗进入即加载预览，不再提示“保存后再看”
+- 文件数量统计：
+  - 当前目录文件数使用前端 `currentFileCount`（来自当前 `files` 列表）
+  - 目录总文件数（含子目录）改为单请求 `GET /api/folders/file-count`，不再前端递归多次请求
+
+## 本轮稳定性补充
+- 针对远程存储统计，后端递归计数逻辑已改为复用同一 Synology 会话。
+- 统计过程中若会话失效（错误码 `119`），会自动重登并对当前节点重试一次。
 
 ### 合同编辑/新建弹窗中的文件预览与 AI
 - 编辑/新建弹窗左侧为“文件预览”区域：

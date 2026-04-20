@@ -1,6 +1,15 @@
 # 待完善任务清单
 
-更新时间：2026-04-16
+更新时间：2026-04-20
+
+## 0. 本轮新增回归项（目录统计与首页图表）
+- 首页回归：
+	- 回归 `GET /api/contracts/statistics` 与 `GET /api/contracts/dashboard-charts` 的鉴权、空数据、异常数据场景
+	- 回归 `HomeView` 在后端不可用时的错误提示与降级展示
+- 目录统计回归：
+	- 回归 `GET /api/folders/file-count` 在空目录、深层目录、无权限目录下的返回
+	- 远程模式下验证 Synology 会话失效自动重登逻辑（错误码 119）
+	- 评估超大目录统计耗时，必要时增加缓存或异步统计
 
 ## 1. 合同编辑弹窗 AI 识别回归
 - 当前位置：`frontend/src/views/ContractView.vue`

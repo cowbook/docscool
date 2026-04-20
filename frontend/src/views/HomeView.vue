@@ -40,19 +40,92 @@
       </el-card>
     </div>
 
-    <el-card class="empty-card">
-      <template #header>
-        <div class="empty-title">首页内容</div>
-      </template>
-      <div class="empty-text">预留区域</div>
-    </el-card>
+    <div class="charts-area">
+      <div class="chart-row">
+        <el-card class="chart-card chart-pie">
+          <div class="chart-title">合同有无附件</div>
+          <v-chart :option="optionContractFilePie" autoresize style="height:180px" />
+        </el-card>
+        <el-card class="chart-card chart-pie">
+          <div class="chart-title">存储文件有无合同挂载</div>
+          <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
+        </el-card>
+        <el-card class="chart-card chart-bar">
+          <div class="chart-title">各部门合同与文件数量</div>
+          <v-chart :option="optionDeptBar" autoresize style="height:220px" />
+        </el-card>
+      </div>
+      <div class="chart-row">
+        <el-card class="chart-card">
+          <div class="chart-title">（预留区域）</div>
+        </el-card>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
+
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
+import VChart from 'vue-echarts'
+import * as echarts from 'echarts/core'
+import { PieChart, BarChart } from 'echarts/charts'
+import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([PieChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
+
+// 注册全局组件
+const vChart = VChart
+
+// 图表数据占位
+const optionContractFilePie = ref({
+  tooltip: { trigger: 'item' },
+  legend: { bottom: 0 },
+  series: [
+    {
+      name: '合同附件',
+      type: 'pie',
+      radius: '60%',
+      data: [
+        { value: 0, name: '有附件' },
+        { value: 0, name: '无附件' },
+      ],
+      label: { formatter: '{b}: {d}%' },
+    },
+  ],
+})
+
+const optionFileContractPie = ref({
+  tooltip: { trigger: 'item' },
+  legend: { bottom: 0 },
+  series: [
+    {
+      name: '文件挂载',
+      type: 'pie',
+      radius: '60%',
+      data: [
+        { value: 0, name: '已挂合同' },
+        { value: 0, name: '未挂合同' },
+      ],
+      label: { formatter: '{b}: {d}%' },
+    },
+  ],
+})
+
+const optionDeptBar = ref({
+  tooltip: { trigger: 'axis' },
+  legend: { top: 0 },
+  grid: { left: 40, right: 20, bottom: 30, top: 40 },
+  xAxis: { type: 'category', data: [] },
+  yAxis: { type: 'value' },
+  series: [
+    { name: '合同数量', type: 'bar', data: [] },
+    { name: '文件数量', type: 'bar', data: [] },
+  ],
+})
 
 const statistics = ref({
   total_count: 0,
@@ -70,8 +143,25 @@ function formatAmount(val) {
 
 const loadStatistics = async () => {
   try {
-    const { data } = await http.get('/contracts/statistics')
-    statistics.value = data || statistics.value
+    const [{ data: stat }, { data: charts }] = await Promise.all([
+      http.get('/contracts/statistics'),
+      http.get('/contracts/dashboard-charts'),
+    ])
+    statistics.value = stat || statistics.value
+    // 图表数据
+    if (charts) {
+      optionContractFilePie.value.series[0].data = [
+        { value: charts.contract_file_pie.with_file, name: '有附件' },
+        { value: charts.contract_file_pie.without_file, name: '无附件' },
+      ]
+      optionFileContractPie.value.series[0].data = [
+        { value: charts.file_contract_pie.with_contract, name: '已挂合同' },
+        { value: charts.file_contract_pie.without_contract, name: '未挂合同' },
+      ]
+      optionDeptBar.value.xAxis.data = charts.dept_bar.departments
+      optionDeptBar.value.series[0].data = charts.dept_bar.contract_counts
+      optionDeptBar.value.series[1].data = charts.dept_bar.file_counts
+    }
   } catch (_error) {
     ElMessage.error('统计数据加载失败')
   }
@@ -81,6 +171,29 @@ onMounted(loadStatistics)
 </script>
 
 <style scoped>
+.charts-area {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.chart-row {
+  display: flex;
+  gap: 24px;
+}
+.chart-card {
+  flex: 1;
+  min-width: 0;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.chart-title {
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 8px;
+}
 .stat-content {
   display: flex;
   align-items: center;
