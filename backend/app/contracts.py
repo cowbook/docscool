@@ -6,10 +6,15 @@ import posixpath
 import re
 import json
 import mimetypes
+import base64
+import hmac
+import hashlib
 from difflib import SequenceMatcher
 from io import BytesIO
 from uuid import uuid4
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
+from email.utils import format_datetime
+from datetime import timezone
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -1736,6 +1741,119 @@ def _preview_lines(text: str, limit: int = 6):
     return lines[:limit]
 
 
+def _extract_ai_content_from_pdf(uploaded_file) -> tuple[str, list[str]]:
+    app_id = (current_app.config.get('XUNFEI_APP_ID') or '').strip()
+    api_secret = (current_app.config.get('XUNFEI_API_SECRET') or '').strip()
+    api_key = (current_app.config.get('XUNFEI_API_KEY') or '').strip()
+    api_url = (current_app.config.get('XUNFEI_API_URL') or '').strip()
+
+    if not app_id or not api_secret or not api_key or not api_url:
+        raise RuntimeError('讯飞OCR配置不完整，请检查 XUNFEI_APP_ID/XUNFEI_API_KEY/XUNFEI_API_SECRET/XUNFEI_API_URL')
+
+    try:
+        uploaded_file.stream.seek(0)
+    except Exception:
+        pass
+    pdf_bytes = uploaded_file.stream.read()
+    if not pdf_bytes:
+        return '', []
+
+    parsed = urlparse(api_url)
+    host = parsed.netloc
+    path = parsed.path or '/v1/private/hh_ocr_recognize_doc'
+    endpoint = f'{parsed.scheme}://{host}{path}'
+
+    def _build_signed_params():
+        date_str = format_datetime(datetime.now(timezone.utc), usegmt=True)
+        request_line = f'POST {path} HTTP/1.1'
+        signature_origin = f'host: {host}\ndate: {date_str}\n{request_line}'
+        signature_sha = hmac.new(
+            api_secret.encode('utf-8'),
+            signature_origin.encode('utf-8'),
+            digestmod=hashlib.sha256,
+        ).digest()
+        signature = base64.b64encode(signature_sha).decode('utf-8')
+        authorization_origin = (
+            f'api_key="{api_key}", algorithm="hmac-sha256", '
+            f'headers="host date request-line", signature="{signature}"'
+        )
+        authorization = base64.b64encode(authorization_origin.encode('utf-8')).decode('utf-8')
+        return {
+            'host': host,
+            'date': date_str,
+            'authorization': authorization,
+        }
+
+    def _recognize_image(image_bytes: bytes, image_encoding: str = 'png') -> str:
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        payload = {
+            'header': {
+                'app_id': app_id,
+                'status': 3,
+            },
+            'parameter': {
+                'hh_ocr_recognize_doc': {
+                    'recognizeDocumentRes': {
+                        'encoding': 'utf8',
+                        'compress': 'raw',
+                        'format': 'json',
+                    }
+                }
+            },
+            'payload': {
+                'image': {
+                    'encoding': image_encoding,
+                    'image': image_base64,
+                    'status': 3,
+                }
+            },
+        }
+
+        response = requests.post(
+            endpoint,
+            params=_build_signed_params(),
+            json=payload,
+            timeout=EXTERNAL_API_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        code = ((data.get('header') or {}).get('code'))
+        if code != 0:
+            message = (data.get('header') or {}).get('message') or '讯飞OCR接口返回失败'
+            raise RuntimeError(f'{message}(code={code})')
+
+        text_base64 = (((data.get('payload') or {}).get('recognizeDocumentRes') or {}).get('text') or '')
+        if not text_base64:
+            return ''
+
+        decoded_json = base64.b64decode(text_base64).decode('utf-8', errors='ignore')
+        parsed_text = json.loads(decoded_json) if decoded_json else {}
+        whole_text = str(parsed_text.get('whole_text') or '').strip()
+        if whole_text:
+            return whole_text
+
+        lines = parsed_text.get('lines') or []
+        return '\n'.join(str(item.get('text') or '').strip() for item in lines if str(item.get('text') or '').strip())
+
+    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+    page_texts = []
+    max_pages = min(len(doc), 20)
+    current_app.logger.info('AI parse: Xunfei OCR enabled, pages=%s (max=%s)', len(doc), max_pages)
+
+    for i in range(max_pages):
+        page = doc.load_page(i)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        image_bytes = pix.tobytes('png')
+        text = _recognize_image(image_bytes, image_encoding='png')
+        if text:
+            page_texts.append(text)
+            current_app.logger.info('AI parse: Xunfei OCR page=%s chars=%s', i + 1, len(text))
+
+    final_text = '\n'.join(item for item in page_texts if item).strip()
+    return final_text, _preview_lines(final_text)
+
+
 def _extract_pdf_text(uploaded_file):
     try:
         uploaded_file.stream.seek(0)
@@ -1767,6 +1885,13 @@ def _extract_pdf_text(uploaded_file):
 
     if text_from_pdf:
         return text_from_pdf, _preview_lines(text_from_pdf)
+
+    try:
+        xunfei_text, xunfei_preview = _extract_ai_content_from_pdf(uploaded_file)
+        if xunfei_text:
+            return xunfei_text, xunfei_preview
+    except Exception as exc:
+        current_app.logger.warning('AI parse: Xunfei OCR failed, fallback local OCR: %s', exc)
 
     ocr_text = _extract_pdf_text_via_ocr(pdf_bytes)
     return ocr_text, _preview_lines(ocr_text)
@@ -2192,6 +2317,9 @@ def _has_any_field_value(fields: dict) -> bool:
 
 
 def _minimax_extract_fields(pdf_text: str) -> dict:
+
+    #print('pdf_text:', pdf_text[:2000])
+
     api_key = (current_app.config.get('MINIMAX_API_KEY') or '').strip()
     if not api_key:
         raise RuntimeError('MINIMAX_API_KEY 未配置')
@@ -2199,57 +2327,19 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     api_url = (current_app.config.get('MINIMAX_API_URL') or '').strip()
     model = (current_app.config.get('MINIMAX_MODEL') or '').strip()
 
-    TAX_TEXT = '''
-不同发票类型（主要针对增值税发票）的税率因纳税人类型（一般纳税人或小规模纳税人）及业务性质而异，以下是具体税率分类及说明：
-13%税率
-适用范围：销售货物、修理修配劳务、有形动产租赁服务、进口货物（除特殊规定外）。
-常见场景：制造业销售产品、批发零售商品、设备租赁等。
-
-9%税率
-适用范围：
-交通运输服务（如公路、铁路、航空运输）；
-邮政服务、基础电信服务；
-建筑服务、不动产租赁服务；
-销售不动产、转让土地使用权；
-销售或进口23类特殊货物（如粮食、农产品、自来水、图书、饲料等）。
-常见场景：物流运输、建筑工程、房地产销售、农产品加工等。
-
-6%税率
-适用范围：销售现代服务（如研发、信息技术、物流辅助、文化创意等）、金融服务（如贷款、保险、金融商品转让）、居民服务、销售无形资产（除土地使用权外）。
-常见场景：软件开发、咨询服务、金融服务、知识产权转让等。
-
-0%税率（零税率）
-适用范围：纳税人出口货物、境内单位和个人跨境销售国务院规定范围内的服务或无形资产。
-说明：零税率不等于免税，出口货物可享受退税政策。
-
-3%征收率
-适用范围：小规模纳税人销售货物、提供应税劳务或发生应税行为（除特殊规定外）。
-常见场景：小微企业销售商品、提供劳务等。
-优惠政策：
-2023年1月1日至2027年12月31日，增值税小规模纳税人适用3%征收率的应税销售收入，减按1%征收率征收增值税；
-适用3%预征率的预缴增值税项目，减按1%预征率预缴增值税。
-
-'''
-
     prompt = (
-        '返回的JSON键必须严格使用以下字段：'
-        + 'fullbody,' + ','.join(CONTRACT_FIELD_KEYS)
-        + '\n'
-        'tax_rate指的是合同里涉及的不同发票的税率，返回10%、13%这样的百分比文本，' + TAX_TEXT + '，分析本合同属于什么类型，如果实在分析不到找不到就返回9%""。\n'
+        'tax_rate指的是合同里涉及的不同发票的税率，返回10%、13%这样的百分比文本，分析本合同属于什么类型，如果实在分析不到找不到就返回9%""。\n'
         'invoice_type指的是发票类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['invoice_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么发票类型的，如果讲到了增值税专用发票（专用发票、专票）、增值税普通发票（普票）就返回对应的发票类型，如果没有明确提到发票类型但讲到了税率、价税合计等税务相关内容就返回增值税普通发票，其它默认都返回其它发票。\n'
         'contract_type指的是合同类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么类型的，如果讲到了开挖、定向钻、补偿、折迁等施工作业就是工程类，如果讲到了设计、可研、咨询、测量、价格、贷款、会议就是服务类，如果讲到了设备、材料、工具等就是物资类，拿不准就直接返回服务类。\n'
         'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的，如果讲到了综合单价暂定工程量就是单价合同，其它默认都返回总价合同。\n'
-        'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
+        'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '，必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
-        'handling_date格式为 YYYY-MM-DD\n'
-        'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体。如果不好定位就返回文本里出现的非我公司的单位名称。\n'
-                    'contract_amount 必须始终返回元单位的纯数字字符串不能带单位。；'
-                    '如果原文是万元、千元、亿元等其它单位，必须做精确换算为元；'
-                    '不得四舍五入，不得截断，不得省略任何有效数字。\n' + \
-                    'project是合同属于什么工程或项目，请尽量从标题或是其它文本中识别出项目相关信息， 从全文解理本合同是不是属于如下项目列表，不需要要强匹配找意思相似的标题或文本, 必须值返回如下的项目名称文本，如果合同真的不属于项目或是工程请返回空""：'+ ','.join(_get_project_names()) + ',\n' + \
-                    'handling_department必须返回如下的部门列表其中之一文本（如果能从标题或是其它文本中识别出部门相关信息的话最好，不能的话先判断这个合同一般是列表中的哪个部门职责，通过判断来返回），实在靠不上部门请返回空""：' + ','.join(_get_department_names()) + ',\n' + \
-                    'fullbody指的是合同文本的准确完整内容，请根据下面的OCR文本，根据上下文只把文中可能识别错误文字替换成正确的文字，把OCR当中不应该出现的回车、符号等删除，纠正OCR出现的文本顺序错误，形成并整理成合适的格式，不要删除文本，必须返回，不能返回摘要或是提炼的内容，如果文本过长请尽量返回前20000字符的内容。\n'
-        '以下是PDF文本：\\n'
+        'handling_date格式为 YYYY-MM-DD。\n'
+        'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体，如果不好定位就返回文本里出现的非我公司的单位名称。\n'
+        'contract_amount 指的是合同金额（人民币元）必须始终返回以为元单位的纯数字字符串，不能带单位，如果原文是万元、千元、亿元等其它单位，必须做精确换算为元单位，不得四舍五入，不得截断，不得省略任何有效数字。\n'
+        'project是合同属于什么工程或项目，请尽量从标题或是其它文本中识别出项目相关信息， 从全文解理本合同是不是属于如下项目列表，不需要要强匹配找意思相似的标题或文本, 必须值返回如下的项目名称文本，如果合同真的不属于项目或是工程请返回空""：'+ ','.join(_get_project_names()) + '。\n' 
+        'handling_department必须返回如下的部门列表其中之一文本（如果能从标题或是其它文本中识别出部门相关信息的话最好，不能的话先判断这个合同一般是列表中的哪个部门职责，通过判断来返回），实在靠不上部门请返回空""：' + ','.join(_get_department_names()) + '。\n'
+        '以下是PDF文本：\n'
         + pdf_text[:20000]
     )
 
@@ -2259,6 +2349,9 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
             {
                 'role': 'system',
                 'content': '你是PDF扫描合同得出文本的结构化抽取专家，请从给定PDF扫描出来的合同文本，该合同文本是从图像识别出来没有经过加工肯定包含意外的回车、噪声、格式和语序问题。只抽取合同字段，并只返回JSON对象，不要输出任何解释。你是合同结构化抽取助手，只返回合法JSON对象，不输出解释。'
+                '返回的JSON键必须严格使用以下字段：'
+                +','.join(CONTRACT_FIELD_KEYS)
+                + '\n'
                    
             },
             {
@@ -2270,6 +2363,9 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
         'max_tokens': 1024,
         'stream': False,
     }
+
+
+    print('payload:',payload)
 
     current_app.logger.info(
         'AI parse: Minimax request model=%s text_chars=%s prompt_chars=%s',

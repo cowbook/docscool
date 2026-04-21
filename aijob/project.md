@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-20
+更新时间：2026-04-21
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -13,6 +13,7 @@
 - 前端：Vue 3 + Vite + Element Plus + Axios
 - PDF 预览：vue-pdf-embed + pdfjs-dist
 - OCR / AI：PyMuPDF、RapidOCR、Pillow、numpy、MiniMax API
+- OCR / AI：PyMuPDF、RapidOCR、Pillow、numpy、MiniMax API、讯飞通用文字识别（intsig）
 - NAS 集成：Synology DSM / FileStation API
 
 ## 目录约定
@@ -52,6 +53,10 @@
 - `MINIMAX_API_KEY`：AI 接口密钥
 - `MINIMAX_API_URL`：默认 `https://api.minimaxi.com/v1/chat/completions`
 - `MINIMAX_MODEL`：默认 `MiniMax-M2.5`
+- `XUNFEI_APP_ID`：讯飞 OCR 应用 ID
+- `XUNFEI_API_KEY`：讯飞 OCR API Key
+- `XUNFEI_API_SECRET`：讯飞 OCR API Secret
+- `XUNFEI_API_URL`：默认 `https://api.xf-yun.com/v1/private/hh_ocr_recognize_doc`
 - `MY_COMP`：我方公司名称，用于 AI 提取时排除误识别为对方单位
 
 ## 存储模式约定
@@ -147,6 +152,10 @@
 - `POST /api/contracts/ai-parse` 支持两种入口：
   - 上传 PDF 文件：后端先做直接文本提取，必要时再 OCR
   - 直接传 `fullbody`：当文本长度超过 20 时直接走 AI 结构化，不再 OCR
+- 上传 PDF 的 OCR 回退链路：
+  - 先尝试 PDF 原生文本提取
+  - 失败后优先尝试讯飞 OCR（PDF 转 PNG 后逐页识别）
+  - 讯飞失败再回退 RapidOCR 本地识别
 - AI 候选匹配排序：
   - 先金额相同
   - 再标题相似度降序

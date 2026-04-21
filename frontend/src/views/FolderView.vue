@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <div class="card-main">
-            <div class="card-title">文件夹</div>
+            <div class="card-title">文件夹 （拖放上传）</div>
             <div class="card-subtitle">{{ selectedFolderPath || '/' }}</div>
           </div>
           <div class="header-actions">
@@ -22,17 +22,33 @@
       </template>
 
       <div ref="folderLayoutRef" class="folder-layout" :style="folderLayoutStyle">
-        <div class="left-panel">
+        <div ref="leftPanelRef" class="left-panel">
           <div class="panel-title">
             <div class="panel-title-main">
-              {{ rootName }} 
+              <button
+                type="button"
+                class="root-folder-trigger"
+                title="回到根目录"
+                @click="goToRootFolder"
+              >
+                <Icon :icon="mdiFolderOutline" /><span style="font-size:16px;font-weight: 600;display: inline-block;margin-left: 4px; ">{{ rootName }} </span>
+
+              </button>
             </div>
             <div class="panel-subtitle">
-                <span v-if="loadingRecursiveCount">文件总数...</span>
+                <span v-if="loadingRecursiveCount">...</span>
                 <span v-else>{{ recursiveFileCount }}</span>
               </div>
           </div>
-          <div class="tree-wrap" @contextmenu.prevent="onPanelContextMenu">
+          <div
+            ref="treeWrapRef"
+            class="tree-wrap"
+            @contextmenu.prevent="onPanelContextMenu"
+            @dragenter.capture.prevent="onTreeDragOver"
+            @dragover.capture.prevent="onTreeDragOver"
+            @dragleave.capture="onTreeDragLeave"
+            @drop.capture.stop.prevent="onTreeDrop"
+          >
           <el-tree
             ref="treeRef"
             :key="treeRenderKey"
@@ -48,7 +64,11 @@
             @node-contextmenu="onTreeNodeContextMenu"
           >
             <template #default="{ node, data }">
-              <span class="tree-node-content">
+              <span
+                class="tree-node-content"
+                :class="{ 'tree-node-drop-active': dragOverNodePath === normalizePath(data.path) }"
+                :data-path="normalizePath(data.path)"
+              >
                 <span class="tree-folder-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
                 <span class="tree-node-label">{{ data.name }}</span>
               </span>
@@ -82,7 +102,7 @@
           @mousedown.prevent="startPanelResize"
         ></div>
 
-        <div class="right-panel">
+        <div ref="rightPanelRef" class="right-panel">
           <div class="panel-title-row">
             <div class="panel-title-block">
               <div class="panel-title">
@@ -124,7 +144,14 @@
             </div>
           </div>
 
-          <div class="file-table-wrap" @contextmenu.prevent>
+          <div
+            ref="fileTableWrapRef"
+            class="file-table-wrap"
+            @contextmenu.prevent
+            @dragenter.capture.prevent="onFileTableDragOver"
+            @dragover.capture.prevent="onFileTableDragOver"
+            @drop.capture.stop.prevent="onFileTableDrop"
+          >
           <el-table
             v-loading="loadingFiles"
             :data="filteredFiles"
@@ -306,6 +333,7 @@ import { Upload } from '@element-plus/icons-vue'
 import { Icon } from '@iconify/vue'
 import mdiArchive from '@iconify-icons/mdi/archive-check-outline'
 import mdiHelp from '@iconify-icons/mdi/help-circle-outline'
+import mdiFolderOutline from '@iconify-icons/mdi/folder-outline'
 import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
@@ -354,6 +382,10 @@ const fileContextMenuStyle = ref({ left: '0px', top: '0px' })
 const fileContextTarget = ref(null)
 const folderUploadInputRef = ref(null)
 const uploadingFolderFiles = ref(false)
+const leftPanelRef = ref(null)
+const rightPanelRef = ref(null)
+const treeWrapRef = ref(null)
+const fileTableWrapRef = ref(null)
 const folderLayoutRef = ref(null)
 const leftPanelWidth = ref(190)
 const isResizingPanels = ref(false)
@@ -370,6 +402,7 @@ const batchMatchDialogVisible = ref(false)
 const batchMatchLogText = ref('')
 const recursiveFileCount = ref(0)
 const loadingRecursiveCount = ref(false)
+const dragOverNodePath = ref('')
 let recursiveCountToken = 0
 
 const folderLayoutStyle = computed(() => {
@@ -942,23 +975,17 @@ const triggerFolderUpload = () => {
   folderUploadInputRef.value?.click()
 }
 
-const handleFolderFilesSelected = async (event) => {
-  const picked = Array.from(event?.target?.files || [])
-  if (!picked.length) {
-    return
-  }
-
-  const filesToUpload = picked.filter((item) => !!String(item?.name || '').trim())
+const uploadFilesToFolder = async (picked, targetFolderPath = selectedFolderPath.value) => {
+  const filesToUpload = Array.from(picked || []).filter((item) => !!String(item?.name || '').trim())
   if (!filesToUpload.length) {
     ElMessage.warning('请选择有效文件')
-    event.target.value = ''
     return
   }
 
   uploadingFolderFiles.value = true
   try {
     const fd = new FormData()
-    fd.append('folder_path', selectedFolderPath.value || '')
+    fd.append('folder_path', normalizePath(targetFolderPath))
     filesToUpload.forEach((file) => {
       fd.append('files', file)
     })
@@ -975,8 +1002,137 @@ const handleFolderFilesSelected = async (event) => {
     ElMessage.error(error?.response?.data?.message || '文件上传失败')
   } finally {
     uploadingFolderFiles.value = false
-    event.target.value = ''
   }
+}
+
+const handleFolderFilesSelected = async (event) => {
+  const picked = Array.from(event?.target?.files || [])
+  if (!picked.length) {
+    return
+  }
+  await uploadFilesToFolder(picked, selectedFolderPath.value)
+  event.target.value = ''
+}
+
+const hasDraggedFiles = (event) => {
+  const transfer = event?.dataTransfer
+  if (!transfer) {
+    return false
+  }
+
+  if (Number(transfer?.files?.length) > 0) {
+    return true
+  }
+
+  const items = Array.from(transfer?.items || [])
+  if (items.some((item) => item?.kind === 'file')) {
+    return true
+  }
+
+  const types = Array.from(transfer?.types || [])
+  return types.includes('Files') || types.includes('application/x-moz-file')
+}
+
+const isDropInTreeWrap = (target) => {
+  return !!(target && treeWrapRef.value?.contains?.(target))
+}
+
+const isDropInLeftPanel = (target) => {
+  return !!(target && leftPanelRef.value?.contains?.(target))
+}
+
+const isDropInRightPanel = (target) => {
+  return !!(target && rightPanelRef.value?.contains?.(target))
+}
+
+const isDropInFileTableWrap = (target) => {
+  return !!(target && fileTableWrapRef.value?.contains?.(target))
+}
+
+const getDragHoverNodePath = (event) => {
+  const nodeEl = event?.target?.closest?.('.tree-node-content')
+  return normalizePath(nodeEl?.dataset?.path || '')
+}
+
+const onTreeDragOver = (event) => {
+  if (!hasDraggedFiles(event) || uploadingFolderFiles.value) {
+    return
+  }
+  event.dataTransfer.dropEffect = 'copy'
+  dragOverNodePath.value = getDragHoverNodePath(event)
+}
+
+const onTreeDragLeave = (event) => {
+  const nextTarget = event?.relatedTarget
+  if (!event?.currentTarget?.contains?.(nextTarget)) {
+    dragOverNodePath.value = ''
+  }
+}
+
+const onTreeDrop = async (event) => {
+  const hoveredPath = getDragHoverNodePath(event)
+  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  dragOverNodePath.value = ''
+  if (!filesFromDrop.length) {
+    return
+  }
+  const targetPath = hoveredPath || selectedFolderPath.value
+  await uploadFilesToFolder(filesFromDrop, targetPath)
+}
+
+const onFileTableDragOver = (event) => {
+  if (!hasDraggedFiles(event) || uploadingFolderFiles.value) {
+    return
+  }
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+const onFileTableDrop = async (event) => {
+  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  if (!filesFromDrop.length) {
+    return
+  }
+  await uploadFilesToFolder(filesFromDrop, selectedFolderPath.value)
+}
+
+const onWindowDragOverCapture = (event) => {
+  if (!hasDraggedFiles(event)) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+const onWindowDropCapture = async (event) => {
+  if (!hasDraggedFiles(event) || uploadingFolderFiles.value) {
+    return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  const target = event?.target
+  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  if (!filesFromDrop.length) {
+    dragOverNodePath.value = ''
+    return
+  }
+
+  if (isDropInLeftPanel(target)) {
+    const hoveredPath = getDragHoverNodePath(event)
+    dragOverNodePath.value = ''
+    await uploadFilesToFolder(filesFromDrop, hoveredPath || selectedFolderPath.value)
+    return
+  }
+
+  if (isDropInRightPanel(target) || isDropInFileTableWrap(target)) {
+    await uploadFilesToFolder(filesFromDrop, selectedFolderPath.value)
+    return
+  }
+
+  dragOverNodePath.value = ''
 }
 
 
@@ -995,6 +1151,12 @@ const loadFolderFiles = async (folderPath) => {
   } finally {
     loadingFiles.value = false
   }
+}
+
+const goToRootFolder = async () => {
+  await loadFolderFiles('')
+  await nextTick()
+  treeRef.value?.setCurrentKey?.(null)
 }
 
 
@@ -1367,6 +1529,8 @@ const startPanelResize = () => {
 
 onMounted(async () => {
   window.addEventListener('click', hideAllContextMenus)
+  window.addEventListener('dragover', onWindowDragOverCapture, true)
+  window.addEventListener('drop', onWindowDropCapture, true)
   await Promise.all([
     loadDepartments(),
     loadFieldOptions(),
@@ -1376,6 +1540,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', hideAllContextMenus)
+  window.removeEventListener('dragover', onWindowDragOverCapture, true)
+  window.removeEventListener('drop', onWindowDropCapture, true)
   stopPanelResize()
 })
 
@@ -1457,6 +1623,12 @@ watch(previewDialogVisible, (visible) => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.tree-node-drop-active {
+  background: #dbeafe;
 }
 
 .tree-folder-icon {
@@ -1515,9 +1687,29 @@ watch(previewDialogVisible, (visible) => {
 }
 
 .panel-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 10px;
   color: #374151;
   font-weight: 600;
+}
+
+.root-folder-trigger {
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 0 0 1px;
+}
+
+.root-folder-trigger:hover {
+  color: #2563eb;
 }
 
 .panel-title {

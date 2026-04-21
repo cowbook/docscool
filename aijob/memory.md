@@ -1,6 +1,6 @@
 # AI 工作记忆
 
-更新时间：2026-04-20
+更新时间：2026-04-21
 
 ## 使用约定
 - 本文件用于记录 AI 已完成、已确认、待回归的重要工作，按时间顺序持续追加。
@@ -8,6 +8,24 @@
 - 记录应以“已验证事实”为主，尽量避免写未经确认的猜测。
 
 ## 时间线
+
+### 2026-04-21 本轮更新
+- PDF 识别链路增强（后端）：
+	- 在 `backend/app/contracts.py` 完成 `_extract_ai_content_from_pdf(uploaded_file)`，实现 PDF 每页渲染 PNG 后调用讯飞通用文字识别（intsig）接口。
+	- 按讯飞文档实现 HMAC-SHA256 鉴权参数生成（`host/date/authorization`），并处理识别返回体中的 `payload.recognizeDocumentRes.text`（base64）。
+	- `whole_text` 优先，缺失时回退拼接 `lines[].text`。
+	- 在 `_extract_pdf_text` 中接入“讯飞 OCR 优先回退链路”：直接提取失败时先尝试讯飞 OCR，失败再降级本地 RapidOCR。
+- 讯飞配置接入（后端配置）：
+	- 在 `backend/app/config.py` 新增 `XUNFEI_APP_ID`、`XUNFEI_API_KEY`、`XUNFEI_API_SECRET`、`XUNFEI_API_URL`。
+	- 在 `backend/.env.example` 补充对应环境变量示例。
+- 文件夹页拖放上传增强（前端）：
+	- `frontend/src/views/FolderView.vue` 完成拖放上传行为扩展：
+		- 拖放到左侧树节点：上传到该节点路径并高亮节点。
+		- 拖放到左侧非节点区域：上传到当前目录。
+		- 拖放到右侧任意区域：上传到当前目录。
+	- 增加窗口级 `dragover/drop` 捕获兜底，防止浏览器默认打开 PDF。
+- 运行验证：
+	- 后端已重启并通过健康检查：`GET /api/health` 返回 `{"status":"ok"}`。
 
 ### 2026-04-20 本轮更新
 - 首页图表后端接口补齐并联调：

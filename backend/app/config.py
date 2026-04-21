@@ -32,6 +32,10 @@ class Config:
     MINIMAX_API_KEY = os.getenv('MINIMAX_API_KEY', '')
     MINIMAX_API_URL = os.getenv('MINIMAX_API_URL', 'https://api.minimaxi.com/v1/chat/completions')
     MINIMAX_MODEL = os.getenv('MINIMAX_MODEL', 'MiniMax-M2.5')
+    XUNFEI_APP_ID = os.getenv('XUNFEI_APP_ID', '')
+    XUNFEI_API_KEY = os.getenv('XUNFEI_API_KEY', '')
+    XUNFEI_API_SECRET = os.getenv('XUNFEI_API_SECRET', '')
+    XUNFEI_API_URL = os.getenv('XUNFEI_API_URL', 'https://api.xf-yun.com/v1/private/hh_ocr_recognize_doc')
     MY_COMP = os.getenv('MY_COMP', '').strip()
 
 
