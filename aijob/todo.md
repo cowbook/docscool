@@ -1,6 +1,16 @@
 # 待完善任务清单
 
-更新时间：2026-04-21
+更新时间：2026-04-22
+
+## 0.2 本轮新增回归项（files.py 拆分）
+- 路由回归：
+	- 回归 `/api/folders/*` 全量接口（tree/children/files/file-count/upload/batch-match/rename/delete/download/preview）在拆分后行为一致。
+	- 验证鉴权失败、路径非法、文件不存在等错误码与文案保持一致。
+- 运行回归：
+	- 回归 `files_bp` 注册后与 `contracts_bp` 无路由冲突。
+	- 回归前端 FolderView 全链路（上传、批量匹配、重命名、删除、预览、下载）。
+- 代码整理：
+	- 后续可继续下沉 `contracts.py` 内被 `files.py` 复用的辅助函数，减少跨模块私有函数依赖。
 
 ## 0. 本轮新增回归项（目录统计与首页图表）
 - 首页回归：

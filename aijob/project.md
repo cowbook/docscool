@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-21
+更新时间：2026-04-22
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -18,6 +18,8 @@
 
 ## 目录约定
 - backend：Flask API、模型、SQLite、NAS 上传下载、AI 解析
+  - `backend/app/contracts.py`：合同主业务、AI 提取、导入等
+  - `backend/app/files.py`：文件/文件夹管理接口（`/api/folders/*`）
 - frontend：Vue 页面、API 请求、预览和编辑交互
 - docs：部署文档
 - aijob：AI 辅助文档，包括长期记忆、项目固定参数、待办事项
@@ -32,11 +34,9 @@
 - 前端开发代理：`/api -> http://127.0.0.1:6000`
 
 ## 部署固定参数
-- 默认部署模式：前后端分离，适配 Synology DSM 7.x + Container Manager
-- Docker 入口文件：`docker-compose.yml`
-- 默认 NAS 前端端口：`8080`
-- README 中默认 NAS 后端端口映射示例：`5000`
-- 本地开发已改为后端 `6000`，不要再按旧的 `5000` 做本地代理
+- 默认部署模式：前后端分离（非 Docker）
+- 后端服务端口：`6000`（本地开发默认）
+- 前端服务端口：`5173`（本地开发默认）
 
 ## 后端关键环境变量
 - `FLASK_ENV`：运行环境
@@ -47,9 +47,6 @@
 - `CONTRACT_STORAGE_MODE`：`local` 或 `remote`
 - `CONTRACT_STORAGE_ROOT`：合同根目录，例如 `/volume1/contracts`
 - `SYNOLOGY_FILESTATION_ROOT`：FileStation 视角路径，例如 `/contracts`
-- `SYNOLOGY_UPLOAD_ACCOUNT`：远程上传使用的 DSM 账号
-- `SYNOLOGY_UPLOAD_PASSWORD`：远程上传使用的 DSM 密码
-- `SYNOLOGY_UPLOAD_SESSION`：默认 `FileStation`
 - `MINIMAX_API_KEY`：AI 接口密钥
 - `MINIMAX_API_URL`：默认 `https://api.minimaxi.com/v1/chat/completions`
 - `MINIMAX_MODEL`：默认 `MiniMax-M2.5`
@@ -98,6 +95,10 @@
 - `POST /api/folders/upload`：向当前目录批量上传文件
 - `POST /api/folders/batch-match`：按文件名中文关键名称批量匹配合同（仅处理未关联合同的文件）
 - `GET /api/folders/file-count`：返回当前目录及子目录文件总数
+
+## 本轮结构调整（2026-04-22）
+- `folders` 相关接口已从 `contracts.py` 拆分到 `files.py`，应用通过 `files_bp` 蓝图注册。
+- 对外 API 路径保持不变，前端无需调整路由地址。
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页

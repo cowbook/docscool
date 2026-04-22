@@ -8,6 +8,7 @@ from flask_cors import CORS
 from .auth import auth_bp
 from .config import Config
 from .contracts import contracts_bp
+from .files import files_bp
 from .extensions import db
 from .models import Contract, Department, ProjectOption
 
@@ -137,6 +138,7 @@ def create_app() -> Flask:
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(contracts_bp)
+    app.register_blueprint(files_bp)
 
     @app.get('/api/health')
     def health():

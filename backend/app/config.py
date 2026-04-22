@@ -21,9 +21,6 @@ class Config:
     SYNOLOGY_BASE_URL = os.getenv('SYNOLOGY_BASE_URL', '').rstrip('/')
     SYNOLOGY_AUTH_SESSION = os.getenv('SYNOLOGY_AUTH_SESSION', 'DocsCool')
     SYNOLOGY_VERIFY_SSL = _to_bool(os.getenv('SYNOLOGY_VERIFY_SSL', 'false'))
-    SYNOLOGY_UPLOAD_ACCOUNT = os.getenv('SYNOLOGY_UPLOAD_ACCOUNT', '')
-    SYNOLOGY_UPLOAD_PASSWORD = os.getenv('SYNOLOGY_UPLOAD_PASSWORD', '')
-    SYNOLOGY_UPLOAD_SESSION = os.getenv('SYNOLOGY_UPLOAD_SESSION', 'FileStation')
 
     CONTRACT_STORAGE_ROOT = os.getenv('CONTRACT_STORAGE_ROOT', '/volume1/contracts')
     CONTRACT_STORAGE_MODE = os.getenv('CONTRACT_STORAGE_MODE', 'local').strip().lower()
