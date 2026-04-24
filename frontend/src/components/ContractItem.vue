@@ -91,6 +91,15 @@
                   @blur="normalizeContractAmount"
                 />
               </el-form-item>
+              <el-form-item label="份数">
+                <el-input
+                  v-model="form.copy_count"
+                  inputmode="numeric"
+                  clearable
+                  placeholder="纯数字，可留空"
+                  @blur="normalizeCopyCount"
+                />
+              </el-form-item>
               <el-form-item label="承办人">
                 <el-input v-model="form.handler" clearable placeholder="可留空" />
               </el-form-item>
@@ -129,6 +138,15 @@
                 <el-select v-model="form.project" clearable placeholder="可留空" style="width: 100%" filterable>
                   <el-option v-for="item in normalizedOptions.project" :key="item" :label="item" :value="item" />
                 </el-select>
+              </el-form-item>
+              <el-form-item label="存档位置">
+                <el-input
+                  v-model="form.save_place"
+                  maxlength="50"
+                  show-word-limit
+                  clearable
+                  placeholder="最多50个字符，可留空"
+                />
               </el-form-item>
             </div>
           </div>
@@ -417,6 +435,7 @@ const form = reactive({
   contract_number: '',
   contract_unit: '',
   contract_amount: '',
+  copy_count: '',
   handler: '',
   handling_department: '',
   contract_determination_method: '',
@@ -427,6 +446,7 @@ const form = reactive({
   pricing_method: '',
   is_archived: '未归档',
   project: '',
+  save_place: '',
   fullbody: '',
 })
 
@@ -445,6 +465,7 @@ const resetForm = () => {
   form.contract_number = ''
   form.contract_unit = ''
   form.contract_amount = ''
+  form.copy_count = ''
   form.handler = ''
   form.handling_department = ''
   form.contract_determination_method = ''
@@ -455,6 +476,7 @@ const resetForm = () => {
   form.pricing_method = ''
   form.is_archived = '未归档'
   form.project = ''
+  form.save_place = ''
   form.fullbody = ''
 }
 
@@ -485,6 +507,7 @@ const populateFormFromContract = (row) => {
   form.contract_number = row.contract_number || ''
   form.contract_unit = row.contract_unit || ''
   form.contract_amount = normalizeAmountInputValue(row.contract_amount)
+  form.copy_count = normalizeCopyCountInput(row.copy_count)
   form.handler = row.handler || ''
   form.handling_department = row.handling_department || row.department || ''
   form.contract_determination_method = row.contract_determination_method || ''
@@ -495,6 +518,7 @@ const populateFormFromContract = (row) => {
   form.pricing_method = row.pricing_method || ''
   form.is_archived = row.is_archived || '未归档'
   form.project = row.project || ''
+  form.save_place = row.save_place || ''
   form.fullbody = row.fullbody || ''
 }
 
@@ -504,6 +528,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['contract_number', 'contract_number'],
     ['contract_unit', 'contract_unit'],
     ['contract_amount', 'contract_amount'],
+    ['copy_count', 'copy_count'],
     ['handler', 'handler'],
     ['handling_department', 'handling_department'],
     ['contract_determination_method', 'contract_determination_method'],
@@ -514,6 +539,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['pricing_method', 'pricing_method'],
     ['is_archived', 'is_archived'],
     ['project', 'project'],
+    ['save_place', 'save_place'],
     ['fullbody', 'fullbody'],
   ]
 
@@ -544,6 +570,7 @@ const applyParsedFields = (fields) => {
   form.contract_number = fields?.contract_number || ''
   form.contract_unit = fields?.contract_unit || ''
   form.contract_amount = normalizeAmountInputValue(fields?.contract_amount || '')
+  form.copy_count = normalizeCopyCountInput(fields?.copy_count || '')
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
   form.contract_determination_method = fields?.contract_determination_method || ''
@@ -554,6 +581,7 @@ const applyParsedFields = (fields) => {
   form.pricing_method = fields?.pricing_method || ''
   form.is_archived = fields?.is_archived || '未归档'
   form.project = fields?.project || ''
+  form.save_place = fields?.save_place || ''
   form.fullbody = fields?.fullbody || ''
 }
 
@@ -621,6 +649,18 @@ const normalizeContractAmount = () => {
   form.contract_amount = normalizeAmountInputValue(form.contract_amount)
 }
 
+const normalizeCopyCountInput = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return ''
+  }
+  return raw.replace(/\D+/g, '')
+}
+
+const normalizeCopyCount = () => {
+  form.copy_count = normalizeCopyCountInput(form.copy_count)
+}
+
 const unbindContract = async () => {
   if (!editing.value?.id) {
     ElMessage.warning('仅已存在的合同支持解绑')
@@ -655,6 +695,8 @@ const unbindContract = async () => {
 
 const saveContract = async () => {
   const normalizedAmount = normalizeAmountInputValue(form.contract_amount)
+  const normalizedCopyCount = normalizeCopyCountInput(form.copy_count)
+  const normalizedSavePlace = String(form.save_place || '').trim()
 
   if (!form.contract_name || !form.handling_department) {
     ElMessage.warning('请填写必要字段')
@@ -666,7 +708,19 @@ const saveContract = async () => {
     return
   }
 
+  if (normalizedCopyCount && !/^\d+$/.test(normalizedCopyCount)) {
+    ElMessage.warning('份数请输入纯数字')
+    return
+  }
+
+  if (normalizedSavePlace.length > 50) {
+    ElMessage.warning('存档位置最多50个字符')
+    return
+  }
+
   form.contract_amount = normalizedAmount
+  form.copy_count = normalizedCopyCount
+  form.save_place = normalizedSavePlace
 
   if (!props.departments.includes(form.handling_department)) {
     ElMessage.warning('请选择系统设置中的有效部门')
@@ -687,6 +741,7 @@ const saveContract = async () => {
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
         contract_amount: normalizedAmount,
+        copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
         contract_determination_method: form.contract_determination_method,
@@ -697,6 +752,7 @@ const saveContract = async () => {
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
+        save_place: normalizedSavePlace,
         fullbody: form.fullbody,
       })
       ElMessage.success('更新成功')
@@ -707,6 +763,7 @@ const saveContract = async () => {
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
         contract_amount: normalizedAmount,
+        copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
         contract_determination_method: form.contract_determination_method,
@@ -717,6 +774,7 @@ const saveContract = async () => {
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
+        save_place: normalizedSavePlace,
         fullbody: form.fullbody,
       })
 

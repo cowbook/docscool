@@ -39,6 +39,8 @@ def _ensure_contract_columns():
         'purchase_type': 'ALTER TABLE contracts ADD COLUMN purchase_type VARCHAR(64)',
         'stamp_tax_rate': 'ALTER TABLE contracts ADD COLUMN stamp_tax_rate VARCHAR(32)',
         'pricing_method': 'ALTER TABLE contracts ADD COLUMN pricing_method VARCHAR(64)',
+        'copy_count': 'ALTER TABLE contracts ADD COLUMN copy_count INTEGER',
+        'save_place': 'ALTER TABLE contracts ADD COLUMN save_place VARCHAR(50)',
         'is_archived': 'ALTER TABLE contracts ADD COLUMN is_archived VARCHAR(32)',
         'project': 'ALTER TABLE contracts ADD COLUMN project VARCHAR(255)',
         'fullbody': 'ALTER TABLE contracts ADD COLUMN fullbody TEXT',
@@ -68,6 +70,8 @@ def _drop_legacy_contract_columns():
         'purchase_type',
         'stamp_tax_rate',
         'pricing_method',
+        'copy_count',
+        'save_place',
         'is_archived',
         'project',
         'fullbody',
@@ -105,6 +109,8 @@ def _drop_legacy_contract_columns():
             purchase_type VARCHAR(64),
             stamp_tax_rate VARCHAR(32),
             pricing_method VARCHAR(64),
+            copy_count INTEGER,
+            save_place VARCHAR(50),
             is_archived VARCHAR(32),
             project VARCHAR(255),
             fullbody TEXT,
@@ -124,14 +130,14 @@ def _drop_legacy_contract_columns():
         INSERT INTO contracts (
             id, contract_number, contract_name, contract_unit, amount, currency,
             handler, department, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, is_archived, project,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
             fullbody, start_date, end_date, status, file_path, created_by,
             created_at, updated_at
         )
         SELECT
             id, contract_number, contract_name, contract_unit, amount, currency,
             handler, department, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, is_archived, project,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
             fullbody, start_date, end_date, status, file_path, created_by,
             created_at, updated_at
         FROM contracts_legacy_drop_fields

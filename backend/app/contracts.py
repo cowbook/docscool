@@ -171,6 +171,8 @@ EXCEL_HEADER_ALIASES = {
     'purchase_type': ['采购类型', '采购类别'],
     'stamp_tax_rate': ['印花税率', '税率'],
     'pricing_method': ['计价方式', '定价方式'],
+    'copy_count': ['份数', '份数copy_count', '合同份数'],
+    'save_place': ['存档位置', '归档位置', '保存位置', 'save_place'],
     'project': ['项目', '项目名称'],
 }
 
@@ -270,6 +272,8 @@ def _match_excel_field(header_text: str) -> str:
         ('purchase_type', ('采购类型', '采购类别')),
         ('stamp_tax_rate', ('印花税率', '税率')),
         ('pricing_method', ('计价方式', '定价方式')),
+        ('copy_count', ('份数', '份数copy_count', '合同份数')),
+        ('save_place', ('存档位置', '归档位置', '保存位置', 'save_place')),
         ('is_archived', ('是否归档', '归档状态')),
         ('project', ('项目名称', '项目')),
     ]
@@ -418,6 +422,8 @@ def _build_contract_import_template():
         '合同编号',
         '合同单位',
         '合同金额',
+        '份数',
+        '存档位置',
         '承办人',
         '承办部门',
         '合同确定方式',
@@ -428,7 +434,7 @@ def _build_contract_import_template():
         '计价方式',
         '项目',
     ]
-    widths = [26, 20, 24, 16, 14, 18, 18, 14, 14, 14, 12, 14, 22]
+    widths = [26, 20, 24, 16, 10, 20, 14, 18, 18, 14, 14, 14, 12, 14, 22]
 
     sheet.append(headers)
     header_fill = PatternFill(fill_type='solid', fgColor='DCE6F1')
@@ -446,6 +452,8 @@ def _build_contract_import_template():
         ['说明', '内容'],
         ['必要列', '合同名称、承办部门'],
         ['金额规则', '请填写元单位的纯数字，可保留 8 位及以上小数'],
+        ['份数规则', '选填，纯数字（整数）'],
+        ['存档位置规则', '选填，最多50个字符'],
         ['日期格式', '建议使用 YYYY-MM-DD，例如 2026-04-03'],
         ['承办部门', '必须填写系统中已经配置的部门名称'],
         ['项目', '如填写，必须填写系统中已配置的项目名称'],
@@ -573,6 +581,8 @@ def _build_import_payload_from_row(row, field_indexes, header_labels, option_set
     payload['contract_name'] = payload['contract_name'].replace('\n', ' ').strip()
     payload['contract_number'] = payload['contract_number'].strip()
     payload['contract_unit'] = payload['contract_unit'].strip()
+    payload['copy_count'] = payload.get('copy_count', '').strip()
+    payload['save_place'] = payload.get('save_place', '').strip()
 
     return _normalize_excel_option_fields(payload, option_sets)
 
@@ -593,6 +603,16 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     amount = _safe_decimal(contract_amount_text) if contract_amount_text else None
     if contract_amount_text and amount is None:
         return None, 'contract_amount is invalid', 400, False
+
+    copy_count_text = str(payload.get('copy_count') or '').strip()
+    if copy_count_text and not re.fullmatch(r'\d+', copy_count_text):
+        return None, 'copy_count is invalid', 400, False
+    copy_count = int(copy_count_text) if copy_count_text else None
+
+    save_place_text = str(payload.get('save_place') or '').strip()
+    if len(save_place_text) > 50:
+        return None, 'save_place is too long (max 50)', 400, False
+    save_place = save_place_text or None
 
     contract_number = (payload.get('contract_number') or '').strip()
     if not contract_number:
@@ -627,6 +647,8 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 existing_contract.purchase_type = (payload.get('purchase_type') or '').strip() or None
                 existing_contract.stamp_tax_rate = normalized_stamp_tax_rate or None
                 existing_contract.pricing_method = (payload.get('pricing_method') or '').strip() or None
+                existing_contract.copy_count = copy_count
+                existing_contract.save_place = save_place
                 existing_contract.project = (payload.get('project') or '').strip() or None
                 existing_contract.fullbody = (payload.get('fullbody') or '').strip() or None
                 existing_contract.start_date = _parse_date(payload.get('start_date'))
@@ -662,6 +684,8 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         purchase_type=(payload.get('purchase_type') or '').strip() or None,
         stamp_tax_rate=normalized_stamp_tax_rate or None,
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
+        copy_count=copy_count,
+        save_place=save_place,
         is_archived='未归档',
         project=project,
         file_path=normalized_file_path or None,
@@ -1247,6 +1271,8 @@ def _build_folder_file_items(relative_folder_path: str):
             'contract_type': contract_payload.get('contract_type') if contract_payload else '',
             'purchase_type': contract_payload.get('purchase_type') if contract_payload else '',
             'stamp_tax_rate': contract_payload.get('stamp_tax_rate') if contract_payload else '',
+            'copy_count': contract_payload.get('copy_count') if contract_payload else None,
+            'save_place': contract_payload.get('save_place') if contract_payload else '',
             'is_archived': contract_payload.get('is_archived') if contract_payload else '',
             'project': contract_payload.get('project') if contract_payload else '',
             'contract': contract_payload,
@@ -2541,6 +2567,7 @@ def list_contracts():
             Contract.purchase_type.ilike(pattern),
             Contract.stamp_tax_rate.ilike(pattern),
             Contract.pricing_method.ilike(pattern),
+            Contract.save_place.ilike(pattern),
             Contract.is_archived.ilike(pattern),
             Contract.project.ilike(pattern),
             Contract.status.ilike(pattern),
@@ -2548,6 +2575,7 @@ def list_contracts():
             Contract.fullbody.ilike(pattern),
             Contract.created_by.ilike(pattern),
             cast(Contract.amount, String).ilike(pattern),
+            cast(Contract.copy_count, String).ilike(pattern),
             cast(Contract.handling_date, String).ilike(pattern),
             cast(Contract.start_date, String).ilike(pattern),
             cast(Contract.end_date, String).ilike(pattern),
@@ -2951,6 +2979,19 @@ def update_contract(contract_id):
         record.stamp_tax_rate = (body.get('stamp_tax_rate') or '').strip() or None
     if 'pricing_method' in body:
         record.pricing_method = (body.get('pricing_method') or '').strip() or None
+    if 'copy_count' in body:
+        copy_count_text = str(body.get('copy_count') or '').strip()
+        if copy_count_text:
+            if not re.fullmatch(r'\d+', copy_count_text):
+                return jsonify({'message': 'copy_count is invalid'}), 400
+            record.copy_count = int(copy_count_text)
+        else:
+            record.copy_count = None
+    if 'save_place' in body:
+        save_place = (body.get('save_place') or '').strip()
+        if len(save_place) > 50:
+            return jsonify({'message': 'save_place is too long (max 50)'}), 400
+        record.save_place = save_place or None
     if 'is_archived' in body:
         record.is_archived = (body.get('is_archived') or '').strip() or None
     if 'project' in body:

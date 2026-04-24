@@ -242,12 +242,14 @@
             <el-table-column prop="contract_number" label="合同编号" min-width="140" />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
+            <el-table-column prop="copy_count" label="份数" min-width="80" />
             <el-table-column prop="handler" label="承办人" min-width="100" />
             <el-table-column prop="handling_department" label="承办部门" min-width="130" />
             <el-table-column prop="handling_date" label="承办日期" min-width="120" />
             <el-table-column prop="contract_type" label="合同类型" min-width="110" />
             <el-table-column prop="purchase_type" label="采购类型" min-width="110" />
             <el-table-column prop="stamp_tax_rate" label="印花税率" min-width="100" />
+            <el-table-column prop="save_place" label="存档位置" min-width="140" show-overflow-tooltip />
          
             <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
 
@@ -590,12 +592,14 @@ const filteredFiles = computed(() => {
       row?.contract_number,
       row?.contract_unit,
       row?.contract_amount,
+      row?.copy_count,
       row?.handler,
       row?.handling_department,
       row?.handling_date,
       row?.contract_type,
       row?.purchase_type,
       row?.stamp_tax_rate,
+      row?.save_place,
       row?.is_archived,
       row?.project,
     ]

@@ -31,6 +31,8 @@ class Contract(db.Model):
     purchase_type = db.Column(db.String(64), nullable=True)
     stamp_tax_rate = db.Column(db.String(32), nullable=True)
     pricing_method = db.Column(db.String(64), nullable=True)
+    copy_count = db.Column(db.Integer, nullable=True)
+    save_place = db.Column(db.String(50), nullable=True)
     is_archived = db.Column(db.String(32), nullable=True)
     project = db.Column(db.String(255), nullable=True)
     fullbody = db.Column(db.Text, nullable=True)
@@ -60,6 +62,8 @@ class Contract(db.Model):
             'purchase_type': self.purchase_type,
             'stamp_tax_rate': self.stamp_tax_rate,
             'pricing_method': self.pricing_method,
+            'copy_count': self.copy_count,
+            'save_place': self.save_place,
             'is_archived': self.is_archived,
             'project': self.project,
             'start_date': self.start_date.isoformat() if self.start_date else None,

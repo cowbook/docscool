@@ -152,6 +152,7 @@
         </el-table-column>
         <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
         <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
+        <el-table-column prop="copy_count" label="份数" min-width="80" sortable />
         <el-table-column prop="handler" label="承办人" min-width="100" sortable />
         <el-table-column prop="handling_department" label="承办部门" min-width="130" sortable />
         <el-table-column prop="handling_date" label="承办日期" min-width="110" sortable />
@@ -159,6 +160,7 @@
         <el-table-column prop="purchase_type" label="采购类型" min-width="110" sortable />
         <el-table-column prop="stamp_tax_rate" label="印花税率" min-width="100" sortable />
         <el-table-column prop="is_archived" label="是否归档" min-width="90" sortable />
+        <el-table-column prop="save_place" label="存档位置" min-width="140" show-overflow-tooltip sortable />
         <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip sortable />
      
         <el-table-column label="操作" width="140" fixed="right" align="center">
@@ -217,6 +219,8 @@
             <div>• 合同编号: 必须唯一，如果编号存在，则更新合同内容</div>
             <div>• 归档状态: 所有导入的合同自动归档到"未归档",已归档的合同由管理员进行修改</div>
             <div>• 合同金额: 从MIS导出的“合同金额（万元”）必须转成元，字段名必须重新命名为“合同金额” </div>
+            <div>• 份数(copy_count): 选填，纯数字（整数）</div>
+            <div>• 存档位置(save_place): 选填，最多50个字符</div>
           </div>
         </el-alert>
       </div>
