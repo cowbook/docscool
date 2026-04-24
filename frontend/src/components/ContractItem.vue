@@ -91,11 +91,6 @@
                   @blur="normalizeContractAmount"
                 />
               </el-form-item>
-              <el-form-item label="审批状态">
-                <el-select v-model="form.approval_status" clearable placeholder="可留空" style="width: 100%">
-                  <el-option v-for="item in normalizedOptions.approval_status" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
               <el-form-item label="承办人">
                 <el-input v-model="form.handler" clearable placeholder="可留空" />
               </el-form-item>
@@ -117,13 +112,13 @@
                   <el-option v-for="item in normalizedOptions.contract_type" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="发票类型">
-                <el-select v-model="form.invoice_type" placeholder="请选择发票类型" style="width: 100%">
-                  <el-option v-for="item in normalizedOptions.invoice_type" :key="item" :label="item" :value="item" />
+              <el-form-item label="采购类型">
+                <el-select v-model="form.purchase_type" placeholder="请选择采购类型" style="width: 100%">
+                  <el-option v-for="item in normalizedOptions.purchase_type" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="税率">
-                <el-input v-model="form.tax_rate" />
+              <el-form-item label="印花税率">
+                <el-input v-model="form.stamp_tax_rate" placeholder="根据合同类型自动回填，可手动调整" clearable />
               </el-form-item>
               <el-form-item label="计价方式">
                 <el-select v-model="form.pricing_method" placeholder="请选择计价方式" style="width: 100%">
@@ -369,14 +364,20 @@ const aiParsing = computed(() => props.aiParsing)
 const departments = computed(() => props.departments || [])
 
 const normalizedOptions = computed(() => ({
-  approval_status: props.options?.approval_status || [],
   contract_determination_method: props.options?.contract_determination_method || [],
   contract_type: props.options?.contract_type || [],
-  invoice_type: props.options?.invoice_type || [],
+  purchase_type: props.options?.purchase_type || [],
+  stamp_tax_rate_by_contract_type: props.options?.stamp_tax_rate_by_contract_type || {},
   pricing_method: props.options?.pricing_method || [],
   is_archived: props.options?.is_archived || [],
   project: props.options?.project || [],
 }))
+
+const getStampTaxRateByContractType = (contractType) => {
+  const mapping = normalizedOptions.value.stamp_tax_rate_by_contract_type || {}
+  const key = String(contractType || '').trim()
+  return key ? String(mapping[key] || '').trim() : ''
+}
 
 const dialogVisible = ref(false)
 const textDialogVisible = ref(false)
@@ -416,14 +417,13 @@ const form = reactive({
   contract_number: '',
   contract_unit: '',
   contract_amount: '',
-  approval_status: '',
   handler: '',
   handling_department: '',
   contract_determination_method: '',
   handling_date: '',
   contract_type: '',
-  invoice_type: '',
-  tax_rate: '',
+  purchase_type: '',
+  stamp_tax_rate: '',
   pricing_method: '',
   is_archived: '未归档',
   project: '',
@@ -445,14 +445,13 @@ const resetForm = () => {
   form.contract_number = ''
   form.contract_unit = ''
   form.contract_amount = ''
-  form.approval_status = ''
   form.handler = ''
   form.handling_department = ''
   form.contract_determination_method = ''
   form.handling_date = ''
   form.contract_type = ''
-  form.invoice_type = ''
-  form.tax_rate = ''
+  form.purchase_type = ''
+  form.stamp_tax_rate = ''
   form.pricing_method = ''
   form.is_archived = '未归档'
   form.project = ''
@@ -486,14 +485,13 @@ const populateFormFromContract = (row) => {
   form.contract_number = row.contract_number || ''
   form.contract_unit = row.contract_unit || ''
   form.contract_amount = normalizeAmountInputValue(row.contract_amount)
-  form.approval_status = row.approval_status || ''
   form.handler = row.handler || ''
   form.handling_department = row.handling_department || row.department || ''
   form.contract_determination_method = row.contract_determination_method || ''
   form.handling_date = row.handling_date || ''
   form.contract_type = row.contract_type || ''
-  form.invoice_type = row.invoice_type || ''
-  form.tax_rate = row.tax_rate || ''
+  form.purchase_type = row.purchase_type || ''
+  form.stamp_tax_rate = row.stamp_tax_rate || getStampTaxRateByContractType(row.contract_type)
   form.pricing_method = row.pricing_method || ''
   form.is_archived = row.is_archived || '未归档'
   form.project = row.project || ''
@@ -506,14 +504,13 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['contract_number', 'contract_number'],
     ['contract_unit', 'contract_unit'],
     ['contract_amount', 'contract_amount'],
-    ['approval_status', 'approval_status'],
     ['handler', 'handler'],
     ['handling_department', 'handling_department'],
     ['contract_determination_method', 'contract_determination_method'],
     ['handling_date', 'handling_date'],
     ['contract_type', 'contract_type'],
-    ['invoice_type', 'invoice_type'],
-    ['tax_rate', 'tax_rate'],
+    ['purchase_type', 'purchase_type'],
+    ['stamp_tax_rate', 'stamp_tax_rate'],
     ['pricing_method', 'pricing_method'],
     ['is_archived', 'is_archived'],
     ['project', 'project'],
@@ -547,14 +544,13 @@ const applyParsedFields = (fields) => {
   form.contract_number = fields?.contract_number || ''
   form.contract_unit = fields?.contract_unit || ''
   form.contract_amount = normalizeAmountInputValue(fields?.contract_amount || '')
-  form.approval_status = fields?.approval_status || ''
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
   form.contract_determination_method = fields?.contract_determination_method || ''
   form.handling_date = fields?.handling_date || ''
   form.contract_type = fields?.contract_type || ''
-  form.invoice_type = fields?.invoice_type || ''
-  form.tax_rate = fields?.tax_rate || ''
+  form.purchase_type = fields?.purchase_type || ''
+  form.stamp_tax_rate = fields?.stamp_tax_rate || getStampTaxRateByContractType(fields?.contract_type)
   form.pricing_method = fields?.pricing_method || ''
   form.is_archived = fields?.is_archived || '未归档'
   form.project = fields?.project || ''
@@ -660,12 +656,12 @@ const unbindContract = async () => {
 const saveContract = async () => {
   const normalizedAmount = normalizeAmountInputValue(form.contract_amount)
 
-  if (!form.contract_name || !form.handling_department || !normalizedAmount) {
+  if (!form.contract_name || !form.handling_department) {
     ElMessage.warning('请填写必要字段')
     return
   }
 
-  if (!/^\d+(?:\.\d+)?$/.test(normalizedAmount)) {
+  if (normalizedAmount && !/^\d+(?:\.\d+)?$/.test(normalizedAmount)) {
     ElMessage.warning('合同金额请输入纯数字，可带小数点')
     return
   }
@@ -691,14 +687,13 @@ const saveContract = async () => {
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
         contract_amount: normalizedAmount,
-        approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
         contract_type: form.contract_type,
-        invoice_type: form.invoice_type,
-        tax_rate: form.tax_rate,
+        purchase_type: form.purchase_type,
+        stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
@@ -712,14 +707,13 @@ const saveContract = async () => {
         contract_name: form.contract_name,
         contract_unit: form.contract_unit,
         contract_amount: normalizedAmount,
-        approval_status: form.approval_status,
         handler: form.handler,
         handling_department: form.handling_department,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
         contract_type: form.contract_type,
-        invoice_type: form.invoice_type,
-        tax_rate: form.tax_rate,
+        purchase_type: form.purchase_type,
+        stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
         project: form.project,
@@ -765,6 +759,16 @@ const syncEditingFileState = async (filePath) => {
 
   await loadPdfPreviewForRow({ id: editing.value.id, file_path: normalizedFilePath }, false)
 }
+
+watch(
+  () => form.contract_type,
+  (value, oldValue) => {
+    if (value === oldValue) {
+      return
+    }
+    form.stamp_tax_rate = getStampTaxRateByContractType(value)
+  },
+)
 
 const doUpload = async (contractId, file) => {
   const fd = new FormData()

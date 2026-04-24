@@ -85,9 +85,6 @@
             <el-option value="__empty__" label="(空)" />
             <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
           </el-select>
-          <el-select v-model="filters.approval_status" clearable placeholder="按审批状态筛选" style="width: 180px" @change="loadContracts">
-            <el-option v-for="item in options.approval_status" :key="item" :label="item" :value="item" />
-          </el-select>
 
           <el-input
             v-model="filters.keyword"
@@ -155,11 +152,12 @@
         </el-table-column>
         <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
         <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
-        <el-table-column prop="approval_status" label="审批状态" min-width="100" sortable />
         <el-table-column prop="handler" label="承办人" min-width="100" sortable />
         <el-table-column prop="handling_department" label="承办部门" min-width="130" sortable />
         <el-table-column prop="handling_date" label="承办日期" min-width="110" sortable />
         <el-table-column prop="contract_type" label="合同类型" min-width="110" sortable />
+        <el-table-column prop="purchase_type" label="采购类型" min-width="110" sortable />
+        <el-table-column prop="stamp_tax_rate" label="印花税率" min-width="100" sortable />
         <el-table-column prop="is_archived" label="是否归档" min-width="90" sortable />
         <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip sortable />
      
@@ -357,17 +355,16 @@ const pageSize = ref(100)
 const filters = reactive({
   handling_department: '',
   project: '',
-  approval_status: '',
   keyword: '',
   has_file: false,
   is_archived: null,
 })
 
 const options = reactive({
-  approval_status: [],
   contract_determination_method: [],
   contract_type: [],
-  invoice_type: [],
+  purchase_type: [],
+  stamp_tax_rate_by_contract_type: {},
   pricing_method: [],
   is_archived: [],
   project: [],
@@ -426,10 +423,10 @@ const loadDepartments = async () => {
 
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
-  options.approval_status = data?.approval_status || []
   options.contract_determination_method = data?.contract_determination_method || []
   options.contract_type = data?.contract_type || []
-  options.invoice_type = data?.invoice_type || []
+  options.purchase_type = data?.purchase_type || []
+  options.stamp_tax_rate_by_contract_type = data?.stamp_tax_rate_by_contract_type || {}
   options.pricing_method = data?.pricing_method || []
   options.is_archived = data?.is_archived || []
   options.project = data?.project || []
@@ -469,7 +466,6 @@ const loadContracts = async () => {
     params: {
       handling_department: filters.handling_department || undefined,
       project: filters.project || undefined,
-      approval_status: filters.approval_status || undefined,
       keyword: filters.keyword || undefined,
       has_file: filters.has_file || undefined,
       is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,

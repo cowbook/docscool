@@ -21,16 +21,15 @@ class Contract(db.Model):
     contract_number = db.Column(db.String(64), unique=True, nullable=True, index=True)
     contract_name = db.Column(db.String(255), nullable=False)
     contract_unit = db.Column(db.String(255), nullable=True)
-    amount = db.Column(db.Numeric(20, 8), nullable=False)
+    amount = db.Column(db.Numeric(20, 8), nullable=True)
     currency = db.Column(db.String(16), nullable=False, default='CNY')
-    approval_status = db.Column(db.String(64), nullable=True)
     handler = db.Column(db.String(64), nullable=True)
     department = db.Column(db.String(128), nullable=False, index=True)
     contract_determination_method = db.Column(db.String(64), nullable=True)
     handling_date = db.Column(db.Date, nullable=True)
     contract_type = db.Column(db.String(64), nullable=True)
-    invoice_type = db.Column(db.String(64), nullable=True)
-    tax_rate = db.Column(db.String(16), nullable=True)
+    purchase_type = db.Column(db.String(64), nullable=True)
+    stamp_tax_rate = db.Column(db.String(32), nullable=True)
     pricing_method = db.Column(db.String(64), nullable=True)
     is_archived = db.Column(db.String(32), nullable=True)
     project = db.Column(db.String(255), nullable=True)
@@ -52,15 +51,14 @@ class Contract(db.Model):
             'contract_amount': _decimal_to_string(self.amount),
             'amount': _decimal_to_string(self.amount),
             'currency': self.currency,
-            'approval_status': self.approval_status,
             'handler': self.handler,
             'handling_department': self.department,
             'department': self.department,
             'contract_determination_method': self.contract_determination_method,
             'handling_date': self.handling_date.isoformat() if self.handling_date else None,
             'contract_type': self.contract_type,
-            'invoice_type': self.invoice_type,
-            'tax_rate': self.tax_rate,
+            'purchase_type': self.purchase_type,
+            'stamp_tax_rate': self.stamp_tax_rate,
             'pricing_method': self.pricing_method,
             'is_archived': self.is_archived,
             'project': self.project,

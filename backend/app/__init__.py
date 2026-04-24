@@ -32,13 +32,12 @@ DEFAULT_DEPARTMENT_NAME = '财务部'
 def _ensure_contract_columns():
     required_columns = {
         'contract_unit': 'ALTER TABLE contracts ADD COLUMN contract_unit VARCHAR(255)',
-        'approval_status': 'ALTER TABLE contracts ADD COLUMN approval_status VARCHAR(64)',
         'handler': 'ALTER TABLE contracts ADD COLUMN handler VARCHAR(64)',
         'contract_determination_method': 'ALTER TABLE contracts ADD COLUMN contract_determination_method VARCHAR(64)',
         'handling_date': 'ALTER TABLE contracts ADD COLUMN handling_date DATE',
         'contract_type': 'ALTER TABLE contracts ADD COLUMN contract_type VARCHAR(64)',
-        'invoice_type': 'ALTER TABLE contracts ADD COLUMN invoice_type VARCHAR(64)',
-        'tax_rate': 'ALTER TABLE contracts ADD COLUMN tax_rate VARCHAR(16)',
+        'purchase_type': 'ALTER TABLE contracts ADD COLUMN purchase_type VARCHAR(64)',
+        'stamp_tax_rate': 'ALTER TABLE contracts ADD COLUMN stamp_tax_rate VARCHAR(32)',
         'pricing_method': 'ALTER TABLE contracts ADD COLUMN pricing_method VARCHAR(64)',
         'is_archived': 'ALTER TABLE contracts ADD COLUMN is_archived VARCHAR(32)',
         'project': 'ALTER TABLE contracts ADD COLUMN project VARCHAR(255)',
@@ -50,6 +49,97 @@ def _ensure_contract_columns():
     for column, ddl in required_columns.items():
         if column not in existing:
             db.session.execute(db.text(ddl))
+    db.session.commit()
+
+
+def _drop_legacy_contract_columns():
+    expected_columns = {
+        'id',
+        'contract_number',
+        'contract_name',
+        'contract_unit',
+        'amount',
+        'currency',
+        'handler',
+        'department',
+        'contract_determination_method',
+        'handling_date',
+        'contract_type',
+        'purchase_type',
+        'stamp_tax_rate',
+        'pricing_method',
+        'is_archived',
+        'project',
+        'fullbody',
+        'start_date',
+        'end_date',
+        'status',
+        'file_path',
+        'created_by',
+        'created_at',
+        'updated_at',
+    }
+    table_info = db.session.execute(db.text('PRAGMA table_info(contracts)')).fetchall()
+    existing = {row[1] for row in table_info}
+    amount_column = next((row for row in table_info if row[1] == 'amount'), None)
+    amount_is_not_null = bool(amount_column and int(amount_column[3] or 0) == 1)
+    if not (existing - expected_columns) and not amount_is_not_null:
+        return
+
+    db.session.execute(db.text('BEGIN IMMEDIATE'))
+    db.session.execute(db.text('ALTER TABLE contracts RENAME TO contracts_legacy_drop_fields'))
+    db.session.execute(db.text(
+        '''
+        CREATE TABLE contracts (
+            id INTEGER NOT NULL,
+            contract_number VARCHAR(64),
+            contract_name VARCHAR(255) NOT NULL,
+            contract_unit VARCHAR(255),
+            amount NUMERIC(20, 8),
+            currency VARCHAR(16) NOT NULL,
+            handler VARCHAR(64),
+            department VARCHAR(128) NOT NULL,
+            contract_determination_method VARCHAR(64),
+            handling_date DATE,
+            contract_type VARCHAR(64),
+            purchase_type VARCHAR(64),
+            stamp_tax_rate VARCHAR(32),
+            pricing_method VARCHAR(64),
+            is_archived VARCHAR(32),
+            project VARCHAR(255),
+            fullbody TEXT,
+            start_date DATE,
+            end_date DATE,
+            status VARCHAR(32) NOT NULL,
+            file_path VARCHAR(512),
+            created_by VARCHAR(128) NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id)
+        )
+        '''
+    ))
+    db.session.execute(db.text(
+        '''
+        INSERT INTO contracts (
+            id, contract_number, contract_name, contract_unit, amount, currency,
+            handler, department, contract_determination_method,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, is_archived, project,
+            fullbody, start_date, end_date, status, file_path, created_by,
+            created_at, updated_at
+        )
+        SELECT
+            id, contract_number, contract_name, contract_unit, amount, currency,
+            handler, department, contract_determination_method,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, is_archived, project,
+            fullbody, start_date, end_date, status, file_path, created_by,
+            created_at, updated_at
+        FROM contracts_legacy_drop_fields
+        '''
+    ))
+    db.session.execute(db.text('DROP TABLE contracts_legacy_drop_fields'))
+    db.session.execute(db.text('CREATE UNIQUE INDEX IF NOT EXISTS ix_contracts_contract_number ON contracts (contract_number)'))
+    db.session.execute(db.text('CREATE INDEX IF NOT EXISTS ix_contracts_department ON contracts (department)'))
     db.session.commit()
 
 
@@ -132,6 +222,7 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         _ensure_contract_columns()
+        _drop_legacy_contract_columns()
         _seed_departments()
         _seed_project_options()
         _migrate_legacy_file_paths(app)

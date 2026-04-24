@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlparse
 from email.utils import format_datetime
 from datetime import timezone
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import requests
 from pypdf import PdfReader
@@ -43,33 +43,53 @@ CONTRACT_FIELD_KEYS = [
     'contract_number',
     'contract_unit',
     'contract_amount',
-    'approval_status',
     'handler',
     'handling_department',
     'contract_determination_method',
     'handling_date',
     'contract_type',
-    'invoice_type',
-    'tax_rate',
+    'purchase_type',
+    'stamp_tax_rate',
     'pricing_method',
     'is_archived',
     'project',
 ]
 
+STAMP_TAX_RATE_BY_CONTRACT_TYPE = {
+    '买卖合同': '0.03%',
+    '借款合同': '0.005%',
+    '租赁合同': '0.1%',
+    '承揽合同': '0.03%',
+    '建设工程合同': '0.03%',
+    '运输合同': '0.03%',
+    '技术合同': '0.03%',
+    '保管合同': '0.1%',
+    '仓储合同': '0.1%',
+    '财产保险合同': '0.1%',
+    '人力资源': '',
+    '其它': '',
+}
+
+LEGACY_INVALID_CONTRACT_TYPES = {
+    '会议承办',
+    '会议承办合同',
+    '工程类',
+    '采购类',
+    '服务类',
+}
+
 OPTION_FIELD_DEFAULTS = {
     'project': '无',
-    'approval_status': '归档',
-    'contract_determination_method': '单一来源',
+    'contract_determination_method': '直接采购',
     'is_archived': '已归档',
 }
 
 
 CSV_OPTION_DEFAULTS = {
-    'approval_status': ['作废', '合同订立', '归档', '结束', '编辑', '部门会签'],
-    'contract_determination_method': ['公开招标', '公开询价', '协商性谈判', '单一来源', '竞争性谈判', '续签', '补充合同', '议标', '询价', '邀请招标'],
-    'contract_type': ['工程类', '服务类', '采购类'],
-    'invoice_type': ['其他发票', '增值税专用发票', '增值税普通发票'],
-    'pricing_method': ['单价合同', '总价合同'],
+    'contract_determination_method': ['询比采购', '竞价采购', '谈判采购', '直接采购','非采购类'],
+    'contract_type': ['买卖合同', '借款合同', '租赁合同', '承揽合同', '建设工程合同', '运输合同', '技术合同', '保管合同', '仓储合同', '财产保险合同','人力资源','其它'],
+    'purchase_type': ['工程', '服务', '设备采购', '非采购类'],
+    'pricing_method': ['单价合同', '总价合同','其他'],
     'is_archived': ['已归档', '未归档'],
 }
 
@@ -122,6 +142,15 @@ AMOUNT_UNIT_TO_WAN = {
     '亿': Decimal('10000'),
 }
 
+AI_AMOUNT_UNIT_TO_YUAN = {
+    '元': Decimal('1'),
+    '千元': Decimal('1000'),
+    '万元': Decimal('10000'),
+    '万': Decimal('10000'),
+    '亿元': Decimal('100000000'),
+    '亿': Decimal('100000000'),
+}
+
 
 EXCEL_ALLOWED_EXTENSIONS = {'.xls', '.xlsx'}
 
@@ -134,14 +163,13 @@ EXCEL_HEADER_ALIASES = {
     'contract_number': ['合同编号', '编号', '协议编号', '单号', '流程编号', '表单编号'],
     'contract_unit': ['合同单位', '对方单位', '签约单位', '相对方', '供应商', '供应商名称', '客户名称'],
     'contract_amount': ['合同金额', '金额', '价税合计', '含税金额', '总价', '合同总价', '合同总金额'],
-    'approval_status': ['审批状态', '审核状态', '状态', '流程状态', '审批结果'],
     'handler': ['承办人', '经办人', '负责人', '申请人', '发起人', '填报人'],
     'handling_department': ['承办部门', '部门', '归口部门', '申请部门', '发起部门', '所属部门'],
     'contract_determination_method': ['合同确定方式', '确定方式', '采购方式', '招采方式', '定标方式'],
     'handling_date': ['承办日期', '处理日期', '审批日期', '日期', '发起日期', '申请日期', '创建时间', '提交时间'],
     'contract_type': ['合同类型', '类型'],
-    'invoice_type': ['发票类型', '票据类型'],
-    'tax_rate': ['税率'],
+    'purchase_type': ['采购类型', '采购类别'],
+    'stamp_tax_rate': ['印花税率', '税率'],
     'pricing_method': ['计价方式', '定价方式'],
     'project': ['项目', '项目名称'],
 }
@@ -168,6 +196,15 @@ def _safe_decimal(value):
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _normalize_contract_type_value(value: str) -> str:
+    text = (value or '').strip()
+    if not text:
+        return ''
+    if text in LEGACY_INVALID_CONTRACT_TYPES:
+        return ''
+    return text
 
 
 def _format_decimal_plain(value: Decimal) -> str:
@@ -223,16 +260,15 @@ def _match_excel_field(header_text: str) -> str:
     contains_rules = [
         ('contract_name', ('合同名称', '合同名', '流程标题', '审批标题', '表单标题', '标题')),
         ('contract_number', ('合同编号', '协议编号', '流程编号', '表单编号', '编号', '单号')),
-        ('contract_unit', ('合同单位', '对方单位', '签约单位', '相对方', '供应商', '客户名称')),
+        ('contract_unit', ('合同单位', '签订','对方单位', '签约单位', '相对方', '供应商', '客户名称')),
         ('contract_amount', ('合同金额', '合同总价', '合同总金额', '价税合计', '含税金额', '总价', '金额')),
-        ('approval_status', ('审批状态', '审核状态', '流程状态', '审批结果', '状态')),
         ('handler', ('承办人', '经办人', '负责人', '申请人', '发起人', '填报人')),
         ('handling_department', ('承办部门', '归口部门', '申请部门', '发起部门', '所属部门', '部门')),
         ('contract_determination_method', ('合同确定方式', '确定方式', '采购方式', '招采方式', '定标方式')),
-        ('handling_date', ('承办日期', '处理日期', '审批日期', '发起日期', '申请日期', '创建时间', '提交时间', '日期')),
+        ('handling_date', ('承办日期', '日期','处理日期', '审批日期', '发起日期', '申请日期', '创建时间', '提交时间', '日期')),
         ('contract_type', ('合同类型',)),
-        ('invoice_type', ('发票类型', '票据类型')),
-        ('tax_rate', ('税率',)),
+        ('purchase_type', ('采购类型', '采购类别')),
+        ('stamp_tax_rate', ('印花税率', '税率')),
         ('pricing_method', ('计价方式', '定价方式')),
         ('is_archived', ('是否归档', '归档状态')),
         ('project', ('项目名称', '项目')),
@@ -382,18 +418,17 @@ def _build_contract_import_template():
         '合同编号',
         '合同单位',
         '合同金额',
-        '审批状态',
         '承办人',
         '承办部门',
         '合同确定方式',
         '承办日期',
         '合同类型',
-        '发票类型',
-        '税率',
+        '采购类型',
+        '印花税率',
         '计价方式',
         '项目',
     ]
-    widths = [26, 20, 24, 16, 14, 14, 18, 18, 14, 14, 16, 12, 14, 22]
+    widths = [26, 20, 24, 16, 14, 18, 18, 14, 14, 14, 12, 14, 22]
 
     sheet.append(headers)
     header_fill = PatternFill(fill_type='solid', fgColor='DCE6F1')
@@ -409,7 +444,7 @@ def _build_contract_import_template():
     notes = workbook.create_sheet('填写说明')
     note_rows = [
         ['说明', '内容'],
-        ['必要列', '合同名称、合同金额、承办部门'],
+        ['必要列', '合同名称、承办部门'],
         ['金额规则', '请填写元单位的纯数字，可保留 8 位及以上小数'],
         ['日期格式', '建议使用 YYYY-MM-DD，例如 2026-04-03'],
         ['承办部门', '必须填写系统中已经配置的部门名称'],
@@ -495,11 +530,6 @@ def _normalize_excel_option_fields(fields: dict, option_sets: dict) -> dict:
         option_sets.get('project', []),
         (normalized.get('project') or '').strip(),
     )
-    normalized['approval_status'] = _match_option_value(
-        normalized.get('approval_status', ''),
-        option_sets.get('approval_status', []),
-        (normalized.get('approval_status') or '').strip(),
-    )
     normalized['contract_determination_method'] = _match_option_value(
         normalized.get('contract_determination_method', ''),
         option_sets.get('contract_determination_method', []),
@@ -510,15 +540,15 @@ def _normalize_excel_option_fields(fields: dict, option_sets: dict) -> dict:
         option_sets.get('contract_type', []),
         (normalized.get('contract_type') or '').strip(),
     )
+    normalized['purchase_type'] = _match_option_value(
+        normalized.get('purchase_type', ''),
+        option_sets.get('purchase_type', []),
+        (normalized.get('purchase_type') or '').strip(),
+    )
     normalized['pricing_method'] = _match_option_value(
         normalized.get('pricing_method', ''),
         option_sets.get('pricing_method', []),
         (normalized.get('pricing_method') or '').strip(),
-    )
-    normalized['invoice_type'] = _match_option_value(
-        normalized.get('invoice_type', ''),
-        option_sets.get('invoice_type', []),
-        (normalized.get('invoice_type') or '').strip(),
     )
     normalized['is_archived'] = _match_option_value(
         normalized.get('is_archived', ''),
@@ -551,14 +581,17 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     has_file_path_input = 'file_path' in payload or 'path' in payload
     raw_file_path = payload.get('file_path', payload.get('path'))
     normalized_file_path = _normalize_contract_file_path(raw_file_path) if has_file_path_input else None
+    normalized_contract_type = _normalize_contract_type_value(payload.get('contract_type'))
+    normalized_stamp_tax_rate = (payload.get('stamp_tax_rate') or '').strip() or STAMP_TAX_RATE_BY_CONTRACT_TYPE.get(normalized_contract_type, '')
 
-    required = ['contract_name', 'contract_amount', 'handling_department']
+    required = ['contract_name', 'handling_department']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
     if missing:
         return None, f'Missing required fields: {", ".join(missing)}', 400, False
 
-    amount = _safe_decimal(payload.get('contract_amount'))
-    if amount is None:
+    contract_amount_text = str(payload.get('contract_amount') or '').strip()
+    amount = _safe_decimal(contract_amount_text) if contract_amount_text else None
+    if contract_amount_text and amount is None:
         return None, 'contract_amount is invalid', 400, False
 
     contract_number = (payload.get('contract_number') or '').strip()
@@ -584,22 +617,21 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 existing_contract.contract_unit = (payload.get('contract_unit') or '').strip() or None
                 existing_contract.amount = amount
                 existing_contract.currency = 'CNY'
-                existing_contract.approval_status = (payload.get('approval_status') or '').strip() or None
                 existing_contract.handler = (payload.get('handler') or '').strip() or None
                 if has_file_path_input:
                     existing_contract.file_path = normalized_file_path or None
                 existing_contract.department = (payload.get('handling_department') or '').strip()
                 existing_contract.contract_determination_method = (payload.get('contract_determination_method') or '').strip() or None
                 existing_contract.handling_date = _parse_date(payload.get('handling_date'))
-                existing_contract.contract_type = (payload.get('contract_type') or '').strip() or None
-                existing_contract.invoice_type = (payload.get('invoice_type') or '').strip() or None
-                existing_contract.tax_rate = (payload.get('tax_rate') or '').strip() or None
+                existing_contract.contract_type = normalized_contract_type or None
+                existing_contract.purchase_type = (payload.get('purchase_type') or '').strip() or None
+                existing_contract.stamp_tax_rate = normalized_stamp_tax_rate or None
                 existing_contract.pricing_method = (payload.get('pricing_method') or '').strip() or None
                 existing_contract.project = (payload.get('project') or '').strip() or None
                 existing_contract.fullbody = (payload.get('fullbody') or '').strip() or None
                 existing_contract.start_date = _parse_date(payload.get('start_date'))
                 existing_contract.end_date = _parse_date(payload.get('end_date'))
-                existing_contract.status = (payload.get('approval_status') or '').strip() or (payload.get('status') or 'active').strip() or 'active'
+                existing_contract.status = (payload.get('status') or 'active').strip() or 'active'
                 return existing_contract, '', 0, True
             else:
                 return None, 'contract_number already exists', 409, False
@@ -622,14 +654,13 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         contract_unit=(payload.get('contract_unit') or '').strip() or None,
         amount=amount,
         currency='CNY',
-        approval_status=(payload.get('approval_status') or '').strip() or None,
         handler=(payload.get('handler') or '').strip() or None,
         department=department,
         contract_determination_method=(payload.get('contract_determination_method') or '').strip() or None,
         handling_date=_parse_date(payload.get('handling_date')),
-        contract_type=(payload.get('contract_type') or '').strip() or None,
-        invoice_type=(payload.get('invoice_type') or '').strip() or None,
-        tax_rate=(payload.get('tax_rate') or '').strip() or None,
+        contract_type=normalized_contract_type or None,
+        purchase_type=(payload.get('purchase_type') or '').strip() or None,
+        stamp_tax_rate=normalized_stamp_tax_rate or None,
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
         is_archived='未归档',
         project=project,
@@ -637,7 +668,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         fullbody=(payload.get('fullbody') or '').strip() or None,
         start_date=_parse_date(payload.get('start_date')),
         end_date=_parse_date(payload.get('end_date')),
-        status=(payload.get('approval_status') or '').strip() or (payload.get('status') or 'active').strip() or 'active',
+        status=(payload.get('status') or 'active').strip() or 'active',
         created_by=created_by,
     )
     return record, '', 0, False
@@ -1210,11 +1241,12 @@ def _build_folder_file_items(relative_folder_path: str):
             'contract_number': contract_payload.get('contract_number') if contract_payload else '',
             'contract_unit': contract_payload.get('contract_unit') if contract_payload else '',
             'contract_amount': contract_payload.get('contract_amount') if contract_payload else '',
-            'approval_status': contract_payload.get('approval_status') if contract_payload else '',
             'handler': contract_payload.get('handler') if contract_payload else '',
             'handling_department': contract_payload.get('handling_department') if contract_payload else '',
             'handling_date': contract_payload.get('handling_date') if contract_payload else '',
             'contract_type': contract_payload.get('contract_type') if contract_payload else '',
+            'purchase_type': contract_payload.get('purchase_type') if contract_payload else '',
+            'stamp_tax_rate': contract_payload.get('stamp_tax_rate') if contract_payload else '',
             'is_archived': contract_payload.get('is_archived') if contract_payload else '',
             'project': contract_payload.get('project') if contract_payload else '',
             'contract': contract_payload,
@@ -2017,55 +2049,44 @@ def _find_contract_number(pdf_text: str, fallback: str) -> str:
     return cleaned
 
 
-def _find_amount_wan(pdf_text: str, fallback: str) -> str:
-    def _extract_amount_with_unit(text: str, patterns) -> str:
-        normalized = (text or '').replace(',', '').replace('，', '').replace(' ', '')
-        for pattern in patterns:
-            match = re.search(pattern, normalized, flags=re.IGNORECASE)
-            if not match:
-                continue
-
-            number_text = match.group(1)
-            unit_text = match.group(2) if match.lastindex and match.lastindex >= 2 else '万元'
-            try:
-                return _convert_amount_to_wan(number_text, unit_text)
-            except (InvalidOperation, ValueError):
-                continue
+def _find_amount(fallback: str) -> str:
+    # 优先解析“数字+单位”（亿/万/千/元），并统一换算成元，最多保留到分。
+    text = str(fallback or '').replace(',', '').replace('，', '').strip()
+    if not text:
         return ''
 
-    pdf_patterns = [
-        r'(?:合同(?:总)?金额|合同价款|合同总价|价税合计|含税金额|金额|人民币(?:小写|金额)?|总价)[^0-9¥￥]*[¥￥]?([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
-        r'[¥￥]([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
-        r'([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
-    ]
-    extracted = _extract_amount_with_unit(pdf_text, pdf_patterns)
-    if extracted:
-        return extracted
+    unit_match = re.search(r'([+-]?[0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|亿|元)', text)
+    if unit_match:
+        number_text, unit_text = unit_match.group(1), unit_match.group(2)
+        try:
+            amount_yuan = Decimal(number_text) * AI_AMOUNT_UNIT_TO_YUAN[unit_text]
+            amount_yuan = amount_yuan.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            return _format_decimal_plain(amount_yuan)
+        except (InvalidOperation, ValueError, KeyError):
+            return ''
 
-    fallback_patterns = [
-        r'([0-9]+(?:\.[0-9]+)?)(亿元|万元|千元|万|元)',
-        r'([0-9]+(?:\.[0-9]+)?)',
-    ]
-    extracted = _extract_amount_with_unit(fallback, fallback_patterns)
-    if extracted:
-        return extracted
+    # 无单位时按“元”处理，最多保留到分。
+    if re.fullmatch(r'[+-]?[0-9]+(?:\.[0-9]+)?', text):
+        try:
+            amount_yuan = Decimal(text).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            return _format_decimal_plain(amount_yuan)
+        except (InvalidOperation, ValueError):
+            return ''
 
-    cleaned = re.sub(r'[^0-9.]', '', (fallback or '').strip())
+    # 兜底清洗，处理如“¥1,234.5元”这类混合字符串。
+    cleaned = re.sub(r'[^0-9.+-]', '', text)
     if cleaned.count('.') > 1:
         first_dot = cleaned.find('.')
         cleaned = cleaned[:first_dot + 1] + cleaned[first_dot + 1:].replace('.', '')
-    return cleaned
 
+    if re.fullmatch(r'[+-]?[0-9]+(?:\.[0-9]+)?', cleaned):
+        try:
+            amount_yuan = Decimal(cleaned).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            return _format_decimal_plain(amount_yuan)
+        except (InvalidOperation, ValueError):
+            return ''
 
-def _find_tax_rate(pdf_text: str, fallback: str) -> str:
-    text = (pdf_text or '').replace(' ', '')
-    match = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', text)
-    if match:
-        return f"{match.group(1)}%"
-    cleaned = re.sub(r'[^0-9.%]', '', (fallback or '').strip())
-    if cleaned and not cleaned.endswith('%') and re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', cleaned):
-        return f'{cleaned}%'
-    return cleaned
+    return ''
 
 
 def _normalize_company_name(value: str) -> str:
@@ -2109,9 +2130,11 @@ def _normalize_ai_fields(raw: dict, pdf_text: str = '') -> dict:
 
     normalized['contract_number'] = _find_contract_number(pdf_text, normalized.get('contract_number', ''))
     normalized['contract_unit'] = _exclude_my_company(normalized.get('contract_unit', ''))
-    normalized['contract_amount'] = _find_amount_wan(pdf_text, normalized.get('contract_amount', ''))
+    
+    normalized['contract_amount'] = _find_amount(normalized.get('contract_amount', ''))
+
     normalized['handling_date'] = _normalize_date_value(normalized.get('handling_date', ''))
-    normalized['tax_rate'] = _find_tax_rate(pdf_text, normalized.get('tax_rate', ''))
+    
     return normalized
 
 
@@ -2221,23 +2244,12 @@ def _match_option_value(value: str, options, default: str = '') -> str:
 
 
 def _get_contract_option_sets() -> dict:
-    contract_rows = Contract.query.all()
-    db_values = {
-        'approval_status': [row.approval_status for row in contract_rows if row.approval_status],
-        'contract_determination_method': [row.contract_determination_method for row in contract_rows if row.contract_determination_method],
-        'contract_type': [row.contract_type for row in contract_rows if row.contract_type],
-        'invoice_type': [row.invoice_type for row in contract_rows if row.invoice_type],
-        'pricing_method': [row.pricing_method for row in contract_rows if row.pricing_method],
-        'is_archived': [row.is_archived for row in contract_rows if row.is_archived],
-        'project': [row.project for row in contract_rows if row.project],
-    }
-
     option_sets = {
-        key: _merge_options(CSV_OPTION_DEFAULTS.get(key, []), db_values.get(key, []))
+        key: list(CSV_OPTION_DEFAULTS.get(key, []))
         for key in CSV_OPTION_DEFAULTS.keys()
     }
     option_sets['handling_department'] = _get_department_names()
-    option_sets['project'] = _merge_options(_get_project_names() + [OPTION_FIELD_DEFAULTS['project']], db_values.get('project', []))
+    option_sets['project'] = _merge_options(_get_project_names(), [OPTION_FIELD_DEFAULTS['project']])
     return option_sets
 
 
@@ -2255,29 +2267,30 @@ def _normalize_option_fields(fields: dict) -> dict:
         option_sets.get('project', []),
         OPTION_FIELD_DEFAULTS['project'],
     )
-    normalized['approval_status'] = _match_option_value(
-        normalized.get('approval_status', ''),
-        option_sets.get('approval_status', []),
-        OPTION_FIELD_DEFAULTS['approval_status'],
-    )
+
+
     normalized['contract_determination_method'] = _match_option_value(
         normalized.get('contract_determination_method', ''),
         option_sets.get('contract_determination_method', []),
         OPTION_FIELD_DEFAULTS['contract_determination_method'],
     )
+
+
     normalized['contract_type'] = _match_option_value(
         normalized.get('contract_type', ''),
         option_sets.get('contract_type', []),
         '',
     )
+
+
+    normalized['purchase_type'] = _match_option_value(
+        normalized.get('purchase_type', ''),
+        option_sets.get('purchase_type', []),
+        '',
+    )
     normalized['pricing_method'] = _match_option_value(
         normalized.get('pricing_method', ''),
         option_sets.get('pricing_method', []),
-        '',
-    )
-    normalized['invoice_type'] = _match_option_value(
-        normalized.get('invoice_type', ''),
-        option_sets.get('invoice_type', []),
         '',
     )
     normalized['is_archived'] = _match_option_value(
@@ -2306,15 +2319,15 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     model = (current_app.config.get('MINIMAX_MODEL') or '').strip()
 
     prompt = (
-        'tax_rate指的是合同里涉及的不同发票的税率，返回10%、13%这样的百分比文本，分析本合同属于什么类型，如果实在分析不到找不到就返回9%""。\n'
-        'invoice_type指的是发票类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['invoice_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么发票类型的，如果讲到了增值税专用发票（专用发票、专票）、增值税普通发票（普票）就返回对应的发票类型，如果没有明确提到发票类型但讲到了税率、价税合计等税务相关内容就返回增值税普通发票，其它默认都返回其它发票。\n'
-        'contract_type指的是合同类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_type']) + '。必须要返回内容，如果找不到就请分析这个合同可能是什么类型的，如果讲到了开挖、定向钻、补偿、折迁等施工作业就是工程类，如果讲到了设计、可研、咨询、测量、价格、贷款、会议就是服务类，如果讲到了设备、材料、工具等就是物资类，拿不准就直接返回服务类。\n'
+        'contract_type指的是合同类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_type']) + '。必须要返回内容，如果文本没有明确写出类型，请按印花税合同分类选择最贴近的一项：设备材料采购/销售归为买卖合同，贷款融资归为借款合同，房屋设备租用归为租赁合同，委托加工制作归为承揽合同，施工建设归为建设工程合同，货物物流承运归为运输合同，技术开发转让咨询服务归为技术合同，代保管归为保管合同，仓储服务归为仓储合同，保险保单归为财产保险合同。\n'
+        'purchase_type指的是采购类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['purchase_type']) + '。必须要返回内容，按合同业务性质归类：工程施工建设归工程类，咨询运维检测培训等归服务类，设备材料货物采购归采购类，不属于采购项目或与采购无关归非采购类。\n'
+        'stamp_tax_rate指的是印花税率，请根据合同类型返回税法规定税率：买卖合同0.03%，借款合同0.005%，租赁合同0.1%，承揽合同0.03%，建设工程合同0.03%，运输合同0.03%，技术合同0.03%，保管合同0.1%，仓储合同0.1%，财产保险合同0.1%，其他类型可返回空字符串。\n'
         'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的，如果讲到了综合单价暂定工程量就是单价合同，其它默认都返回总价合同。\n'
         'contract_determination_method指的是合同是如何确定的，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_determination_method']) + '，必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式确定的。\n'
         'contract_name指的是合同名称或标题，必须要返回内容，一般会出现在文本的前几行，如果找不到就请总结合同标题， 如果某字段找不到准确的文本，请尽量根据上下文来总结提炼。\n'
         'handling_date格式为 YYYY-MM-DD。\n'
         'contract_unit指的是对方的公司，因此不能返回我方公司名称“' + (current_app.config.get('MY_COMP') or '') + '”及其常见变体，如果不好定位就返回文本里出现的非我公司的单位名称。\n'
-        'contract_amount 指的是合同金额（人民币元）必须始终返回以为元单位的纯数字字符串，不能带单位，如果原文是万元、千元、亿元等其它单位，必须做精确换算为元单位，不得四舍五入，不得截断，不得省略任何有效数字。\n'
+        'contract_amount 指的是合同金额（人民币元）返回以为元单位的纯数字字符串，如果合同文本中带单位，如果原文是万元、亿元等其它单位返回时带上万、亿\n'
         'project是合同属于什么工程或项目，请尽量从标题或是其它文本中识别出项目相关信息， 从全文解理本合同是不是属于如下项目列表，不需要要强匹配找意思相似的标题或文本, 必须值返回如下的项目名称文本，如果合同真的不属于项目或是工程请返回空""：'+ ','.join(_get_project_names()) + '。\n' 
         'handling_department必须返回如下的部门列表其中之一文本（如果能从标题或是其它文本中识别出部门相关信息的话最好，不能的话先判断这个合同一般是列表中的哪个部门职责，通过判断来返回），实在靠不上部门请返回空""：' + ','.join(_get_department_names()) + '。\n'
         '以下是PDF文本：\n'
@@ -2343,7 +2356,7 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     }
 
 
-    print('payload:',payload)
+    #print('payload:',payload)
 
     current_app.logger.info(
         'AI parse: Minimax request model=%s text_chars=%s prompt_chars=%s',
@@ -2367,6 +2380,7 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     response_payload = response.json()
     current_app.logger.info('AI parse: Minimax payload keys=%s', sorted(list(response_payload.keys())))
     base_resp = response_payload.get('base_resp')
+    
     if isinstance(base_resp, dict):
         current_app.logger.info('AI parse: Minimax base_resp=%s', base_resp)
         status_code = base_resp.get('status_code')
@@ -2374,6 +2388,8 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
             raise RuntimeError(f"Minimax接口错误: {base_resp.get('status_msg') or status_code}")
 
     content = _extract_ai_content(response_payload)
+
+
     current_app.logger.info('AI parse: Minimax content chars=%s snippet=%s', len(content), (content or '')[:200])
     if not content.strip():
         raise RuntimeError('Minimax返回成功但无可用文本内容')
@@ -2439,22 +2455,12 @@ def delete_project_setting(project_id):
 @contracts_bp.get('/options/contract-fields')
 @require_auth
 def contract_field_options():
-    contract_rows = Contract.query.all()
-
-    db_values = {
-        'approval_status': [row.approval_status for row in contract_rows if row.approval_status],
-        'contract_determination_method': [row.contract_determination_method for row in contract_rows if row.contract_determination_method],
-        'contract_type': [row.contract_type for row in contract_rows if row.contract_type],
-        'invoice_type': [row.invoice_type for row in contract_rows if row.invoice_type],
-        'pricing_method': [row.pricing_method for row in contract_rows if row.pricing_method],
-        'is_archived': [row.is_archived for row in contract_rows if row.is_archived],
-    }
-
     payload = {
-        key: _merge_options(CSV_OPTION_DEFAULTS[key], db_values.get(key, []))
+        key: list(CSV_OPTION_DEFAULTS.get(key, []))
         for key in CSV_OPTION_DEFAULTS.keys()
     }
-    payload['project'] = _merge_options(_get_project_names(), [row.project for row in contract_rows if row.project])
+    payload['project'] = _get_project_names()
+    payload['stamp_tax_rate_by_contract_type'] = STAMP_TAX_RATE_BY_CONTRACT_TYPE
     return jsonify(payload)
 
 
@@ -2501,7 +2507,7 @@ def delete_department_setting(department_id):
 def list_contracts():
     department = (request.args.get('handling_department') or request.args.get('department') or '').strip()
     project = (request.args.get('project') or '').strip()
-    status = (request.args.get('approval_status') or request.args.get('status') or '').strip()
+    status = (request.args.get('status') or '').strip()
     keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
     has_file = request.args.get('has_file') == 'true'
     is_archived = (request.args.get('is_archived') or '').strip()
@@ -2516,7 +2522,7 @@ def list_contracts():
     elif project:
         query = query.filter(Contract.project == project)
     if status:
-        query = query.filter(Contract.approval_status == status)
+        query = query.filter(Contract.status == status)
     if has_file:
         query = query.filter(Contract.file_path.isnot(None))
     if is_archived:
@@ -2528,13 +2534,12 @@ def list_contracts():
             Contract.contract_name.ilike(pattern),
             Contract.contract_unit.ilike(pattern),
             Contract.currency.ilike(pattern),
-            Contract.approval_status.ilike(pattern),
             Contract.handler.ilike(pattern),
             Contract.department.ilike(pattern),
             Contract.contract_determination_method.ilike(pattern),
             Contract.contract_type.ilike(pattern),
-            Contract.invoice_type.ilike(pattern),
-            Contract.tax_rate.ilike(pattern),
+            Contract.purchase_type.ilike(pattern),
+            Contract.stamp_tax_rate.ilike(pattern),
             Contract.pricing_method.ilike(pattern),
             Contract.is_archived.ilike(pattern),
             Contract.project.ilike(pattern),
@@ -2776,7 +2781,6 @@ def import_contracts_excel():
 
     required_headers = {
         'contract_name': '合同名称',
-        'contract_amount': '合同金额',
         'handling_department': '承办部门',
     }
     missing_headers = [label for key, label in required_headers.items() if key not in field_indexes]
@@ -2913,18 +2917,16 @@ def update_contract(contract_id):
 
 
     if 'contract_amount' in body:
-        amount = _safe_decimal(body.get('contract_amount'))
-        if amount is None:
-            return jsonify({'message': 'contract_amount is invalid'}), 400
-
-        record.amount = amount
-        current_app.logger.info('调试: contract_amount=%s, amount=%s', body.get('contract_amount'), amount)
+        contract_amount_text = str(body.get('contract_amount') or '').strip()
+        if contract_amount_text:
+            amount = _safe_decimal(contract_amount_text)
+            if amount is None:
+                return jsonify({'message': 'contract_amount is invalid'}), 400
+            record.amount = amount
+        else:
+            record.amount = None
+        current_app.logger.info('调试: contract_amount=%s, amount=%s', body.get('contract_amount'), record.amount)
         
-
-
-    if 'approval_status' in body:
-        record.approval_status = (body.get('approval_status') or '').strip() or None
-        record.status = record.approval_status or record.status
     if 'handler' in body:
         record.handler = (body.get('handler') or '').strip() or None
     if 'handling_department' in body:
@@ -2940,11 +2942,13 @@ def update_contract(contract_id):
     if 'handling_date' in body:
         record.handling_date = _parse_date(body.get('handling_date'))
     if 'contract_type' in body:
-        record.contract_type = (body.get('contract_type') or '').strip() or None
-    if 'invoice_type' in body:
-        record.invoice_type = (body.get('invoice_type') or '').strip() or None
-    if 'tax_rate' in body:
-        record.tax_rate = (body.get('tax_rate') or '').strip() or None
+        record.contract_type = _normalize_contract_type_value(body.get('contract_type')) or None
+        if 'stamp_tax_rate' not in body:
+            record.stamp_tax_rate = STAMP_TAX_RATE_BY_CONTRACT_TYPE.get(record.contract_type or '', '') or None
+    if 'purchase_type' in body:
+        record.purchase_type = (body.get('purchase_type') or '').strip() or None
+    if 'stamp_tax_rate' in body:
+        record.stamp_tax_rate = (body.get('stamp_tax_rate') or '').strip() or None
     if 'pricing_method' in body:
         record.pricing_method = (body.get('pricing_method') or '').strip() or None
     if 'is_archived' in body:

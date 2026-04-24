@@ -161,6 +161,13 @@
             class="file-table"
             @header-dragend="onTableHeaderDragEnd"
           >
+            <template #empty>
+              <div class="file-table-empty">
+                <el-icon class="file-table-empty-icon"><Upload /></el-icon>
+                <span>拖放文件上传（无文件）</span>
+              </div>
+            </template>
+
             <el-table-column
               column-key="fileName"
               label="文件"
@@ -235,11 +242,12 @@
             <el-table-column prop="contract_number" label="合同编号" min-width="140" />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
-            <el-table-column prop="approval_status" label="审批状态" min-width="110" />
             <el-table-column prop="handler" label="承办人" min-width="100" />
             <el-table-column prop="handling_department" label="承办部门" min-width="130" />
             <el-table-column prop="handling_date" label="承办日期" min-width="120" />
             <el-table-column prop="contract_type" label="合同类型" min-width="110" />
+            <el-table-column prop="purchase_type" label="采购类型" min-width="110" />
+            <el-table-column prop="stamp_tax_rate" label="印花税率" min-width="100" />
          
             <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip />
 
@@ -366,10 +374,10 @@ const contractItemRef = ref(null)
 const contractItemAiParsing = ref(false)
 const departments = ref([])
 const options = ref({
-  approval_status: [],
   contract_determination_method: [],
   contract_type: [],
-  invoice_type: [],
+  purchase_type: [],
+  stamp_tax_rate_by_contract_type: {},
   pricing_method: [],
   is_archived: [],
   project: [],
@@ -582,11 +590,12 @@ const filteredFiles = computed(() => {
       row?.contract_number,
       row?.contract_unit,
       row?.contract_amount,
-      row?.approval_status,
       row?.handler,
       row?.handling_department,
       row?.handling_date,
       row?.contract_type,
+      row?.purchase_type,
+      row?.stamp_tax_rate,
       row?.is_archived,
       row?.project,
     ]
@@ -880,10 +889,10 @@ const loadDepartments = async () => {
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
   options.value = {
-    approval_status: data?.approval_status || [],
     contract_determination_method: data?.contract_determination_method || [],
     contract_type: data?.contract_type || [],
-    invoice_type: data?.invoice_type || [],
+    purchase_type: data?.purchase_type || [],
+    stamp_tax_rate_by_contract_type: data?.stamp_tax_rate_by_contract_type || {},
     pricing_method: data?.pricing_method || [],
     is_archived: data?.is_archived || [],
     project: data?.project || [],
@@ -1825,6 +1834,19 @@ watch(previewDialogVisible, (visible) => {
 
 .file-table :deep(.el-table__header-wrapper th.el-table__cell) {
   user-select: none;
+}
+
+.file-table-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.file-table-empty-icon {
+  font-size: 18px;
+  color: #9ca3af;
 }
 
 .file-icon {
