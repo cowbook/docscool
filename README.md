@@ -134,6 +134,20 @@ npm run dev
 - `DELETE /api/settings/projects/<id>` 删除项目
 - `GET /api/options/contract-fields` 合同字段选项
 
+## 合同字段补充说明
+
+- 必填字段：`contract_name`、`handling_department`
+- 金额字段：`contract_amount` 可为空（留空表示未知或暂未录入）
+- 新增可选字段：
+	- `copy_count`：份数，纯数字整数，可为空
+	- `save_place`：存档位置，文本，最大 50 字符，可为空
+
+## EXCEL 导入模板补充
+
+- 模板已包含“份数”“存档位置”列：
+	- 份数：仅允许纯数字整数（可留空）
+	- 存档位置：最多 50 字符（可留空）
+
 ## 说明
 
 系统不保存用户密码，不创建本地用户体系；仅在登录时调用 DSM 认证接口校验账号。

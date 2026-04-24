@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-22
+更新时间：2026-04-24
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -74,6 +74,9 @@
 - 必填字段：
   - `contract_name`
   - `handling_department`
+- 可选字段（新增）：
+  - `copy_count`：份数，纯数字整数，可为空
+  - `save_place`：存档位置，文本，最大 50 字符，可为空
 - 正文字段：`fullbody`
 
 

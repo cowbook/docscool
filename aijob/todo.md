@@ -53,3 +53,14 @@
 ## 4. EXCEL 导入继续回归
 - 验证导入规则提示是否与当前后端实际校验一致
 - 用真实 MIS 导出文件再做一轮导入与失败明细验证
+
+## 5. 新字段回归（copy_count / save_place）
+- 后端回归：
+	- 回归 `POST /api/contracts` 与 `PUT /api/contracts/<id>`：`copy_count` 允许空、非空时仅允许整数；`save_place` 允许空、长度超过 50 时应报错。
+	- 回归 `GET /api/contracts`、`GET /api/folders/files` 返回新增字段且兼容历史数据空值。
+- 导入模板与导入回归：
+	- 回归导入模板包含“份数”“存档位置”列与填写说明。
+	- 回归 Excel 导入在两字段为空、合法、非法（非整数/超长）场景下的行为与报错文案。
+- 前端回归：
+	- 回归 `ContractItem` 新建/编辑保存时字段提交正确。
+	- 回归 `ContractView` 与 `FolderView` 新增列表列展示与搜索命中。
