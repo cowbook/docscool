@@ -1,72 +1,74 @@
 <template>
   <div class="home-page">
-
-    <div class="card-grid">
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <span class="stat-icon stat-icon-users" />
-          <div>
-            <div class="stat-title">总数量</div>
-            <div class="stat-value">{{ statistics.total_count }}</div>
+    <div v-if="showFullLoading" class="home-loading">正在加载中...</div>
+    <template v-else>
+      <div class="card-grid">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <span class="stat-icon stat-icon-users" />
+            <div>
+              <div class="stat-title">总数量</div>
+              <div class="stat-value">{{ statistics.total_count }}</div>
+            </div>
           </div>
-        </div>
-      </el-card>
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <span class="stat-icon stat-icon-money" />
-          <div>
-            <div class="stat-title">总金额</div>
-            <div class="stat-value">{{ formatAmount(statistics.total_amount) }}</div>
-          </div>
-        </div>
-      </el-card>
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <span class="stat-icon stat-icon-archive" />
-          <div>
-            <div class="stat-title">归档数量</div>
-            <div class="stat-value">{{ statistics.archived_count }}</div>
-          </div>
-        </div>
-      </el-card>
-      <el-card class="stat-card">
-        <div class="stat-content">
-          <span class="stat-icon stat-icon-archivemoney" />
-          <div>
-            <div class="stat-title">归档金额</div>
-            <div class="stat-value">{{ formatAmount(statistics.archived_amount) }}</div>
-          </div>
-        </div>
-      </el-card>
-    </div>
-
-    <div class="charts-area">
-      <div class="chart-row">
-        <el-card class="chart-card chart-pie">
-          <div class="chart-title">合同有无附件</div>
-          <v-chart :option="optionContractFilePie" autoresize style="height:180px" />
         </el-card>
-        <el-card class="chart-card chart-pie">
-          <div class="chart-title">存储文件有无合同挂载</div>
-          <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <span class="stat-icon stat-icon-money" />
+            <div>
+              <div class="stat-title">总金额</div>
+              <div class="stat-value">{{ formatAmount(statistics.total_amount) }}</div>
+            </div>
+          </div>
         </el-card>
-        <el-card class="chart-card chart-bar">
-          <div class="chart-title">各部门合同与文件数量</div>
-          <v-chart :option="optionDeptBar" autoresize style="height:220px" />
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <span class="stat-icon stat-icon-archive" />
+            <div>
+              <div class="stat-title">归档数量</div>
+              <div class="stat-value">{{ statistics.archived_count }}</div>
+            </div>
+          </div>
+        </el-card>
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <span class="stat-icon stat-icon-archivemoney" />
+            <div>
+              <div class="stat-title">归档金额</div>
+              <div class="stat-value">{{ formatAmount(statistics.archived_amount) }}</div>
+            </div>
+          </div>
         </el-card>
       </div>
-      <div class="chart-row">
-        <el-card class="chart-card">
-          <div class="chart-title">（预留区域）</div>
-        </el-card>
+
+      <div class="charts-area">
+        <div class="chart-row">
+          <el-card class="chart-card chart-pie">
+            <div class="chart-title">合同有无附件</div>
+            <v-chart :option="optionContractFilePie" autoresize style="height:180px" />
+          </el-card>
+          <el-card class="chart-card chart-pie">
+            <div class="chart-title">存储文件有无合同挂载</div>
+            <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
+          </el-card>
+          <el-card class="chart-card chart-bar">
+            <div class="chart-title">各部门合同与文件数量</div>
+            <v-chart :option="optionDeptBar" autoresize style="height:220px" />
+          </el-card>
+        </div>
+        <div class="chart-row">
+          <el-card class="chart-card">
+            <div class="chart-title">（预留区域）</div>
+          </el-card>
+        </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup>
 
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import VChart from 'vue-echarts'
@@ -134,6 +136,74 @@ const statistics = ref({
   archived_amount: '0',
 })
 
+const HOME_DASHBOARD_CACHE_KEY = 'docscool.home.dashboard'
+const HOME_DASHBOARD_CACHE_TTL = 5 * 60 * 1000
+
+const backendLoading = ref(false)
+const hasReadyData = ref(false)
+
+const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
+
+const applyDashboardData = (stat, charts) => {
+  if (stat) {
+    statistics.value = {
+      ...statistics.value,
+      ...stat,
+    }
+  }
+
+  if (charts) {
+    optionContractFilePie.value.series[0].data = [
+      { value: charts.contract_file_pie?.with_file ?? 0, name: '有附件' },
+      { value: charts.contract_file_pie?.without_file ?? 0, name: '无附件' },
+    ]
+    optionFileContractPie.value.series[0].data = [
+      { value: charts.file_contract_pie?.with_contract ?? 0, name: '已挂合同' },
+      { value: charts.file_contract_pie?.without_contract ?? 0, name: '未挂合同' },
+    ]
+    optionDeptBar.value.xAxis.data = charts.dept_bar?.departments || []
+    optionDeptBar.value.series[0].data = charts.dept_bar?.contract_counts || []
+    optionDeptBar.value.series[1].data = charts.dept_bar?.file_counts || []
+  }
+}
+
+const readDashboardCache = () => {
+  try {
+    const raw = localStorage.getItem(HOME_DASHBOARD_CACHE_KEY)
+    if (!raw) {
+      return null
+    }
+    const cached = JSON.parse(raw)
+    const isExpired = !cached?.savedAt || Date.now() - cached.savedAt > HOME_DASHBOARD_CACHE_TTL
+    if (isExpired) {
+      localStorage.removeItem(HOME_DASHBOARD_CACHE_KEY)
+      return null
+    }
+    if (!cached?.stat && !cached?.charts) {
+      return null
+    }
+    return cached
+  } catch (_error) {
+    localStorage.removeItem(HOME_DASHBOARD_CACHE_KEY)
+    return null
+  }
+}
+
+const saveDashboardCache = (stat, charts) => {
+  try {
+    localStorage.setItem(
+      HOME_DASHBOARD_CACHE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        stat,
+        charts,
+      }),
+    )
+  } catch (_error) {
+    // Ignore storage failures (private mode/quota exceeded).
+  }
+}
+
 function formatAmount(val) {
   // Add thousands separator and two decimals
   const num = Number(val)
@@ -142,35 +212,45 @@ function formatAmount(val) {
 }
 
 const loadStatistics = async () => {
+  backendLoading.value = true
   try {
     const [{ data: stat }, { data: charts }] = await Promise.all([
       http.get('/contracts/statistics'),
       http.get('/contracts/dashboard-charts'),
     ])
-    statistics.value = stat || statistics.value
-    // 图表数据
-    if (charts) {
-      optionContractFilePie.value.series[0].data = [
-        { value: charts.contract_file_pie.with_file, name: '有附件' },
-        { value: charts.contract_file_pie.without_file, name: '无附件' },
-      ]
-      optionFileContractPie.value.series[0].data = [
-        { value: charts.file_contract_pie.with_contract, name: '已挂合同' },
-        { value: charts.file_contract_pie.without_contract, name: '未挂合同' },
-      ]
-      optionDeptBar.value.xAxis.data = charts.dept_bar.departments
-      optionDeptBar.value.series[0].data = charts.dept_bar.contract_counts
-      optionDeptBar.value.series[1].data = charts.dept_bar.file_counts
-    }
+    applyDashboardData(stat, charts)
+    hasReadyData.value = true
+    saveDashboardCache(stat, charts)
   } catch (_error) {
     ElMessage.error('统计数据加载失败')
+  } finally {
+    backendLoading.value = false
   }
 }
 
-onMounted(loadStatistics)
+onMounted(() => {
+  const cached = readDashboardCache()
+  if (cached) {
+    applyDashboardData(cached.stat, cached.charts)
+    hasReadyData.value = true
+  }
+
+  loadStatistics()
+})
 </script>
 
 <style scoped>
+.home-loading {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 .charts-area {
   margin-top: 24px;
   display: flex;
