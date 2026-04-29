@@ -1,74 +1,149 @@
 <template>
   <div class="home-page">
-    <div v-if="showFullLoading" class="home-loading">正在加载中...</div>
-    <template v-else>
-      <div class="card-grid">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <span class="stat-icon stat-icon-users" />
-            <div>
-              <div class="stat-title">总数量</div>
-              <div class="stat-value">{{ statistics.total_count }}</div>
+   
+      <div class="golden-layout">
+
+        <div v-if="showFullLoading" class="home-loading">
+          
+          正在加载中...</div>
+
+        <section v-else class="main-column">
+
+          <div class="card-grid">
+            <div class="stat-panel">
+              <div class="stat-content">
+                <span class="stat-icon stat-icon-users" />
+                <div>
+                  <div class="stat-title">总数量</div>
+                  <div class="stat-value">{{ statistics.total_count }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stat-panel">
+              <div class="stat-content">
+                <span class="stat-icon stat-icon-money" />
+                <div>
+                  <div class="stat-title">总金额</div>
+                  <div class="stat-value stat-value-amount">{{ formatAmountCompact(statistics.total_amount) }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stat-panel">
+              <div class="stat-content">
+                <span class="stat-icon stat-icon-archive" />
+                <div>
+                  <div class="stat-title">归档数量</div>
+                  <div class="stat-value">{{ statistics.archived_count }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stat-panel">
+              <div class="stat-content">
+                <span class="stat-icon stat-icon-archivemoney" />
+                <div>
+                  <div class="stat-title">归档金额</div>
+                  <div class="stat-value stat-value-amount">{{ formatAmountCompact(statistics.archived_amount) }}</div>
+                </div>
+              </div>
             </div>
           </div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <span class="stat-icon stat-icon-money" />
-            <div>
-              <div class="stat-title">总金额</div>
-              <div class="stat-value">{{ formatAmount(statistics.total_amount) }}</div>
+
+          <div class="charts-area">
+            <div class="chart-row chart-row-top">
+              <section class="chart-panel chart-pie">
+                <div class="chart-title">合同有无附件</div>
+                <v-chart :option="optionContractFilePie" autoresize style="height:180px" />
+              </section>
+              <section class="chart-panel chart-pie">
+                <div class="chart-title">存储文件有无合同挂载</div>
+                <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
+              </section>
+            </div>
+            <div class="chart-row">
+              <section class="chart-panel chart-bar">
+                <div class="chart-title">各部门合同与文件数量</div>
+                <v-chart :option="optionDeptBar" autoresize style="height:220px" />
+              </section>
+            </div>
+            <div class="chart-row">
+              <section class="chart-panel chart-placeholder">
+                <div class="chart-title">（预留区域）</div>
+              </section>
             </div>
           </div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <span class="stat-icon stat-icon-archive" />
-            <div>
-              <div class="stat-title">归档数量</div>
-              <div class="stat-value">{{ statistics.archived_count }}</div>
+        </section>
+
+        <aside class="side-column">
+
+          <div class="side-placeholder">
+            <div class="side-header">
+              <div class="side-title">最新上传</div>
+              <div class="side-subtitle">最近修改的合同文档</div>
+            </div>
+
+            <div v-if="latestLoading" class="side-loading">正在加载最新上传...</div>
+            <div v-else-if="!latestFiles.length" class="side-empty">暂无可展示的文档</div>
+            <div v-else class="latest-wrap">
+              <div class="latest-grid">
+                <button
+                  v-for="item in latestFiles"
+                  :key="`${item.file_path}-${item.mtime}`"
+                  class="latest-card"
+                  type="button"
+                  @click="openLatestPreview(item)"
+                >
+                  <div class="latest-thumb-box">
+                    <img
+                      v-if="latestThumbMap[item.file_path]"
+                      :src="latestThumbMap[item.file_path]"
+                      :alt="item.name"
+                      class="latest-thumb"
+                    >
+                    <div v-else class="latest-thumb-fallback">缩略图加载中</div>
+                  </div>
+                  <div class="latest-meta">
+                    <div class="latest-name" :title="item.name">{{ item.name }}</div>
+                    <div class="latest-desc">修改人：{{ item.modified_by || '-' }}</div>
+                  </div>
+                </button>
+              </div>
             </div>
           </div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <span class="stat-icon stat-icon-archivemoney" />
-            <div>
-              <div class="stat-title">归档金额</div>
-              <div class="stat-value">{{ formatAmount(statistics.archived_amount) }}</div>
-            </div>
-          </div>
-        </el-card>
+        </aside>
       </div>
 
-      <div class="charts-area">
-        <div class="chart-row">
-          <el-card class="chart-card chart-pie">
-            <div class="chart-title">合同有无附件</div>
-            <v-chart :option="optionContractFilePie" autoresize style="height:180px" />
-          </el-card>
-          <el-card class="chart-card chart-pie">
-            <div class="chart-title">存储文件有无合同挂载</div>
-            <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
-          </el-card>
-          <el-card class="chart-card chart-bar">
-            <div class="chart-title">各部门合同与文件数量</div>
-            <v-chart :option="optionDeptBar" autoresize style="height:220px" />
-          </el-card>
+    <el-dialog
+      v-model="previewVisible"
+      fullscreen
+      append-to-body
+      destroy-on-close
+      class="latest-preview-dialog"
+    >
+      <template #header>
+        <div class="latest-preview-header">
+          <span class="latest-preview-title" :title="activePreviewName">{{ activePreviewName }}</span>
         </div>
-        <div class="chart-row">
-          <el-card class="chart-card">
-            <div class="chart-title">（预留区域）</div>
-          </el-card>
-        </div>
+      </template>
+
+      <div class="latest-preview-body">
+        <iframe
+          v-if="activePreviewUrl"
+          :src="activePreviewUrl"
+          class="latest-preview-frame"
+          title="文件预览"
+        />
+        <div v-else class="latest-preview-empty">暂无可预览内容</div>
       </div>
-    </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import VChart from 'vue-echarts'
@@ -141,6 +216,12 @@ const HOME_DASHBOARD_CACHE_TTL = 5 * 60 * 1000
 
 const backendLoading = ref(false)
 const hasReadyData = ref(false)
+const latestLoading = ref(false)
+const latestFiles = ref([])
+const latestThumbMap = ref({})
+const previewVisible = ref(false)
+const activePreviewUrl = ref('')
+const activePreviewName = ref('')
 
 const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
 
@@ -211,6 +292,157 @@ function formatAmount(val) {
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+const revokeThumbUrls = () => {
+  Object.values(latestThumbMap.value).forEach((url) => {
+    if (url) {
+      URL.revokeObjectURL(url)
+    }
+  })
+  latestThumbMap.value = {}
+}
+
+const loadLatestThumbnails = async (rows) => {
+  revokeThumbUrls()
+  const loaded = {}
+
+  await Promise.all(rows.map(async (item) => {
+    try {
+      const { data } = await http.get('/folders/file-thumbnail', {
+        params: {
+          path: item.file_path,
+          mtime: item.mtime,
+        },
+        responseType: 'blob',
+      })
+      loaded[item.file_path] = URL.createObjectURL(data)
+    } catch (_error) {
+      loaded[item.file_path] = ''
+    }
+  }))
+
+  latestThumbMap.value = loaded
+}
+
+const resolveErrorMessage = (error, fallbackMessage) => {
+  const payload = error?.response?.data
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload.trim()
+  }
+  if (payload && typeof payload === 'object' && typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message.trim()
+  }
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return error.message.trim()
+  }
+  return fallbackMessage
+}
+
+const redirectToLogin = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('username')
+  const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  const loginPath = `${basePath}/login` || '/login'
+  if (window.location.pathname !== loginPath) {
+    window.location.href = loginPath
+  }
+}
+
+const shouldRedirectToLogin = (statusCode, message) => {
+  if (statusCode === 401) {
+    return true
+  }
+
+  const normalized = String(message || '').toLowerCase()
+  const expiredHints = [
+    '会话已超时',
+    '会话被中断',
+    '会话无效',
+    '重新登录',
+    '凭据',
+    'expired',
+    'unauthorized',
+    'invalid token',
+  ]
+
+  return expiredHints.some((hint) => normalized.includes(hint))
+}
+
+const loadLatestFiles = async () => {
+  latestLoading.value = true
+  try {
+    const { data } = await http.get('/folders/latest-uploads', {
+      params: { limit: 8 },
+    })
+    const files = Array.isArray(data?.files) ? data.files : []
+    latestFiles.value = files
+    await loadLatestThumbnails(files)
+  } catch (_error) {
+    const errorMessage = resolveErrorMessage(_error, '最新上传加载失败')
+    if (shouldRedirectToLogin(_error?.response?.status, errorMessage)) {
+      ElMessage.error('登录凭据已过期，请重新登录')
+      redirectToLogin()
+      return
+    }
+
+    latestFiles.value = []
+    revokeThumbUrls()
+    ElMessage.error(`最新上传加载失败：${errorMessage}`)
+  } finally {
+    latestLoading.value = false
+  }
+}
+
+const releasePreviewUrl = () => {
+  if (activePreviewUrl.value) {
+    URL.revokeObjectURL(activePreviewUrl.value)
+  }
+  activePreviewUrl.value = ''
+}
+
+const openLatestPreview = async (item) => {
+  try {
+    releasePreviewUrl()
+    const { data } = await http.get('/folders/file-preview', {
+      params: { path: item.file_path },
+      responseType: 'blob',
+    })
+    activePreviewUrl.value = URL.createObjectURL(data)
+    activePreviewName.value = item.name || '文件预览'
+    previewVisible.value = true
+  } catch (_error) {
+    ElMessage.error('文件预览失败')
+  }
+}
+
+watch(previewVisible, (visible) => {
+  if (!visible) {
+    releasePreviewUrl()
+  }
+})
+
+function formatAmountCompact(val) {
+  const num = Number(val)
+  if (!Number.isFinite(num)) return val
+
+  const absNum = Math.abs(num)
+  const sign = num < 0 ? '-' : ''
+
+  const formatUnitValue = (value, unit) => {
+    const display = value >= 1000 ? Math.round(value).toString() : value.toFixed(1).replace(/\.0$/, '')
+    return `${sign}${display}${unit}`
+  }
+
+  if (absNum >= 1e8) {
+    return formatUnitValue(absNum / 1e8, '亿')
+  }
+
+  if (absNum >= 1e4) {
+    return formatUnitValue(absNum / 1e4, '万')
+  }
+
+  return `${sign}${absNum.toLocaleString()}元`
+}
+
 const loadStatistics = async () => {
   backendLoading.value = true
   try {
@@ -236,6 +468,12 @@ onMounted(() => {
   }
 
   loadStatistics()
+  loadLatestFiles()
+})
+
+onBeforeUnmount(() => {
+  revokeThumbUrls()
+  releasePreviewUrl()
 })
 </script>
 
@@ -251,110 +489,319 @@ onMounted(() => {
   letter-spacing: 0.04em;
 }
 
-.charts-area {
-  margin-top: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-.chart-row {
-  display: flex;
-  gap: 24px;
-}
-.chart-card {
-  flex: 1;
+.home-page {
+  display: grid;
   min-width: 0;
-  min-height: 220px;
+}
+
+.golden-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.22fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.main-column {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.side-column {
+  min-width: 0;
+  min-height: 100%;
+}
+
+.side-placeholder {
+  min-height: 500px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.36);
+  border: 1px solid rgba(67, 108, 178, 0.18);
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  justify-content: flex-start;
+  padding: 18px;
+  color: #5a74a6;
 }
+
+.side-header {
+  margin-bottom: 12px;
+}
+
+.side-title {
+  font-size: 18px;
+  font-weight: 650;
+  margin-bottom: 2px;
+}
+
+.side-subtitle {
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.side-loading,
+.side-empty {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6077a3;
+}
+
+.latest-wrap {
+  padding-bottom: 4px;
+}
+
+.latest-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: clamp(10px, 0.9vw, 14px);
+}
+
+.latest-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 168px;
+  gap: clamp(6px, 0.6vw, 10px);
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.latest-thumb-box {
+  width: min(100%, 168px);
+  max-width: 168px;
+  max-height: 232px;
+  aspect-ratio: 21 / 29;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(231, 238, 250, 0.8);
+  border: 1px solid rgba(72, 112, 186, 0.18);
+  transition: border-color 0.24s ease, box-shadow 0.24s ease;
+}
+
+.latest-thumb {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 0.28s ease;
+  transform-origin: center center;
+}
+
+.latest-card:hover .latest-thumb,
+.latest-card:focus-visible .latest-thumb {
+  transform: scale(1.08);
+}
+
+.latest-card:hover .latest-thumb-box,
+.latest-card:focus-visible .latest-thumb-box {
+  border-color: rgba(72, 112, 186, 0.34);
+  box-shadow: 0 12px 24px rgba(33, 64, 119, 0.16);
+}
+
+.latest-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(11px, 0.82vw, 13px);
+  color: #5f77a3;
+}
+
+.latest-meta {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2px, 0.25vw, 4px);
+}
+
+.latest-name {
+  font-size: clamp(12px, 0.9vw, 14px);
+  font-weight: 600;
+  color: #2e4f88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.latest-desc {
+  font-size: clamp(11px, 0.78vw, 12px);
+  line-height: 1.35;
+  color: #667da6;
+}
+
+.latest-preview-header {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.latest-preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2d4f87;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.latest-preview-body {
+  height: calc(100vh - 96px);
+}
+
+.latest-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.latest-preview-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #5c73a0;
+}
+
+.charts-area {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chart-row {
+  display: flex;
+  gap: 14px;
+}
+
+.chart-row-top {
+  align-items: stretch;
+}
+
+.chart-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(76, 119, 197, 0.14);
+  padding: 12px 14px;
+}
+
 .chart-title {
   font-weight: 600;
-  font-size: 16px;
+  font-size: 15px;
   margin-bottom: 8px;
+  color: #2d4f87;
 }
+
 .stat-content {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+}
+
+.stat-panel {
+  min-height: 108px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(77, 122, 202, 0.12);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
 }
 
 .stat-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  min-width: 56px;
-  min-height: 56px;
-  background: #f3f4f6;
-  border-radius: 16px;
-  margin-right: 8px;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  background: rgba(243, 246, 252, 0.92);
+  border-radius: 12px;
+  margin-right: 4px;
 }
+
 .stat-icon-users::before {
   content: '';
   display: block;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 12c2.761 0 5-2.239 5-5s-2.239-5-5-5-5 2.239-5 5 2.239 5 5 5zm0 2c-3.314 0-10 1.657-10 5v3h20v-3c0-3.343-6.686-5-10-5z" fill="%234F8EF7"/></svg>');
   background-size: contain;
   background-repeat: no-repeat;
 }
+
 .stat-icon-money::before {
   content: '';
   display: block;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="20" height="12" rx="2" fill="%2334C759"/><path d="M12 8v8m0 0a2 2 0 100-4 2 2 0 000 4z" stroke="%23fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
   background-size: contain;
   background-repeat: no-repeat;
 }
+
 .stat-icon-archive::before {
   content: '';
   display: block;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="4" rx="2" fill="%23F7B731"/><rect x="5" y="8" width="14" height="12" rx="2" fill="%23F7B731"/><path d="M9 12h6" stroke="%23fff" stroke-width="2" stroke-linecap="round"/></svg>');
   background-size: contain;
   background-repeat: no-repeat;
 }
+
 .stat-icon-archivemoney::before {
   content: '';
   display: block;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="4" rx="2" fill="%23A259F7"/><rect x="5" y="8" width="14" height="12" rx="2" fill="%23A259F7"/><path d="M12 14v-2m0 0a2 2 0 100 4 2 2 0 000-4z" stroke="%23fff" stroke-width="2" stroke-linecap="round"/></svg>');
   background-size: contain;
   background-repeat: no-repeat;
-}
-.home-page {
-  display: grid;
-  gap: 16px;
 }
 
 .card-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.stat-card {
-  min-height: 120px;
-  display: flex;
-  align-items: center;
+  gap: 14px;
 }
 
 .stat-title {
   color: #6b7280;
-  font-size: 14px;
-  margin-bottom: 8px;
+  font-size: 13px;
+  margin-bottom: 6px;
 }
 
 .stat-value {
-  font-size: 30px;
+  font-size: 34px;
   font-weight: 700;
-  color: #111827;
+  color: #183765;
+  line-height: 1;
+}
+
+.stat-value-amount {
+  font-size: 26px;
+  line-height: 1.15;
+}
+
+.chart-placeholder {
+  min-height: 120px;
+  justify-content: center;
 }
 
 .empty-title {
@@ -369,9 +816,124 @@ onMounted(() => {
   justify-content: center;
 }
 
+@media (max-width: 1366px) {
+  .golden-layout {
+    grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .side-placeholder {
+    padding: 16px;
+  }
+
+  .stat-value {
+    font-size: 30px;
+  }
+
+  .stat-value-amount {
+    font-size: 23px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .golden-layout {
+    grid-template-columns: minmax(220px, 0.64fr) minmax(0, 1.36fr);
+    gap: 14px;
+  }
+
+  .side-placeholder {
+    min-height: 260px;
+    padding: 16px;
+  }
+
+  .chart-row-top {
+    flex-direction: column;
+  }
+
+  .latest-grid {
+    gap: 12px;
+  }
+}
+
 @media (max-width: 768px) {
+  .golden-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .side-column {
+    min-height: 160px;
+  }
+
   .card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .latest-grid {
+    gap: 10px;
+  }
+
+  .stat-panel {
+    min-height: 96px;
+  }
+
+  .stat-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .stat-icon-users::before,
+  .stat-icon-money::before,
+  .stat-icon-archive::before,
+  .stat-icon-archivemoney::before {
+    width: 34px;
+    height: 34px;
+  }
+
+  .chart-row {
+    flex-direction: column;
+  }
+
+  .stat-value {
+    font-size: 28px;
+  }
+
+  .stat-value-amount {
+    font-size: 21px;
+  }
+}
+
+@media (max-width: 390px) {
+  .side-placeholder {
+    padding: 12px;
+  }
+
+  .latest-grid {
+    gap: 10px;
+  }
+
+  .latest-card {
+    gap: 6px;
+  }
+
+  .latest-name {
+    font-size: 12px;
+  }
+
+  .latest-desc {
+    font-size: 11px;
+  }
+
+  .chart-panel {
+    padding: 10px 12px;
+  }
+
+  .chart-title {
+    font-size: 14px;
   }
 }
 </style>

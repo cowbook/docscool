@@ -1,78 +1,93 @@
 <template>
   <div class="shell">
-    <el-container class="shell-container">
-      <el-aside v-if="!isMobile" width="240px" class="sidebar">
-        <div class="logo">
-          <Icon :icon="docIcon" style="font-size:28px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
-          <span style="vertical-align:middle;">DocsCool</span>
-        </div>
-        <el-menu :default-active="activePath" router class="menu">
-          <el-menu-item index="/home">
-            <Icon :icon="homeIcon" style="font-size:20px;vertical-align:middle;" />
-            <span>首页</span>
-          </el-menu-item>
-          <el-sub-menu index="/contracts">
-            <template #title>
-              <Icon :icon="docIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>合同管理</span>
-            </template>
-            <el-menu-item index="/contracts/all">
-              <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>所有合同</span>
-            </el-menu-item>
-            <el-menu-item index="/contracts/folders">
-              <Icon :icon="folderIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>文件夹</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu index="/settings">
-            <template #title>
-              <Icon :icon="settingIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>系统设置</span>
-            </template>
-            <el-menu-item index="/settings/departments">
-              <Icon :icon="officeIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>部门设置</span>
-            </el-menu-item>
-            <el-menu-item index="/settings/projects">
-              <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>项目设置</span>
-            </el-menu-item>
-            <el-menu-item index="/settings/logout">
-              <Icon :icon="logoutIcon" style="font-size:20px;vertical-align:middle;" />
-              <span>退出</span>
-            </el-menu-item>
-          </el-sub-menu>
-        </el-menu>
-      </el-aside>
+    <div class="bg-orb orb-left" />
+    <div class="bg-orb orb-right" />
 
-      <el-container>
-        <el-header class="topbar">
-          <div class="topbar-left">
-            <el-button v-if="isMobile" text @click="drawer = true">菜单</el-button>
-            <div class="page-title">{{ pageTitle }}</div>
+    <el-container class="shell-container">
+      <el-header class="topbar">
+        <div class="topbar-left">
+          <div class="logo">
+            <Icon :icon="docIcon" style="font-size:26px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
+            <span style="vertical-align:middle;">DocsCool</span>
           </div>
+
+          <el-button v-if="isMobile" class="mobile-menu-btn" @click="drawer = true">菜单</el-button>
+
+          <el-menu
+            v-else
+            :default-active="activePath"
+            :ellipsis="false"
+            popper-class="top-nav-popper"
+            router
+            mode="horizontal"
+            class="menu top-nav"
+          >
+            <el-menu-item index="/home">
+              <Icon :icon="homeIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+              <span>首页</span>
+            </el-menu-item>
+            <el-sub-menu index="/contracts">
+              <template #title>
+                <Icon :icon="docIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>合同管理</span>
+              </template>
+              <el-menu-item index="/contracts/all">
+                <Icon :icon="ticketsIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>所有合同</span>
+              </el-menu-item>
+              <el-menu-item index="/contracts/folders">
+                <Icon :icon="folderIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>文件夹</span>
+              </el-menu-item>
+            </el-sub-menu>
+            <el-sub-menu index="/settings">
+              <template #title>
+                <Icon :icon="settingIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>系统设置</span>
+              </template>
+              <el-menu-item index="/settings/departments">
+                <Icon :icon="officeIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>部门设置</span>
+              </el-menu-item>
+              <el-menu-item index="/settings/projects">
+                <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>项目设置</span>
+              </el-menu-item>
+              <el-menu-item index="/settings/logout">
+                <Icon :icon="logoutIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>退出</span>
+              </el-menu-item>
+            </el-sub-menu>
+          </el-menu>
+        </div>
+
+        <div class="topbar-right">
+          <div class="page-title">{{ pageTitle }}</div>
           <div class="user-box">
             <el-avatar :size="32" class="user-avatar">{{ avatarText }}</el-avatar>
-            <span>{{ username }}</span>
+            <span class="user-name">{{ username }}</span>
           </div>
-        </el-header>
-        <el-main class="content">
-          <router-view />
-        </el-main>
-      </el-container>
+        </div>
+      </el-header>
+
+      <el-main class="content">
+        <router-view />
+      </el-main>
     </el-container>
 
-    <el-drawer v-model="drawer" :with-header="false" size="240px" direction="ltr">
+    <el-drawer v-model="drawer" :with-header="false" size="440px" direction="ltr">
       <div class="logo">
         <Icon :icon="docIcon" style="font-size:28px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
         <span style="vertical-align:middle;">DocsCool</span>
       </div>
+
       <el-menu :default-active="activePath" router class="menu" @select="onSelectMenu">
+        
         <el-menu-item index="/home">
           <Icon :icon="homeIcon" style="font-size:20px;vertical-align:middle;" />
           <span>首页</span>
         </el-menu-item>
+
         <el-sub-menu index="/contracts-mobile">
           <template #title>
             <Icon :icon="docIcon" style="font-size:20px;vertical-align:middle;" />
@@ -87,6 +102,7 @@
             <span>文件夹</span>
           </el-menu-item>
         </el-sub-menu>
+
         <el-sub-menu index="/settings-mobile">
           <template #title>
             <Icon :icon="settingIcon" style="font-size:20px;vertical-align:middle;" />
@@ -167,26 +183,49 @@ onBeforeUnmount(() => {
 <style scoped>
 .shell {
   min-height: 100vh;
+  position: relative;
+  overflow: hidden;
 }
 
 .shell-container {
   min-height: 100vh;
+  position: relative;
+  z-index: 1;
 }
 
-.sidebar {
-  border-right: 1px solid #e5e7eb;
-  background: #ffffff;
+.bg-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(80px);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.orb-left {
+  width: 360px;
+  height: 360px;
+  top: -110px;
+  left: -80px;
+  background: #a7d8ff;
+}
+
+.orb-right {
+  width: 380px;
+  height: 380px;
+  right: -120px;
+  top: 40px;
+  background: #d6e3ff;
 }
 
 .logo {
-  height: 64px;
-  padding: 0 20px;
+  height: 56px;
+  padding: 0 10px 0 6px;
   display: flex;
   align-items: center;
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 700;
-  color: #0f172a;
-  border-bottom: 1px solid #e5e7eb;
+  color: #0b2148;
+  letter-spacing: 0.01em;
 }
 
 .menu {
@@ -194,47 +233,163 @@ onBeforeUnmount(() => {
 }
 
 .topbar {
-  height: 64px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  height: 74px;
+  margin: 14px 14px 6px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 14px 36px rgba(38, 66, 118, 0.12);
+  backdrop-filter: blur(16px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 14px;
 }
 
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #111827;
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .user-box {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #4b5563;
+  color: #35507e;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 999px;
+  padding: 4px 10px 4px 4px;
+}
+
+.user-name {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .user-avatar {
-  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  background: linear-gradient(135deg, #3f7cff, #56a2ff);
   color: #ffffff;
   font-weight: 600;
 }
 
+.page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #37598d;
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+.top-nav {
+  border-bottom: none;
+  background: transparent;
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-menu-btn {
+  border-radius: 999px;
+  border: 1px solid rgba(56, 104, 183, 0.18);
+  color: #2f5ea8;
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .content {
-  padding: 16px;
+  padding: 14px;
+}
+
+:deep(.top-nav.el-menu--horizontal > .el-menu-item),
+:deep(.top-nav.el-menu--horizontal > .el-sub-menu .el-sub-menu__title) {
+  height: 52px;
+  line-height: 52px;
+  border-radius: 12px;
+  color: #2f4f82;
+  border-bottom: none;
+  margin: 0 2px;
+}
+
+:deep(.top-nav.el-menu--horizontal > .el-menu-item.is-active),
+:deep(.top-nav.el-menu--horizontal > .el-sub-menu.is-active .el-sub-menu__title) {
+  color: #1e64d9;
+  background: rgba(79, 141, 255, 0.12);
+}
+
+:deep(.top-nav.el-menu--horizontal > .el-menu-item:hover),
+:deep(.top-nav.el-menu--horizontal > .el-sub-menu .el-sub-menu__title:hover) {
+  color: #1d5fcc;
+  background: rgba(79, 141, 255, 0.08);
+}
+
+:deep(.el-menu--popup) {
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 14px 28px rgba(37, 60, 105, 0.12);
+}
+
+:deep(.el-menu--popup .el-menu-item) {
+  border-radius: 10px;
+  color: #365b91;
+}
+
+:deep(.el-menu--popup .el-menu-item:hover) {
+  background: rgba(79, 141, 255, 0.1);
 }
 
 @media (max-width: 900px) {
+  .topbar {
+    margin: 10px 10px 4px;
+    height: 64px;
+  }
+
+  .logo {
+    font-size: 19px;
+    padding-right: 0;
+  }
+
+  .topbar-right {
+    gap: 8px;
+  }
+
+  .page-title {
+    display: none;
+  }
+
+  .user-name {
+    display: none;
+  }
+
   .content {
     padding: 12px;
   }
+}
+</style>
+
+<style>
+.top-nav-popper {
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0px 0px 4px rgba(0, 0, 0, 0.08), 0px 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.top-nav-popper.el-popper,
+.top-nav-popper .el-menu {
+  border-radius: 14px;
 }
 </style>

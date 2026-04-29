@@ -5,6 +5,7 @@ import os
 import posixpath
 import re
 import json
+import getpass
 import mimetypes
 import base64
 import hmac
@@ -1092,11 +1093,13 @@ def _list_local_entries(relative_path: str):
                 })
             elif entry.is_file(follow_symlinks=False):
                 stat_result = entry.stat(follow_symlinks=False)
+                modified_by = getpass.getuser() or '-'
                 files.append({
                     'name': entry.name,
                     'path': entry_rel_path,
                     'size': int(stat_result.st_size),
                     'mtime': int(stat_result.st_mtime),
+                    'modified_by': modified_by,
                 })
 
     directories.sort(key=lambda item: item['name'].lower())
@@ -1119,7 +1122,7 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             'version': '2',
             'method': 'list',
             'folder_path': folder_path,
-            'additional': '["size","time"]',
+            'additional': '["size","time","owner"]',
         },
     )
     if not payload.get('success'):
@@ -1146,11 +1149,19 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
         additional = item.get('additional') or {}
         mtime = ((additional.get('time') or {}).get('mtime'))
         size = additional.get('size')
+        owner = additional.get('owner') or {}
+        modified_by = (
+            (owner.get('user') or '').strip()
+            or (owner.get('group') or '').strip()
+            or (owner.get('uid') or '').strip()
+            or '-'
+        )
         files.append({
             'name': name,
             'path': entry_rel_path,
             'size': int(size) if isinstance(size, (int, float)) else 0,
             'mtime': int(mtime) if isinstance(mtime, (int, float)) else None,
+            'modified_by': modified_by,
         })
 
     directories.sort(key=lambda entry: entry['name'].lower())
@@ -1361,6 +1372,7 @@ def _collect_storage_pdf_files() -> list:
                         'name': name,
                         'path': item.get('path') or '',
                         'mtime': item.get('mtime') or 0,
+                        'modified_by': (item.get('modified_by') or '').strip() or '-',
                     })
             for directory in directories:
                 child_path = directory.get('path') or ''
@@ -1384,6 +1396,7 @@ def _collect_storage_pdf_files() -> list:
                 'name': filename,
                 'path': relative_path,
                 'mtime': mtime,
+                'modified_by': getpass.getuser() or '-',
             })
     return result
 

@@ -1,13 +1,17 @@
 import os
 import posixpath
+import hashlib
 from io import BytesIO
 
+import fitz
+from PIL import Image, ImageDraw
 from flask import Blueprint, current_app, jsonify, request, send_file
 from sqlalchemy import or_
 
 from .auth import require_auth
 from .contracts import (
     _build_contract_file_index,
+    _collect_storage_pdf_files,
     _build_folder_file_items,
     _build_synology_file_path,
     _clear_contract_file_path_by_relative_path,
@@ -40,6 +44,95 @@ from .models import Contract
 
 
 files_bp = Blueprint('files', __name__, url_prefix='/api')
+
+THUMB_WIDTH = 210
+THUMB_HEIGHT = 290
+LATEST_UPLOAD_LIMIT = 12
+
+
+def _thumbs_root_dir() -> str:
+    backend_root = os.path.abspath(os.path.join(current_app.root_path, '..'))
+    thumbs_root = os.path.join(backend_root, 'instance', 'thumbs')
+    os.makedirs(thumbs_root, exist_ok=True)
+    return thumbs_root
+
+
+def _build_thumb_rel_path(relative_file_path: str, mtime: int) -> str:
+    normalized = _normalize_relative_path(relative_file_path)
+    key = hashlib.sha1(
+        f'{normalized}|{int(mtime or 0)}|{THUMB_WIDTH}x{THUMB_HEIGHT}'.encode('utf-8')
+    ).hexdigest()
+    return os.path.join(key[:2], f'{key}.jpg')
+
+
+def _render_pdf_thumbnail(content: bytes) -> Image.Image:
+    with fitz.open(stream=content, filetype='pdf') as doc:
+        if doc.page_count <= 0:
+            raise ValueError('PDF empty')
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        source = Image.open(BytesIO(pix.tobytes('png'))).convert('RGB')
+
+    canvas = Image.new('RGB', (THUMB_WIDTH, THUMB_HEIGHT), (240, 244, 252))
+    source_ratio = source.width / max(source.height, 1)
+    canvas_ratio = THUMB_WIDTH / THUMB_HEIGHT
+
+    if source_ratio > canvas_ratio:
+        resized_height = THUMB_HEIGHT
+        resized_width = int(resized_height * source_ratio)
+    else:
+        resized_width = THUMB_WIDTH
+        resized_height = int(resized_width / max(source_ratio, 1e-6))
+
+    resized = source.resize((max(resized_width, 1), max(resized_height, 1)), Image.Resampling.LANCZOS)
+    left = max((resized.width - THUMB_WIDTH) // 2, 0)
+    top = max((resized.height - THUMB_HEIGHT) // 2, 0)
+    crop = resized.crop((left, top, left + THUMB_WIDTH, top + THUMB_HEIGHT))
+    canvas.paste(crop, (0, 0))
+    return canvas
+
+
+def _render_fallback_thumbnail(file_name: str) -> Image.Image:
+    image = Image.new('RGB', (THUMB_WIDTH, THUMB_HEIGHT), (236, 242, 255))
+    draw = ImageDraw.Draw(image)
+    title = 'DOC'
+    ext = os.path.splitext(file_name)[1].upper().replace('.', '')
+    if ext:
+        title = ext[:6]
+    draw.rectangle((24, 20, THUMB_WIDTH - 24, THUMB_HEIGHT - 20), outline=(141, 171, 226), width=3)
+    draw.text((36, 68), title, fill=(56, 92, 163))
+    return image
+
+
+def _ensure_thumbnail_file(relative_file_path: str, mtime: int) -> tuple[str, str]:
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    thumb_rel_path = _build_thumb_rel_path(normalized, mtime)
+    thumb_abs_path = os.path.join(_thumbs_root_dir(), thumb_rel_path)
+
+    if os.path.isfile(thumb_abs_path):
+        return thumb_rel_path, thumb_abs_path
+
+    os.makedirs(os.path.dirname(thumb_abs_path), exist_ok=True)
+
+    content, file_name, _mime = _load_storage_file_payload(normalized)
+    if normalized.lower().endswith('.pdf'):
+        thumbnail = _render_pdf_thumbnail(content)
+    else:
+        thumbnail = _render_fallback_thumbnail(file_name)
+
+    thumbnail.save(thumb_abs_path, format='JPEG', quality=82, optimize=True)
+    return thumb_rel_path, thumb_abs_path
+
+
+def _safe_limit(value: str, default: int = LATEST_UPLOAD_LIMIT, minimum: int = 1, maximum: int = 5000) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
 
 
 @files_bp.get('/folders/tree')
@@ -497,4 +590,74 @@ def preview_storage_file():
         mimetype='application/pdf',
         as_attachment=False,
         download_name=file_name,
+    )
+
+
+@files_bp.get('/folders/latest-uploads')
+@require_auth
+def latest_uploaded_files():
+    raw_limit = request.args.get('limit')
+    limit = None if raw_limit in {None, ''} else _safe_limit(raw_limit)
+
+    try:
+        all_files = _collect_storage_pdf_files()
+    except Exception as exc:
+        return jsonify({'message': f'读取最新文件失败: {exc}'}), 500
+
+    sorted_files = sorted(
+        [
+            {
+                'name': item.get('name') or '',
+                'path': _normalize_relative_path(item.get('path') or ''),
+                'mtime': int(item.get('mtime') or 0),
+                'modified_by': (item.get('modified_by') or '').strip() or '-',
+            }
+            for item in all_files
+            if (item.get('path') or '').strip()
+        ],
+        key=lambda row: (row['mtime'], row['name']),
+        reverse=True,
+    )
+
+    latest = sorted_files if limit is None else sorted_files[:limit]
+    payload = []
+
+    for item in latest:
+        normalized_path = item['path']
+
+        try:
+            thumb_rel_path, _thumb_abs = _ensure_thumbnail_file(normalized_path, item['mtime'])
+        except Exception:
+            thumb_rel_path = ''
+
+        payload.append({
+            'name': item['name'],
+            'file_path': normalized_path,
+            'mtime': item['mtime'],
+            'modified_by': item['modified_by'],
+            'thumbnail_key': thumb_rel_path,
+        })
+
+    return jsonify({'files': payload, 'total': len(payload)})
+
+
+@files_bp.get('/folders/file-thumbnail')
+@require_auth
+def get_file_thumbnail():
+    file_path = request.args.get('path') or request.args.get('file_path') or ''
+    mtime = _safe_limit(request.args.get('mtime'), default=0, minimum=0, maximum=2_147_483_647)
+
+    try:
+        _thumb_rel_path, thumb_abs_path = _ensure_thumbnail_file(file_path, mtime)
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        return jsonify({'message': f'缩略图生成失败: {exc}'}), 500
+
+    return send_file(
+        thumb_abs_path,
+        mimetype='image/jpeg',
+        as_attachment=False,
     )

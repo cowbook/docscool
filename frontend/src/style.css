@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
 }
 
 * {
@@ -9,7 +9,11 @@
 
 body {
   margin: 0;
-  background: linear-gradient(120deg, #f6f8fb 0%, #eef3ff 100%);
+  background:
+    radial-gradient(circle at 12% 10%, rgba(135, 189, 255, 0.28), transparent 28%),
+    radial-gradient(circle at 88% 14%, rgba(173, 206, 255, 0.3), transparent 24%),
+    linear-gradient(160deg, #f4f7fc 0%, #eef3fb 58%, #f7f9ff 100%);
+  color: #1f3356;
 }
 
 #app {
