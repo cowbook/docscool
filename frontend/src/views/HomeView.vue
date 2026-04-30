@@ -25,7 +25,10 @@
                 <span class="stat-icon stat-icon-money" />
                 <div>
                   <div class="stat-title">总金额</div>
-                  <div class="stat-value stat-value-amount">{{ formatAmountCompact(statistics.total_amount) }}</div>
+                  <div class="stat-value stat-value-amount">
+                    <span class="stat-value-amount-number">{{ formatAmountCompactParts(statistics.total_amount).value }}</span>
+                    <span class="stat-value-amount-unit">{{ formatAmountCompactParts(statistics.total_amount).unit }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -45,7 +48,10 @@
                 <span class="stat-icon stat-icon-archivemoney" />
                 <div>
                   <div class="stat-title">归档金额</div>
-                  <div class="stat-value stat-value-amount">{{ formatAmountCompact(statistics.archived_amount) }}</div>
+                  <div class="stat-value stat-value-amount">
+                    <span class="stat-value-amount-number">{{ formatAmountCompactParts(statistics.archived_amount).value }}</span>
+                    <span class="stat-value-amount-unit">{{ formatAmountCompactParts(statistics.archived_amount).unit }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -443,6 +449,23 @@ function formatAmountCompact(val) {
   return `${sign}${absNum.toLocaleString()}元`
 }
 
+function formatAmountCompactParts(val) {
+  const text = String(formatAmountCompact(val) ?? '')
+  const unitMatch = text.match(/(亿|万|元)$/)
+  if (!unitMatch) {
+    return {
+      value: text,
+      unit: '',
+    }
+  }
+
+  const unit = unitMatch[1]
+  return {
+    value: text.slice(0, -unit.length),
+    unit,
+  }
+}
+
 const loadStatistics = async () => {
   backendLoading.value = true
   try {
@@ -582,7 +605,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: rgba(231, 238, 250, 0.8);
   border: 1px solid rgba(72, 112, 186, 0.18);
-  transition: border-color 0.24s ease, box-shadow 0.24s ease;
+  transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s ease;
 }
 
 .latest-thumb {
@@ -603,6 +626,7 @@ onBeforeUnmount(() => {
 .latest-card:focus-visible .latest-thumb-box {
   border-color: rgba(72, 112, 186, 0.34);
   box-shadow: 0 12px 24px rgba(33, 64, 119, 0.16);
+  transform: translateY(-6px);
 }
 
 .latest-thumb-fallback {
@@ -622,12 +646,17 @@ onBeforeUnmount(() => {
 }
 
 .latest-name {
-  font-size: clamp(12px, 0.9vw, 14px);
+  font-size: clamp(11px, 0.78vw, 13px);
   font-weight: 600;
   color: #2e4f88;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .latest-desc {
@@ -795,8 +824,19 @@ onBeforeUnmount(() => {
 }
 
 .stat-value-amount {
-  font-size: 26px;
+  font-size: 21px;
   line-height: 1.15;
+}
+
+.stat-value-amount-number {
+  font-size: inherit;
+}
+
+.stat-value-amount-unit {
+  margin-left: 2px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #90a0ba;
 }
 
 .chart-placeholder {
@@ -834,7 +874,7 @@ onBeforeUnmount(() => {
   }
 
   .stat-value-amount {
-    font-size: 23px;
+    font-size: 18px;
   }
 }
 
@@ -903,7 +943,7 @@ onBeforeUnmount(() => {
   }
 
   .stat-value-amount {
-    font-size: 21px;
+    font-size: 17px;
   }
 }
 
