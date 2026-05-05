@@ -1,6 +1,18 @@
 # 待完善任务清单
 
-更新时间：2026-04-29
+更新时间：2026-05-05
+
+## 0.4 本轮新增回归项（OCR模块化与导入模板下载）
+- OCR 模块化回归：
+	- 回归 `contracts.py` 调用 `ocr_utils.py` 后，`/api/contracts/ai-parse` 在文件上传与 fullbody 直解析两条路径行为一致。
+	- 回归 RapidOCR、讯飞 OCR、MinerU OCR 的失败回退链路与错误提示文案。
+	- 回归 `MINERU_API_KEY` 缺失场景的报错可读性。
+- 导入模板下载回归：
+	- 回归 `GET /api/contracts/import-template` 在后端 200 时前端可正常触发浏览器下载。
+	- 回归 `content-disposition` 含 `filename*`（UTF-8）与 `filename=` 两种格式的文件名解析。
+- 首页角标样式回归：
+	- 回归 `HomeView` 右上角角标为直角三角形切角，不影响点击打开绑定合同。
+	- 回归角标半透明底色在浅色/深色缩略图上的可见性。
 
 ## 0.3 本轮新增回归项（最新上传修改人与首页缩略图布局）
 - 最新上传接口回归：

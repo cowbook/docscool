@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-04-24
+更新时间：2026-05-05
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -20,6 +20,7 @@
 - backend：Flask API、模型、SQLite、NAS 上传下载、AI 解析
   - `backend/app/contracts.py`：合同主业务、AI 提取、导入等
   - `backend/app/files.py`：文件/文件夹管理接口（`/api/folders/*`）
+  - `backend/app/ocr_utils.py`：OCR 相关能力聚合模块（PDF提取、OCR回退、MinerU）
 - frontend：Vue 页面、API 请求、预览和编辑交互
 - docs：部署文档
 - aijob：AI 辅助文档，包括长期记忆、项目固定参数、待办事项
@@ -50,6 +51,7 @@
 - `MINIMAX_API_KEY`：AI 接口密钥
 - `MINIMAX_API_URL`：默认 `https://api.minimaxi.com/v1/chat/completions`
 - `MINIMAX_MODEL`：默认 `MiniMax-M2.5`
+- `MINERU_API_KEY`：MinerU OCR 接口密钥
 - `XUNFEI_APP_ID`：讯飞 OCR 应用 ID
 - `XUNFEI_API_KEY`：讯飞 OCR API Key
 - `XUNFEI_API_SECRET`：讯飞 OCR API Secret
@@ -102,6 +104,10 @@
 ## 本轮结构调整（2026-04-22）
 - `folders` 相关接口已从 `contracts.py` 拆分到 `files.py`，应用通过 `files_bp` 蓝图注册。
 - 对外 API 路径保持不变，前端无需调整路由地址。
+
+## 本轮结构调整（2026-05-05）
+- OCR 相关函数已从 `contracts.py` 迁移到 `ocr_utils.py`，并由 `contracts.py` 导入调用。
+- 模块化后接口行为保持不变，主要目标为降低 `contracts.py` 复杂度与维护成本。
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页
