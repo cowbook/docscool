@@ -27,6 +27,7 @@ class Config:
     SYNOLOGY_FILESTATION_ROOT = os.getenv('SYNOLOGY_FILESTATION_ROOT', '')
 
     MINIMAX_API_KEY = os.getenv('MINIMAX_API_KEY', '')
+    MINERU_API_KEY = os.getenv('MINERU_API_KEY', '')
     MINIMAX_API_URL = os.getenv('MINIMAX_API_URL', 'https://api.minimaxi.com/v1/chat/completions')
     MINIMAX_MODEL = os.getenv('MINIMAX_MODEL', 'MiniMax-M2.5')
     XUNFEI_APP_ID = os.getenv('XUNFEI_APP_ID', '')

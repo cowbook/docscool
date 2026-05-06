@@ -33,11 +33,11 @@
               </template>
               <el-menu-item index="/contracts/all">
                 <Icon :icon="ticketsIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
-                <span>所有合同</span>
+                <span>数据表格</span>
               </el-menu-item>
               <el-menu-item index="/contracts/folders">
                 <Icon :icon="folderIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
-                <span>文件夹</span>
+                <span>文件档案</span>
               </el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="/settings">
@@ -53,6 +53,10 @@
                 <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>项目设置</span>
               </el-menu-item>
+              <el-menu-item index="/settings/password">
+                <Icon :icon="passwordIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>密码修改</span>
+              </el-menu-item>
               <el-menu-item index="/settings/logout">
                 <Icon :icon="logoutIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>退出</span>
@@ -62,11 +66,32 @@
         </div>
 
         <div class="topbar-right">
-          <div class="page-title">{{ pageTitle }}</div>
-          <div class="user-box">
-            <el-avatar :size="32" class="user-avatar">{{ avatarText }}</el-avatar>
-            <span class="user-name">{{ username }}</span>
-          </div>
+
+          
+          
+
+          
+          
+          
+          
+          <el-dropdown trigger="hover" @command="onUserMenuCommand">
+            <div class="user-box" tabindex="0" role="button" aria-label="用户菜单">
+              <el-avatar :size="32" class="user-avatar">{{ avatarText }}</el-avatar>
+              <span class="user-name">{{ username }}</span>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="password">
+                  <Icon :icon="passwordIcon" style="font-size:16px;vertical-align:middle;margin-right:6px;" />
+                  密码修改
+                </el-dropdown-item>
+                <el-dropdown-item command="logout">
+                  <Icon :icon="logoutIcon" style="font-size:16px;vertical-align:middle;margin-right:6px;" />
+                  退出
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -95,11 +120,11 @@
           </template>
           <el-menu-item index="/contracts/all">
             <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
-            <span>所有合同</span>
+            <span>数据表格</span>
           </el-menu-item>
           <el-menu-item index="/contracts/folders">
             <Icon :icon="folderIcon" style="font-size:20px;vertical-align:middle;" />
-            <span>文件夹</span>
+            <span>文件档案</span>
           </el-menu-item>
         </el-sub-menu>
 
@@ -116,6 +141,10 @@
             <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
           </el-menu-item>
+          <el-menu-item index="/settings/password">
+            <Icon :icon="passwordIcon" style="font-size:20px;vertical-align:middle;" />
+            <span>密码修改</span>
+          </el-menu-item>
           <el-menu-item index="/settings/logout">
             <Icon :icon="logoutIcon" style="font-size:20px;vertical-align:middle;" />
             <span>退出</span>
@@ -128,7 +157,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import homeIcon from '@iconify-icons/tabler/home'
 import docIcon from '@iconify-icons/tabler/file-text'
 import ticketsIcon from '@iconify-icons/tabler/certificate'
@@ -136,9 +165,11 @@ import folderIcon from '@iconify-icons/tabler/folder'
 import settingIcon from '@iconify-icons/tabler/settings'
 import officeIcon from '@iconify-icons/tabler/building'
 import projectIcon from '@iconify-icons/tabler/tag'
+import passwordIcon from '@iconify-icons/tabler/password-user'
 import logoutIcon from '@iconify-icons/tabler/logout'
 
 const route = useRoute()
+const router = useRouter()
 const drawer = ref(false)
 const isMobile = ref(false)
 const username = localStorage.getItem('username') || '未登录用户'
@@ -158,6 +189,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/contracts')) return '合同管理'
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'
+  if (route.path === '/settings/password') return '密码修改'
   if (route.path.startsWith('/settings')) return '系统设置'
   return 'DocsCool'
 })
@@ -168,6 +200,16 @@ const detectMobile = () => {
 
 const onSelectMenu = () => {
   drawer.value = false
+}
+
+const onUserMenuCommand = (command) => {
+  if (command === 'password') {
+    router.push('/settings/password')
+    return
+  }
+  if (command === 'logout') {
+    router.push('/settings/logout')
+  }
 }
 
 onMounted(() => {
@@ -269,6 +311,15 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 255, 255, 0.8);
   border-radius: 999px;
   padding: 4px 10px 4px 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.user-box:hover,
+.user-box:focus-visible {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(106, 149, 225, 0.5);
+  outline: none;
 }
 
 .user-name {

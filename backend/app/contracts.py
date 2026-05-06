@@ -1,15 +1,13 @@
 # --- 文件末尾追加 ---
-
 # 仪表盘统计接口，需在 contracts_bp 定义后声明
 import os
 import posixpath
 import re
 import json
+import time
 import getpass
 import mimetypes
-import base64
-import hmac
-import hashlib
+
 from difflib import SequenceMatcher
 from io import BytesIO
 from uuid import uuid4
@@ -20,19 +18,22 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import requests
-from pypdf import PdfReader
-import fitz
-import numpy as np
-from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
 from sqlalchemy import String, cast, func, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from .auth import get_cached_user_password, require_auth
 from .extensions import db
 from .models import Contract, Department, ProjectOption
+from .ocr_utils import (
+    extract_ai_content_from_pdf,
+    extract_pdf_text,
+    extract_pdf_text_via_ocr,
+    get_ocr_engine,
+    mineru_extract_text_from_uploaded_pdf,
+    mineru_auth_headers,
+    _preview_lines,
+)
 
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
-_OCR_ENGINE = None
 _IMPORT_ERROR_REPORTS = {}
 EXTERNAL_API_TIMEOUT_SECONDS = 300
 DEFAULT_DEPARTMENT_NAME = '财务部'
@@ -1790,199 +1791,20 @@ def _preview_lines(text: str, limit: int = 6):
     return lines[:limit]
 
 
-def _extract_ai_content_from_pdf(uploaded_file) -> tuple[str, list[str]]:
-    app_id = (current_app.config.get('XUNFEI_APP_ID') or '').strip()
-    api_secret = (current_app.config.get('XUNFEI_API_SECRET') or '').strip()
-    api_key = (current_app.config.get('XUNFEI_API_KEY') or '').strip()
-    api_url = (current_app.config.get('XUNFEI_API_URL') or '').strip()
-
-    if not app_id or not api_secret or not api_key or not api_url:
-        raise RuntimeError('讯飞OCR配置不完整，请检查 XUNFEI_APP_ID/XUNFEI_API_KEY/XUNFEI_API_SECRET/XUNFEI_API_URL')
-
-    try:
-        uploaded_file.stream.seek(0)
-    except Exception:
-        pass
-    pdf_bytes = uploaded_file.stream.read()
-    if not pdf_bytes:
-        return '', []
-
-    parsed = urlparse(api_url)
-    host = parsed.netloc
-    path = parsed.path or '/v1/private/hh_ocr_recognize_doc'
-    endpoint = f'{parsed.scheme}://{host}{path}'
-
-    def _build_signed_params():
-        date_str = format_datetime(datetime.now(timezone.utc), usegmt=True)
-        request_line = f'POST {path} HTTP/1.1'
-        signature_origin = f'host: {host}\ndate: {date_str}\n{request_line}'
-        signature_sha = hmac.new(
-            api_secret.encode('utf-8'),
-            signature_origin.encode('utf-8'),
-            digestmod=hashlib.sha256,
-        ).digest()
-        signature = base64.b64encode(signature_sha).decode('utf-8')
-        authorization_origin = (
-            f'api_key="{api_key}", algorithm="hmac-sha256", '
-            f'headers="host date request-line", signature="{signature}"'
-        )
-        authorization = base64.b64encode(authorization_origin.encode('utf-8')).decode('utf-8')
-        return {
-            'host': host,
-            'date': date_str,
-            'authorization': authorization,
-        }
-
-    def _recognize_image(image_bytes: bytes, image_encoding: str = 'png') -> str:
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-        payload = {
-            'header': {
-                'app_id': app_id,
-                'status': 3,
-            },
-            'parameter': {
-                'hh_ocr_recognize_doc': {
-                    'recognizeDocumentRes': {
-                        'encoding': 'utf8',
-                        'compress': 'raw',
-                        'format': 'json',
-                    }
-                }
-            },
-            'payload': {
-                'image': {
-                    'encoding': image_encoding,
-                    'image': image_base64,
-                    'status': 3,
-                }
-            },
-        }
-
-        response = requests.post(
-            endpoint,
-            params=_build_signed_params(),
-            json=payload,
-            timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-
-        data = response.json()
-        code = ((data.get('header') or {}).get('code'))
-        if code != 0:
-            message = (data.get('header') or {}).get('message') or '讯飞OCR接口返回失败'
-            raise RuntimeError(f'{message}(code={code})')
-
-        text_base64 = (((data.get('payload') or {}).get('recognizeDocumentRes') or {}).get('text') or '')
-        if not text_base64:
-            return ''
-
-        decoded_json = base64.b64decode(text_base64).decode('utf-8', errors='ignore')
-        parsed_text = json.loads(decoded_json) if decoded_json else {}
-        whole_text = str(parsed_text.get('whole_text') or '').strip()
-        if whole_text:
-            return whole_text
-
-        lines = parsed_text.get('lines') or []
-        return '\n'.join(str(item.get('text') or '').strip() for item in lines if str(item.get('text') or '').strip())
-
-    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-    page_texts = []
-    max_pages = min(len(doc), 20)
-    current_app.logger.info('AI parse: Xunfei OCR enabled, pages=%s (max=%s)', len(doc), max_pages)
-
-    for i in range(max_pages):
-        page = doc.load_page(i)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-        image_bytes = pix.tobytes('png')
-        text = _recognize_image(image_bytes, image_encoding='png')
-        if text:
-            page_texts.append(text)
-            current_app.logger.info('AI parse: Xunfei OCR page=%s chars=%s', i + 1, len(text))
-
-    final_text = '\n'.join(item for item in page_texts if item).strip()
-    return final_text, _preview_lines(final_text)
+## OCR相关函数已迁移到ocr_utils.py
 
 
-def _extract_pdf_text(uploaded_file):
-    try:
-        uploaded_file.stream.seek(0)
-    except Exception:
-        pass
 
-    pdf_bytes = uploaded_file.stream.read()
-    if not pdf_bytes:
-        current_app.logger.warning('AI parse: uploaded PDF is empty')
-        return '', []
-
-    current_app.logger.info('AI parse: PDF bytes=%s', len(pdf_bytes))
-
-    text_from_pdf = ''
-    try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-        chunks = []
-        for page in reader.pages:
-            chunks.append((page.extract_text() or '').strip())
-        text_from_pdf = '\n'.join(item for item in chunks if item).strip()
-        current_app.logger.info(
-            'AI parse: direct PDF text pages=%s chars=%s',
-            len(reader.pages),
-            len(text_from_pdf),
-        )
-    except Exception:
-        current_app.logger.exception('AI parse: direct PDF text extraction failed')
-        text_from_pdf = ''
-
-    if text_from_pdf:
-        return text_from_pdf, _preview_lines(text_from_pdf)
-
-    try:
-        xunfei_text, xunfei_preview = _extract_ai_content_from_pdf(uploaded_file)
-        if xunfei_text:
-            return xunfei_text, xunfei_preview
-    except Exception as exc:
-        current_app.logger.warning('AI parse: Xunfei OCR failed, fallback local OCR: %s', exc)
-
-    ocr_text = _extract_pdf_text_via_ocr(pdf_bytes)
-    return ocr_text, _preview_lines(ocr_text)
+## OCR相关函数已迁移到ocr_utils.py
 
 
-def _get_ocr_engine():
-    global _OCR_ENGINE
-    if _OCR_ENGINE is None:
-        _OCR_ENGINE = RapidOCR()
-    return _OCR_ENGINE
+
+## OCR相关函数已迁移到ocr_utils.py
 
 
-def _extract_pdf_text_via_ocr(pdf_bytes: bytes) -> str:
-    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-    ocr = _get_ocr_engine()
 
-    all_text = []
-    max_pages = min(len(doc), 20)
-    current_app.logger.info('AI parse: OCR fallback enabled, pages=%s (max=%s)', len(doc), max_pages)
-    for i in range(max_pages):
-        page = doc.load_page(i)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-        image = Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
-        img_array = np.array(image)
-        result, _ = ocr(img_array)
-        if not result:
-            current_app.logger.info('AI parse: OCR page=%s no text detected', i + 1)
-            continue
+## OCR相关函数已迁移到ocr_utils.py
 
-        line_text = []
-        for item in result:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                text = item[1]
-                if isinstance(text, str) and text.strip():
-                    line_text.append(text.strip())
-        if line_text:
-            all_text.append('\n'.join(line_text))
-            current_app.logger.info('AI parse: OCR page=%s lines=%s', i + 1, len(line_text))
-
-    ocr_text = '\n'.join(all_text).strip()
-    current_app.logger.info('AI parse: OCR total chars=%s', len(ocr_text))
-    return ocr_text
 def _extract_ai_content(payload: dict) -> str:
     if not isinstance(payload, dict):
         return ''
@@ -2436,6 +2258,14 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
     parsed = _extract_json_object(content)
     current_app.logger.info('AI parse: Minimax parsed keys=%s', sorted(list(parsed.keys())) if isinstance(parsed, dict) else [])
     return _normalize_ai_fields(parsed, pdf_text)
+
+
+## OCR相关函数已迁移到ocr_utils.py
+
+
+
+## OCR相关函数已迁移到ocr_utils.py
+
 
 
 @contracts_bp.get('/departments')
@@ -3079,6 +2909,81 @@ def upload_contract_file(contract_id):
     return jsonify({'file_path': record.file_path})
 
 
+def parse_contract_pdf_bak():
+    body = request.get_json(silent=True) or {}
+    incoming_fullbody = str(body.get('fullbody') or '').strip()
+    use_fullbody_directly = len(incoming_fullbody) > 20
+
+    if use_fullbody_directly:
+        pdf_text = incoming_fullbody
+        preview_lines = _preview_lines(pdf_text)
+        current_app.logger.info(
+            'AI parse: direct-fullbody mode user=%s chars=%s content_length=%s',
+            g.current_user,
+            len(pdf_text),
+            request.content_length,
+        )
+    else:
+        if 'file' not in request.files:
+            return jsonify({'message': 'file is required（或提供长度超过20的fullbody）'}), 400
+
+        uploaded = request.files['file']
+        if uploaded.filename == '':
+            return jsonify({'message': 'empty filename'}), 400
+
+        current_app.logger.info(
+            'AI parse: request user=%s filename=%s mimetype=%s content_length=%s',
+            g.current_user,
+            uploaded.filename,
+            uploaded.mimetype,
+            request.content_length,
+        )
+
+        filename = (uploaded.filename or '').lower()
+        if not filename.endswith('.pdf'):
+            return jsonify({'message': '仅支持上传PDF文件'}), 400
+
+        try:
+            pdf_text, preview_lines = extract_pdf_text(uploaded)
+        except Exception as exc:
+            current_app.logger.exception('AI parse: PDF extraction failed')
+            return jsonify({'message': f'PDF解析失败: {exc}'}), 400
+
+    if not pdf_text:
+        current_app.logger.warning('AI parse: no text extracted, preview_lines=%s', preview_lines)
+        return jsonify({
+            'message': 'PDF未解析到可用文本，请确认扫描件清晰度/方向或是否含可读文字',
+            'ocr_preview_lines': preview_lines,
+        }), 400
+
+    try:
+        raw_fields = _minimax_extract_fields(pdf_text)
+    except Exception as exc:
+        current_app.logger.exception('AI parse: Minimax extraction failed')
+        return jsonify({'message': f'AI解析失败: {exc}'}), 500
+
+    if not _has_any_field_value(raw_fields):
+        current_app.logger.warning('AI parse: extracted fields are all empty')
+        return jsonify({
+            'message': 'AI返回结果为空，无法自动提取字段，请查看OCR预览并检查PDF清晰度',
+            'ocr_preview_lines': preview_lines,
+        }), 422
+
+    fields = _normalize_option_fields(raw_fields)
+    current_app.logger.info('AI parse: option-normalized fields=%s', fields)
+
+    match_candidates = _find_ai_match_candidates(fields)
+    current_app.logger.info('AI parse: matched existing contracts=%s', len(match_candidates))
+
+    current_app.logger.info('AI parse: success extracted fields=%s', fields)
+
+    return jsonify({
+        'fields': fields,
+        'fullbody': pdf_text,
+        'match_candidates': match_candidates,
+    })
+
+
 @contracts_bp.post('/contracts/ai-parse')
 @require_auth
 def parse_contract_pdf():
@@ -3116,7 +3021,7 @@ def parse_contract_pdf():
             return jsonify({'message': '仅支持上传PDF文件'}), 400
 
         try:
-            pdf_text, preview_lines = _extract_pdf_text(uploaded)
+            pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded)
         except Exception as exc:
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400

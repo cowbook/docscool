@@ -458,10 +458,26 @@ const loadLinkTreeSnapshot = async () => {
     }
     linkTreeSnapshot.refreshedAt = Date.now()
   } catch (error) {
+    // 检查是否凭据已过期，遇到则直接退出系统
+    const msg = error?.response?.data?.message || ''
+    const status = error?.response?.status
+    if (
+      status === 401 ||
+      /凭据已过期|登录凭据已过期|token失效|token过期|unauthorized|未授权/i.test(msg)
+    ) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('username')
+      const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+      const loginPath = `${basePath}/login` || '/login'
+      if (window.location.pathname !== loginPath) {
+        window.location.href = loginPath
+      }
+      return
+    }
     linkTreeSnapshot.root = { name: '/', path: '' }
     linkTreeSnapshot.rootChildren = []
     linkTreeSnapshot.childrenByParent = { '': [] }
-    ElMessage.warning(error?.response?.data?.message || '文件夹结构预加载失败，链接文件时将按需加载')
+    ElMessage.warning(msg || '文件夹结构预加载失败，链接文件时将按需加载')
   }
 }
 
@@ -840,6 +856,35 @@ const getFileIcon = (filePath) => {
   return fileTypeWord
 }
 
+const parseFilenameFromDisposition = (value) => {
+  if (!value) {
+    return ''
+  }
+
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/"/g, '').trim())
+  }
+
+  const plainMatch = value.match(/filename=([^;]+)/i)
+  if (plainMatch?.[1]) {
+    return plainMatch[1].replace(/"/g, '').trim()
+  }
+
+  return ''
+}
+
+const triggerBrowserDownload = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || 'download.bin'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+}
+
 const parseErrorMessage = async (error, fallbackMessage) => {
   const directMessage = error?.response?.data?.message
   if (directMessage) {
@@ -903,6 +948,15 @@ watch(aiMatchDialogVisible, (visible) => {
 <style scoped>
 .contract-page {
   display: grid;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 6px 32px rgba(37, 99, 235, 0.06);
+}
+/* 让 el-card 也有圆角 */
+.contract-page .el-card {
+  border-radius: 18px;
+  overflow: hidden;
 }
 
 .card-header {

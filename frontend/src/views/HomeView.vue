@@ -102,6 +102,13 @@
                   @click="openLatestPreview(item)"
                 >
                   <div class="latest-thumb-box">
+                    <span
+                      v-if="item.has_contract_binding"
+                      class="latest-contract-badge"
+                      aria-label="已绑定合同"
+                      title="已绑定合同"
+                      @click.stop="openBoundContract(item)"
+                    />
                     <img
                       v-if="latestThumbMap[item.file_path]"
                       :src="latestThumbMap[item.file_path]"
@@ -111,8 +118,11 @@
                     <div v-else class="latest-thumb-fallback">缩略图加载中</div>
                   </div>
                   <div class="latest-meta">
-                    <div class="latest-name" :title="item.name">{{ item.name }}</div>
-                    <div class="latest-desc">修改人：{{ item.modified_by || '-' }}</div>
+                    <div class="latest-name" :title="item.name">
+                      <span class="latest-file-icon" :class="getLatestFileTypeClass(item)" aria-hidden="true" />
+                      <span>{{ item.name }}</span>
+                    </div>
+                    <div class="latest-desc">{{ item.modified_by || '-' }} · {{ formatLatestModifiedTime(item.mtime) }}</div>
                   </div>
                 </button>
               </div>
@@ -135,8 +145,12 @@
       </template>
 
       <div class="latest-preview-body">
+        <div v-if="previewLoading" class="latest-preview-loading">
+          <span class="latest-preview-spinner" aria-hidden="true" />
+          <span>正在加载预览...</span>
+        </div>
         <iframe
-          v-if="activePreviewUrl"
+          v-else-if="activePreviewUrl"
           :src="activePreviewUrl"
           class="latest-preview-frame"
           title="文件预览"
@@ -144,6 +158,15 @@
         <div v-else class="latest-preview-empty">暂无可预览内容</div>
       </div>
     </el-dialog>
+
+    <ContractItem
+      ref="contractItemRef"
+      :departments="contractEditorDepartments"
+      :options="contractEditorOptions"
+      v-model:aiParsing="contractItemAiParsing"
+      :show-file-actions="false"
+      @saved="loadLatestFiles"
+    />
   </div>
 </template>
 
@@ -152,6 +175,7 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
+import ContractItem from '../components/ContractItem.vue'
 import VChart from 'vue-echarts'
 import * as echarts from 'echarts/core'
 import { PieChart, BarChart } from 'echarts/charts'
@@ -226,8 +250,24 @@ const latestLoading = ref(false)
 const latestFiles = ref([])
 const latestThumbMap = ref({})
 const previewVisible = ref(false)
+const previewLoading = ref(false)
 const activePreviewUrl = ref('')
 const activePreviewName = ref('')
+const previewRequestId = ref(0)
+const contractItemRef = ref(null)
+const contractItemAiParsing = ref(false)
+const contractEditorDepartments = ref([])
+const contractEditorOptions = ref({
+  contract_determination_method: [],
+  contract_type: [],
+  purchase_type: [],
+  stamp_tax_rate_by_contract_type: {},
+  pricing_method: [],
+  is_archived: [],
+  project: [],
+})
+const contractEditorReady = ref(false)
+const contractEditorLoading = ref(false)
 
 const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
 
@@ -343,6 +383,118 @@ const resolveErrorMessage = (error, fallbackMessage) => {
   return fallbackMessage
 }
 
+const parseDateFromUnknown = (value) => {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const ms = value < 1e12 ? value * 1000 : value
+    const date = new Date(ms)
+    return Number.isFinite(date.getTime()) ? date : null
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const text = value.trim()
+  if (!text) {
+    return null
+  }
+
+  if (/^\d+$/.test(text)) {
+    const numeric = Number(text)
+    if (Number.isFinite(numeric)) {
+      const ms = numeric < 1e12 ? numeric * 1000 : numeric
+      const date = new Date(ms)
+      return Number.isFinite(date.getTime()) ? date : null
+    }
+  }
+
+  const isoLike = text.includes(' ') ? text.replace(' ', 'T') : text
+  let date = new Date(isoLike)
+  if (Number.isFinite(date.getTime())) {
+    return date
+  }
+
+  date = new Date(text.replace(/-/g, '/'))
+  return Number.isFinite(date.getTime()) ? date : null
+}
+
+const formatLatestModifiedTime = (value) => {
+  const date = parseDateFromUnknown(value)
+  if (!date) {
+    return '-'
+  }
+
+  const now = new Date()
+  const diffMs = Math.max(0, now.getTime() - date.getTime())
+  const oneHourMs = 60 * 60 * 1000
+  const oneMinuteMs = 60 * 1000
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterdayStart = new Date(todayStart)
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+
+  if (date >= todayStart) {
+    if (diffMs < oneHourMs) {
+      const minutes = Math.max(1, Math.floor(diffMs / oneMinuteMs))
+      return `${minutes}分钟前`
+    }
+    const hours = Math.max(1, Math.floor(diffMs / oneHourMs))
+    return `${hours}小时前`
+  }
+
+  if (date >= yesterdayStart && date < todayStart) {
+    return `昨天${date.getHours()}点`
+  }
+
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${date.getMonth() + 1}月${date.getDate()}日`
+  }
+
+  if (date.getFullYear() === now.getFullYear() - 1) {
+    return `去年${date.getMonth() + 1}月`
+  }
+
+  return `${String(date.getFullYear()).slice(-2)}年${date.getMonth() + 1}月`
+}
+
+const getFileExtension = (nameOrPath) => {
+  const text = String(nameOrPath || '').trim()
+  if (!text) {
+    return ''
+  }
+
+  const fileName = text.split(/[\\/]/).pop() || text
+  const dotIndex = fileName.lastIndexOf('.')
+  if (dotIndex < 0 || dotIndex === fileName.length - 1) {
+    return ''
+  }
+  return fileName.slice(dotIndex + 1).toLowerCase()
+}
+
+const getLatestFileTypeClass = (item) => {
+  const ext = getFileExtension(item?.name || item?.file_path)
+  if (ext === 'doc' || ext === 'docx') {
+    return 'latest-file-icon-doc'
+  }
+  if (ext === 'xls' || ext === 'xlsx') {
+    return 'latest-file-icon-xls'
+  }
+  if (ext === 'pdf') {
+    return 'latest-file-icon-pdf'
+  }
+  if (ext === 'txt') {
+    return 'latest-file-icon-txt'
+  }
+  if (ext === 'md') {
+    return 'latest-file-icon-md'
+  }
+  return 'latest-file-icon-file'
+}
+
 const redirectToLogin = () => {
   localStorage.removeItem('token')
   localStorage.removeItem('username')
@@ -371,6 +523,80 @@ const shouldRedirectToLogin = (statusCode, message) => {
   ]
 
   return expiredHints.some((hint) => normalized.includes(hint))
+}
+
+const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const ensureContractEditorResources = async () => {
+  if (contractEditorReady.value || contractEditorLoading.value) {
+    return
+  }
+
+  contractEditorLoading.value = true
+  try {
+    const [{ data: departments }, { data: options }] = await Promise.all([
+      http.get('/settings/departments'),
+      http.get('/options/contract-fields'),
+    ])
+
+    contractEditorDepartments.value = (Array.isArray(departments) ? departments : []).map((item) => item.name)
+    contractEditorOptions.value = {
+      contract_determination_method: options?.contract_determination_method || [],
+      contract_type: options?.contract_type || [],
+      purchase_type: options?.purchase_type || [],
+      stamp_tax_rate_by_contract_type: options?.stamp_tax_rate_by_contract_type || {},
+      pricing_method: options?.pricing_method || [],
+      is_archived: options?.is_archived || [],
+      project: options?.project || [],
+    }
+    contractEditorReady.value = true
+  } catch (_error) {
+    ElMessage.warning('加载合同编辑配置失败')
+  } finally {
+    contractEditorLoading.value = false
+  }
+}
+
+const openBoundContract = async (item) => {
+  const directContractId = Number(item?.contract_id || item?.matched_contract_id || 0)
+  const targetPath = normalizePath(item?.file_path)
+
+  if (directContractId > 0) {
+    try {
+      await ensureContractEditorResources()
+      await contractItemRef.value?.openEdit({ id: directContractId })
+      return
+    } catch (_error) {
+      ElMessage.error('打开合同失败')
+      return
+    }
+  }
+
+  if (!targetPath) {
+    ElMessage.warning('当前文件路径无效')
+    return
+  }
+
+  try {
+    const { data } = await http.get('/contracts', {
+      params: {
+        keyword: targetPath,
+        has_file: true,
+      },
+    })
+
+    const rows = Array.isArray(data) ? data : []
+    const matched = rows.find((row) => normalizePath(row?.file_path) === targetPath) || rows[0]
+    if (!matched?.id) {
+      ElMessage.warning('未找到对应合同')
+      return
+    }
+
+    await ensureContractEditorResources()
+    await contractItemRef.value?.openEdit({ id: matched.id })
+  } catch (_error) {
+    ElMessage.error('打开合同失败')
+  }
 }
 
 const loadLatestFiles = async () => {
@@ -406,22 +632,38 @@ const releasePreviewUrl = () => {
 }
 
 const openLatestPreview = async (item) => {
+  const requestId = Date.now()
+  previewRequestId.value = requestId
+
+  activePreviewName.value = item.name || '文件预览'
+  previewVisible.value = true
+  previewLoading.value = true
+
   try {
     releasePreviewUrl()
     const { data } = await http.get('/folders/file-preview', {
       params: { path: item.file_path },
       responseType: 'blob',
     })
+    if (previewRequestId.value !== requestId) {
+      return
+    }
     activePreviewUrl.value = URL.createObjectURL(data)
-    activePreviewName.value = item.name || '文件预览'
-    previewVisible.value = true
   } catch (_error) {
-    ElMessage.error('文件预览失败')
+    if (previewRequestId.value === requestId) {
+      ElMessage.error('文件预览失败')
+    }
+  } finally {
+    if (previewRequestId.value === requestId) {
+      previewLoading.value = false
+    }
   }
 }
 
 watch(previewVisible, (visible) => {
   if (!visible) {
+    previewRequestId.value = 0
+    previewLoading.value = false
     releasePreviewUrl()
   }
 })
@@ -601,11 +843,37 @@ onBeforeUnmount(() => {
   max-width: 168px;
   max-height: 232px;
   aspect-ratio: 21 / 29;
+  position: relative;
   border-radius: 12px;
   overflow: hidden;
   background: rgba(231, 238, 250, 0.8);
   border: 1px solid rgba(72, 112, 186, 0.18);
   transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s ease;
+}
+
+.latest-contract-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  width: 26%;
+  aspect-ratio: 1 / 1;
+  background: linear-gradient(145deg, rgba(47, 114, 230, 0.68), rgba(39, 95, 203, 0.68));
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+
+.latest-contract-badge::before {
+  content: '';
+  position: absolute;
+  top: 36%;
+  left: 70%;
+  width: 46%;
+  height: 46%;
+  transform: translate(-50%, -50%);
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="3.5" y="4.5" width="17" height="15" rx="2" stroke="%23fff" stroke-width="1.7"/><path d="M3.5 9h17M3.5 13.5h17M8.5 4.5v15" stroke="%23fff" stroke-width="1.7" stroke-linecap="round"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
 }
 
 .latest-thumb {
@@ -649,14 +917,47 @@ onBeforeUnmount(() => {
   font-size: clamp(11px, 0.78vw, 13px);
   font-weight: 600;
   color: #2e4f88;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: block;
   white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
   line-height: 1.35;
+}
+
+.latest-file-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: -2px;
+  flex: 0 0 16px;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+}
+
+.latest-file-icon-file {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23f6f8fc" stroke="%23c6d0e1"/><path d="M9 1v4h4" fill="%23e8eef8"/><path d="M5 8h6M5 10h6M5 12h4" stroke="%2398a9c3" stroke-width="1"/></svg>');
+}
+
+.latest-file-icon-doc {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23eef4ff" stroke="%2392b2ea"/><path d="M9 1v4h4" fill="%23dce9ff"/><rect x="4" y="8" width="8" height="5" rx="1" fill="%232a63c7"/><path d="M5.3 11.8V9.2h1.1c.8 0 1.3.5 1.3 1.3 0 .8-.5 1.3-1.3 1.3zM9.9 9.2h1.6v.7h-.8v.3h.7v.7h-.7v.9h-.8z" fill="%23fff"/></svg>');
+}
+
+.latest-file-icon-xls {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23ebf8f0" stroke="%238dc8a6"/><path d="M9 1v4h4" fill="%23dbf0e3"/><rect x="4" y="8" width="8" height="5" rx="1" fill="%232e8b57"/><path d="M5 9.2h1l.5.8.5-.8h1l-1 1.3 1 1.3h-1l-.5-.8-.5.8H5l1-1.3zm3.3 0h2.7v.7h-.9v1.9h-.9V9.9h-.9z" fill="%23fff"/></svg>');
+}
+
+.latest-file-icon-pdf {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23fff1f0" stroke="%23df9c99"/><path d="M9 1v4h4" fill="%23ffe1df"/><rect x="4" y="8" width="8" height="5" rx="1" fill="%23c43d36"/><path d="M5 11.8V9.2h1.2c.6 0 1 .4 1 1s-.4 1-1 1h-.4v.6zm3.2 0V9.2h2.2v.7H9v.3h1.2v.7H9v.9zm3.1 0V9.2h.8v2.6z" fill="%23fff"/></svg>');
+}
+
+.latest-file-icon-txt {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23f5f7fb" stroke="%23b9c5db"/><path d="M9 1v4h4" fill="%23e7edf8"/><path d="M5 8h6M5 10h6M5 12h5" stroke="%23687993" stroke-width="1"/></svg>');
+}
+
+.latest-file-icon-md {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 1h6l4 4v10H3z" fill="%23f3f4f7" stroke="%23b3b8c5"/><path d="M9 1v4h4" fill="%23e5e8f0"/><rect x="4" y="8" width="8" height="5" rx="1" fill="%23666f86"/><path d="M5 11.8V9.2h.8l.7 1 .7-1H8v2.6h-.8v-1.2l-.7 1-.7-1v1.2zm4.3-2.6h.8v1.1l.8-.8h1.1l-1.2 1.1 1.2 1.2h-1.1l-.8-.8v.8h-.8z" fill="%23fff"/></svg>');
 }
 
 .latest-desc {
@@ -682,6 +983,32 @@ onBeforeUnmount(() => {
 
 .latest-preview-body {
   height: calc(100vh - 96px);
+}
+
+.latest-preview-loading {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #5c73a0;
+  font-size: 14px;
+}
+
+.latest-preview-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid rgba(92, 115, 160, 0.22);
+  border-top-color: #4d6fa8;
+  animation: latest-preview-spin 0.7s linear infinite;
+}
+
+@keyframes latest-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .latest-preview-frame {

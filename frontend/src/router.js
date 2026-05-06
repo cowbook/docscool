@@ -8,6 +8,7 @@ import FolderView from './views/FolderView.vue'
 import LogoutView from './views/LogoutView.vue'
 import DepartmentSettingsView from './views/DepartmentSettingsView.vue'
 import ProjectSettingsView from './views/ProjectSettingsView.vue'
+import PasswordSettingsView from './views/PasswordSettingsView.vue'
 
 const routes = [
   { path: '/login', component: LoginView },
@@ -21,6 +22,7 @@ const routes = [
       { path: 'contracts/folders', component: FolderView },
       { path: 'settings/departments', component: DepartmentSettingsView },
       { path: 'settings/projects', component: ProjectSettingsView },
+      { path: 'settings/password', component: PasswordSettingsView },
       { path: 'settings/logout', component: LogoutView },
     ],
   },

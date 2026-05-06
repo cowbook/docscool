@@ -621,9 +621,11 @@ def latest_uploaded_files():
 
     latest = sorted_files if limit is None else sorted_files[:limit]
     payload = []
+    contract_file_index = _build_contract_file_index()
 
     for item in latest:
         normalized_path = item['path']
+        matched_contract = contract_file_index.get(normalized_path)
 
         try:
             thumb_rel_path, _thumb_abs = _ensure_thumbnail_file(normalized_path, item['mtime'])
@@ -636,6 +638,9 @@ def latest_uploaded_files():
             'mtime': item['mtime'],
             'modified_by': item['modified_by'],
             'thumbnail_key': thumb_rel_path,
+            'has_contract_binding': bool(matched_contract),
+            'contract_id': matched_contract.id if matched_contract else None,
+            'matched_contract_id': matched_contract.id if matched_contract else None,
         })
 
     return jsonify({'files': payload, 'total': len(payload)})
