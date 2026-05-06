@@ -6,6 +6,12 @@
       width="min(1380px, 98vw)"
       top="2vh"
     >
+      <div v-if="contractDialogLoading" class="contract-dialog-loading-panel">
+        <el-icon class="contract-dialog-loading-icon is-loading"><Loading /></el-icon>
+        <div class="contract-dialog-loading-text">加载中...</div>
+      </div>
+
+      <template v-else>
       <el-form :model="form" label-width="120px" class="dialog-form">
         <div class="dialog-layout">
           <div class="preview-column">
@@ -152,19 +158,20 @@
           </div>
         </div>
       </el-form>
+      </template>
 
       <template #footer>
         <el-button
           v-if="!props.showFileActions"
           type="danger"
           :loading="saving"
-          :disabled="!editing?.id"
+          :disabled="contractDialogLoading || !editing?.id"
           @click="unbindContract"
         >
           解绑合同
         </el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button :loading="saving" type="primary" @click="saveContract">保存</el-button>
+        <el-button :loading="saving" :disabled="contractDialogLoading" type="primary" @click="saveContract">保存</el-button>
       </template>
     </el-dialog>
 
@@ -195,12 +202,14 @@
           class="pdf-preview-embed fullscreen-pdf-preview"
           @rendering-failed="handlePdfRenderFailed"
         />
+        <div v-else-if="previewLoading" class="preview-placeholder fullscreen-preview-placeholder">预览加载中...</div>
         <div v-else class="preview-placeholder fullscreen-preview-placeholder">暂无可预览内容</div>
       </div>
 
       <template #footer>
         <el-button @click="fullPreviewVisible = false">关闭</el-button>
       </template>
+      
     </el-dialog>
 
     <el-dialog v-model="textDialogVisible" title="合同文本" width="min(960px, 96vw)">
@@ -304,6 +313,7 @@
         <el-button @click="closeLinkFileDialog">取消</el-button>
         <el-button type="primary" @click="confirmLinkFile">确认</el-button>
       </template>
+
     </el-dialog>
 
     <el-dialog
@@ -326,6 +336,7 @@
           class="pdf-preview-embed fullscreen-pdf-preview"
           @rendering-failed="handleLinkPreviewFailed"
         />
+        <div v-else-if="linkPreviewLoading" class="preview-placeholder fullscreen-preview-placeholder">预览加载中...</div>
         <div v-else class="preview-placeholder fullscreen-preview-placeholder">{{ linkPreviewMessage || '暂无可预览内容' }}</div>
       </div>
 
@@ -333,6 +344,8 @@
         <el-button @click="linkFullPreviewVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+
   </div>
 </template>
 
@@ -345,7 +358,7 @@ import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
-import { Document, Upload } from '@element-plus/icons-vue'
+import { Document, Loading, Upload } from '@element-plus/icons-vue'
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
@@ -416,6 +429,7 @@ const linkPreviewLoading = ref(false)
 const linkPreviewMessage = ref('请选择PDF文件进行预览')
 
 const saving = ref(false)
+const contractDialogLoading = ref(false)
 const editing = ref(null)
 const currentPreviewRow = ref(null)
 const pendingAiUploadFile = ref(null)
@@ -490,6 +504,7 @@ const loadContractDetail = async (contractId) => {
 }
 
 const openCreate = () => {
+  contractDialogLoading.value = false
   editing.value = null
   pendingAiUploadFile.value = null
   currentPreviewRow.value = null
@@ -586,6 +601,7 @@ const applyParsedFields = (fields) => {
 }
 
 const openCreateFromAi = (file, fields) => {
+  contractDialogLoading.value = false
   editing.value = null
   pendingAiUploadFile.value = file
   currentPreviewRow.value = null
@@ -598,6 +614,7 @@ const openCreateFromAi = (file, fields) => {
 }
 
 const openCreateWithFilePath = async (filePath, fields) => {
+  contractDialogLoading.value = false
   editing.value = null
   pendingAiUploadFile.value = null
   currentPreviewRow.value = null
@@ -615,15 +632,28 @@ const openCreateWithFilePath = async (filePath, fields) => {
 }
 
 const openEditWithSupplementalFields = async (row, fields) => {
-  const detail = row?.id ? await loadContractDetail(row.id) : row
-  editing.value = detail
-  currentPreviewRow.value = detail
+  contractDialogLoading.value = true
+  editing.value = row || {}
+  currentPreviewRow.value = row || null
   previewFileName.value = ''
   pendingAiUploadFile.value = null
-  populateFormFromContract(detail)
-  applyAiSupplementalFields(fields || {}, detail)
-  await loadPdfPreviewForRow(detail)
+  resetForm()
+  resetPreview('暂无文件')
   dialogVisible.value = true
+
+  try {
+    const detail = row?.id ? await loadContractDetail(row.id) : row
+    editing.value = detail
+    currentPreviewRow.value = detail
+    populateFormFromContract(detail)
+    applyAiSupplementalFields(fields || {}, detail)
+    await loadPdfPreviewForRow(detail)
+  } catch (error) {
+    dialogVisible.value = false
+    ElMessage.error(error?.response?.data?.message || '合同详情加载失败')
+  } finally {
+    contractDialogLoading.value = false
+  }
 }
 
 const openEdit = (row) => openEditWithSupplementalFields(row, null)
@@ -1559,6 +1589,7 @@ const handleContractDeleted = (contractId) => {
 
 watch(dialogVisible, (visible) => {
   if (!visible) {
+    contractDialogLoading.value = false
     resetPreview('暂无文件')
   }
 })
@@ -1602,6 +1633,24 @@ defineExpose({
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px 16px;
+}
+
+.contract-dialog-loading-panel {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+}
+
+.contract-dialog-loading-icon {
+  font-size: 28px;
+  color: #2563eb;
+}
+
+.contract-dialog-loading-text {
+  font-size: 14px;
+  color: #6b7280;
 }
 
 .preview-column {

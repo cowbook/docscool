@@ -9,7 +9,7 @@
           </div>
           
           <div class="header-actions">
-            <el-button-group>
+            <el-button-group class="apple-button-group">
             
               <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
                 <Icon :icon="fileTypeExcel" />
@@ -111,7 +111,25 @@
       </div>
 
       <el-table :data="pagedContracts" stripe border resizable size="small" class="contract-table" @sort-change="handleSortChange">
-         <el-table-column label="文件" min-width="220">
+         
+        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable show-overflow-tooltip>
+          <template #default="scope">
+            <span class="no-wrap-cell" :title="scope.row.contract_number || ''">
+              {{ scope.row.contract_number || '' }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip sortable>
+          <template #default="scope">
+            <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
+              <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
+            </button>
+          </template>
+        </el-table-column>
+
+
+        <el-table-column label="文件" min-width="220">
           <template #default="scope">
             <el-link class="file-cell"  @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
 
@@ -135,21 +153,7 @@
             </div>
           </template>
         </el-table-column>
-
-        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip sortable>
-          <template #default="scope">
-            <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
-              <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
-            </button>
-          </template>
-        </el-table-column>
-        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable show-overflow-tooltip>
-          <template #default="scope">
-            <span class="no-wrap-cell" :title="scope.row.contract_number || ''">
-              {{ scope.row.contract_number || '' }}
-            </span>
-          </template>
-        </el-table-column>
+        
         <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
         <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
         <el-table-column prop="copy_count" label="份数" min-width="80" sortable />
@@ -200,6 +204,7 @@
     <AiMatchDialog
       v-model="aiMatchDialogVisible"
       :candidates="aiMatchCandidates"
+      :loading="aiMatchLoading"
       :processing="aiMatchProcessing"
       :file="aiParsedUploadFile"
       @confirm-selection="proceedAiMatchSelection"
@@ -277,6 +282,7 @@
 </template>
 
 <script setup>
+
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
@@ -299,6 +305,7 @@ const quickMatching = ref(false)
 const quickMatchDialogVisible = ref(false)
 const quickMatchLogText = ref('')
 const aiMatchDialogVisible = ref(false)
+const aiMatchLoading = ref(false)
 const aiMatchProcessing = ref(false)
 const aiMatchCandidates = ref([])
 const aiParsedFields = ref(null)
@@ -412,6 +419,7 @@ const resetAiMatchState = () => {
   aiParsedFields.value = null
   aiParsedFullbody.value = ''
   aiParsedUploadFile.value = null
+  aiMatchLoading.value = false
   aiMatchProcessing.value = false
 }
 
@@ -674,6 +682,11 @@ const closeAiMatchDialog = () => {
 }
 
 const proceedAiMatchSelection = async (selectedValue) => {
+  if (aiMatchLoading.value) {
+    ElMessage.info('数据加载中，请稍候')
+    return
+  }
+
   const selectedFile = aiParsedUploadFile.value
   const parsedFields = aiParsedFields.value || {}
 
@@ -727,6 +740,9 @@ const handleAiPdfSelected = async (event) => {
   }
 
   resetAiMatchState()
+  aiParsedUploadFile.value = file
+  aiMatchDialogVisible.value = true
+  aiMatchLoading.value = true
   aiParsing.value = true
   ElMessage.info('AI正在解析PDF，请稍候')
   try {
@@ -743,13 +759,14 @@ const handleAiPdfSelected = async (event) => {
       fullbody: parsedFullbody,
     }
 
-    aiParsedUploadFile.value = file
     aiParsedFields.value = parsedFields
     aiParsedFullbody.value = parsedFullbody
     aiMatchCandidates.value = Array.isArray(data?.match_candidates) ? data.match_candidates : []
-    aiMatchDialogVisible.value = true
+    aiMatchLoading.value = false
     ElMessage.success('AI解析完成，请先确认是否匹配到已有合同')
   } catch (error) {
+    aiMatchLoading.value = false
+    aiMatchDialogVisible.value = false
     if (error?.code === 'ECONNABORTED') {
       ElMessage.error('AI解析超时，请稍后重试')
       return
@@ -928,23 +945,6 @@ watch(aiMatchDialogVisible, (visible) => {
 })
 </script>
 
-<style>
-.el-scrollbar{
-    padding-bottom:32px;
-}
-
-.el-link__inner{
-  max-width:100%;
-}
-
-.link-file-dialog {
-  height: 90vh;
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-}
-</style>
-
 <style scoped>
 .contract-page {
   display: grid;
@@ -959,6 +959,21 @@ watch(aiMatchDialogVisible, (visible) => {
   overflow: hidden;
 }
 
+.contract-page :deep(.el-scrollbar) {
+  padding-bottom: 32px;
+}
+
+.contract-page :deep(.el-link__inner) {
+  max-width: 100%;
+}
+
+:deep(.link-file-dialog) {
+  height: 90vh;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .card-header {
   display: flex;
   align-items: center;
@@ -970,6 +985,51 @@ watch(aiMatchDialogVisible, (visible) => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.apple-button-group {
+  display: inline-flex;
+  border-radius: 19px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.08);
+  /*backdrop-filter: blur(8px);*/
+}
+
+.apple-button-group :deep(.el-button) {
+  border: none;
+  border-radius: 0;
+  min-height: 34px;
+  color: #1f2937;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fefa 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.apple-button-group :deep(.el-button + .el-button) {
+  margin-left: 0;
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.apple-button-group :deep(.el-button:first-child) {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.apple-button-group :deep(.el-button:last-child) {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.apple-button-group :deep(.el-button:hover),
+.apple-button-group :deep(.el-button:focus-visible) {
+  background: linear-gradient(180deg, #ffffff 0%, #e9eef8 100%);
+  color: #1d4ed8;
+}
+
+.apple-button-group :deep(.el-button:active) {
+  transform: translateY(1px);
 }
 
 .card-title {

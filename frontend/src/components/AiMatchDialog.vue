@@ -23,6 +23,12 @@
       </div>
 
       <div class="ai-match-content">
+        <div v-if="loading" class="ai-match-loading-panel">
+          <el-icon class="ai-match-loading-icon is-loading"><Loading /></el-icon>
+          <div class="ai-match-loading-text">加载中...</div>
+        </div>
+
+        <template v-else>
         <div class="ai-match-summary">
           <div class="ai-match-title">AI 已完成解析，请先确认这是新合同还是已有合同。</div>
           <div class="ai-match-subtitle">系统已按合同标题相似度和金额相同规则筛出候选合同。</div>
@@ -79,12 +85,13 @@
           />
           <span>这是新合同</span>
         </label>
+        </template>
       </div>
     </div>
 
     <template #footer>
       <el-button @click="handleCancel">取消</el-button>
-      <el-button type="primary" :loading="processing" @click="handleConfirm">下一步</el-button>
+      <el-button type="primary" :loading="processing" :disabled="loading" @click="handleConfirm">下一步</el-button>
     </template>
   </el-dialog>
 
@@ -121,6 +128,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import VuePdfEmbed from 'vue-pdf-embed'
+import { Loading } from '@element-plus/icons-vue'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
@@ -136,6 +144,10 @@ const props = defineProps({
   candidates: {
     type: Array,
     default: () => [],
+  },
+  loading: {
+    type: Boolean,
+    default: false,
   },
   processing: {
     type: Boolean,
@@ -294,6 +306,9 @@ const handleCancel = () => {
 }
 
 const handleConfirm = () => {
+  if (props.loading) {
+    return
+  }
   emit('confirm-selection', selection.value)
 }
 </script>
@@ -373,6 +388,24 @@ const handleConfirm = () => {
 .ai-match-content {
   display: grid;
   gap: 12px;
+}
+
+.ai-match-loading-panel {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+}
+
+.ai-match-loading-icon {
+  font-size: 28px;
+  color: #2563eb;
+}
+
+.ai-match-loading-text {
+  font-size: 14px;
+  color: #6b7280;
 }
 
 .ai-match-summary {
