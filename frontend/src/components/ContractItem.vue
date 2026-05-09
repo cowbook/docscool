@@ -236,7 +236,18 @@
     >
       <div class="link-file-layout">
         <div class="link-file-left">
-          <div class="panel-title">{{ linkRootName }}</div>
+          <div class="link-left-header">
+            <div class="panel-title">{{ linkRootName }}</div>
+            <el-button
+              v-if="!form.file_path"
+              class="apple-smart-match-btn"
+              size="small"
+              :loading="smartMatchingFile"
+              @click="runSmartMatchFile"
+            >
+              智能匹配文件
+            </el-button>
+          </div>
           <el-tree
             ref="linkTreeRef"
             v-loading="linkTreeLoading"
@@ -427,6 +438,7 @@ const linkFiles = ref([])
 const linkPreviewUrl = ref('')
 const linkPreviewLoading = ref(false)
 const linkPreviewMessage = ref('请选择PDF文件进行预览')
+const smartMatchingFile = ref(false)
 
 const saving = ref(false)
 const contractDialogLoading = ref(false)
@@ -1141,6 +1153,237 @@ const getParentPath = (value) => {
   return idx >= 0 ? path.slice(0, idx) : ''
 }
 
+const normalizeMatchText = (value) => String(value || '').toLowerCase().replace(/[\s\-_.\/\\]+/g, '')
+
+const normalizeNameForSimilarity = (value) => String(value || '').toLowerCase().replace(/[^\w\u4e00-\u9fff]/g, '')
+
+const extractYearValue = (text) => {
+  const num = Number(String(text || '').trim())
+  if (!Number.isFinite(num)) {
+    return null
+  }
+  if (num >= 1000 && num <= 9999) {
+    return num
+  }
+  if (num >= 0 && num <= 99) {
+    return 2000 + num
+  }
+  return null
+}
+
+const parseYearRangeFromFolderName = (name) => {
+  const raw = String(name || '').trim()
+  if (!raw) {
+    return null
+  }
+
+  // Keep only digits and common separators, then parse in strict formats:
+  // yy1-yy2, YYYY, YY.
+  const text = raw.replace(/[^0-9\-~—–_]/g, '')
+  if (!text) {
+    return null
+  }
+
+  const rangeMatch = text.match(/^(\d{2,4})\s*[-~—–_]\s*(\d{2,4})$/)
+  if (rangeMatch) {
+    const startYear = extractYearValue(rangeMatch[1])
+    const endYear = extractYearValue(rangeMatch[2])
+    if (startYear && endYear) {
+      return {
+        start: Math.min(startYear, endYear),
+        end: Math.max(startYear, endYear),
+      }
+    }
+  }
+
+  const singleMatch = text.match(/^(\d{4}|\d{2})$/)
+  if (singleMatch) {
+    const year = extractYearValue(singleMatch[1])
+    if (year) {
+      return { start: year, end: year }
+    }
+  }
+
+  return null
+}
+
+const calcNameSimilarity = (left, right) => {
+  const a = normalizeNameForSimilarity(left)
+  const b = normalizeNameForSimilarity(right)
+  if (!a || !b) {
+    return 0
+  }
+  if (a === b) {
+    return 1
+  }
+
+  const maxLen = Math.max(a.length, b.length)
+  let same = 0
+  const minLen = Math.min(a.length, b.length)
+  for (let i = 0; i < minLen; i += 1) {
+    if (a[i] === b[i]) {
+      same += 1
+    }
+  }
+
+  const includesBoost = a.includes(b) || b.includes(a) ? 0.2 : 0
+  return Math.min(1, same / maxLen + includesBoost)
+}
+
+const collectFilesRecursively = async (rootFolderPath) => {
+  const queue = [normalizePath(rootFolderPath)]
+  const visited = new Set()
+  const foundFiles = []
+
+  while (queue.length > 0) {
+    const folderPath = queue.shift()
+    if (visited.has(folderPath)) {
+      continue
+    }
+    visited.add(folderPath)
+
+    const [{ data: filesData }, children] = await Promise.all([
+      http.get('/folders/files', { params: { folder_path: folderPath } }),
+      fetchLinkFolderChildren(folderPath),
+    ])
+
+    const rows = Array.isArray(filesData?.files) ? filesData.files : []
+    foundFiles.push(...rows)
+
+    for (const child of children || []) {
+      const childPath = normalizePath(child?.path || '')
+      if (!visited.has(childPath)) {
+        queue.push(childPath)
+      }
+    }
+  }
+
+  return foundFiles
+}
+
+const chooseBestMatchedFile = (files) => {
+  const contractNumber = normalizeMatchText(form.contract_number)
+  const contractName = String(form.contract_name || '').trim()
+
+  if (files.length === 0) {
+    return null
+  }
+
+  if (contractNumber) {
+    const numberMatched = files.filter((item) => {
+      const fileName = normalizeMatchText(item?.name || item?.file_path || '')
+      return fileName.includes(contractNumber)
+    })
+
+    if (numberMatched.length > 0) {
+      numberMatched.sort((a, b) => {
+        const simA = calcNameSimilarity(contractName, a?.name || '')
+        const simB = calcNameSimilarity(contractName, b?.name || '')
+        if (simB !== simA) {
+          return simB - simA
+        }
+        return Number(b?.mtime || 0) - Number(a?.mtime || 0)
+      })
+      return numberMatched[0]
+    }
+  }
+
+  if (contractName) {
+    const ranked = files
+      .map((item) => ({
+        item,
+        sim: calcNameSimilarity(contractName, item?.name || ''),
+      }))
+      .sort((a, b) => {
+        if (b.sim !== a.sim) {
+          return b.sim - a.sim
+        }
+        return Number(b.item?.mtime || 0) - Number(a.item?.mtime || 0)
+      })
+
+    if (ranked[0]?.sim > 0) {
+      return ranked[0].item
+    }
+  }
+
+  return null
+}
+
+const runSmartMatchFile = async () => {
+  if (smartMatchingFile.value) {
+    return
+  }
+
+  if (!String(form.contract_number || '').trim() && !String(form.contract_name || '').trim()) {
+    ElMessage.warning('请先填写合同编号或合同名称后再智能匹配')
+    return
+  }
+
+  smartMatchingFile.value = true
+  try {
+    const rootChildren = await fetchLinkFolderChildren('', { force: false })
+    let searchBasePath = ''
+
+    const departmentName = String(form.handling_department || '').trim()
+    if (departmentName) {
+      const deptNode = (rootChildren || []).find((node) => String(node?.name || '').trim() === departmentName)
+      if (deptNode?.path) {
+        searchBasePath = normalizePath(deptNode.path)
+      }
+    }
+
+    const level3Candidates = await fetchLinkFolderChildren(searchBasePath, { force: false })
+    const yearFolders = (level3Candidates || []).filter((node) => !!parseYearRangeFromFolderName(node?.name || ''))
+
+    const handlingYear = (() => {
+      const text = String(form.handling_date || '').trim()
+      const match = text.match(/(20\d{2})/)
+      return match ? Number(match[1]) : null
+    })()
+
+    let searchRoots = []
+    if (yearFolders.length > 0) {
+      if (handlingYear) {
+        searchRoots = yearFolders
+          .filter((node) => {
+            const range = parseYearRangeFromFolderName(node?.name || '')
+            return range && handlingYear >= range.start && handlingYear <= range.end
+          })
+          .map((node) => normalizePath(node?.path || ''))
+      }
+      if (searchRoots.length === 0) {
+        searchRoots = yearFolders.map((node) => normalizePath(node?.path || ''))
+      }
+    } else {
+      searchRoots = [searchBasePath]
+    }
+
+    const candidateFiles = []
+    for (const rootPath of searchRoots) {
+      const rows = await collectFilesRecursively(rootPath)
+      candidateFiles.push(...rows)
+    }
+
+    const best = chooseBestMatchedFile(candidateFiles)
+    if (!best?.file_path) {
+      ElMessage.warning('未找到可匹配的文件')
+      return
+    }
+
+    const targetFilePath = normalizePath(best.file_path)
+    const targetFolderPath = getParentPath(targetFilePath)
+    await expandLinkTreeToPath(targetFolderPath)
+    await loadLinkFiles(targetFolderPath)
+    linkSelectedFilePath.value = targetFilePath
+    await openLinkFilePreview(targetFilePath)
+    ElMessage.success('已定位到智能匹配文件')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '智能匹配失败')
+  } finally {
+    smartMatchingFile.value = false
+  }
+}
+
 const openLinkFileDialog = async () => {
   linkFileDialogVisible.value = true
   linkTreeLoading.value = true
@@ -1824,6 +2067,31 @@ defineExpose({
   font-size: 14px;
   font-weight: 600;
   color: #374151;
+}
+
+.link-left-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.link-left-header .panel-title {
+  margin-bottom: 0;
+}
+
+.apple-smart-match-btn {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: linear-gradient(180deg, #ffffff 0%, #f2f6ff 100%);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  color: #1f2937;
+}
+
+.apple-smart-match-btn:hover {
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.35);
 }
 
 .link-file-dialog :deep(.el-dialog__body) {

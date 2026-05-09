@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <div class="card-title">所有合同</div>
+          <div class="card-title">所有信息</div>
           <div class="card-num">
             <el-tag type="danger" size="default">{{ totalContracts }} 条</el-tag>
           </div>
@@ -61,26 +61,40 @@
 
       <div class="toolbar">
         <div class="toolbar-row">
-        
-          <el-switch
-            v-model="filters.has_file"
-            active-text="有文件"
-            inactive-text="全部"
-            @change="loadContracts"
-          />
-          <el-switch
+
+
+       
+    <el-switch
             v-model="filters.is_archived"
             active-text="已归档"
             inactive-text="未归档"
             @change="loadContracts"
           />
+
+        
+      
         </div>
         <div class="toolbar-row">
 
-            <el-select v-model="filters.handling_department" clearable placeholder="按承办部门筛选" style="width: 220px" @change="loadContracts">
+
+          <el-select v-model="filters.handling_department" clearable placeholder="按承办部门筛选" style="width: 220px" @change="loadContracts">
             <el-option value="__empty__" label="(空)" />
-            <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in departmentFilterOptions" :key="item" :label="item" :value="item" />
           </el-select>
+
+          <el-select
+            v-model="filters.has_file"
+            placeholder="附件状态"
+            style="width: 140px"
+            @change="loadContracts"
+          >
+            <el-option label="全部" value="" />
+            <el-option label="无附件" value="false" />
+            <el-option label="有附件" value="true" />
+          </el-select>
+       
+
+
           <el-select v-model="filters.project" clearable placeholder="按项目筛选" style="width: 200px" @change="loadContracts">
             <el-option value="__empty__" label="(空)" />
             <el-option v-for="item in options.project" :key="item" :label="item" :value="item" />
@@ -170,14 +184,6 @@
         <el-table-column label="操作" width="140" fixed="right" align="center">
           <template #default="scope">
             <div class="action-buttons">
-              <el-upload
-                :show-file-list="false"
-                :http-request="(options) => doUpload(scope.row.id, options.file)"
-              >
-                <el-tooltip content="上传合同" placement="top">
-                  <el-button circle size="small" :icon="Upload" />
-                </el-tooltip>
-              </el-upload>
               <el-tooltip content="编辑" placement="top">
                 <el-button circle size="small" type="primary" :icon="Edit" @click.stop="openEdit(scope.row)" />
               </el-tooltip>
@@ -221,7 +227,7 @@
           style="margin-bottom: 20px"
         >
           <div class="import-rules">
-            <div>• 合同编号: 必须唯一，如果编号存在，则更新合同内容</div>
+            <div>• 合同编号: 必须唯一，如果编号存在并且标题相同，则更新合同内容，否则失败</div>
             <div>• 归档状态: 所有导入的合同自动归档到"未归档",已归档的合同由管理员进行修改</div>
             <div>• 合同金额: 从MIS导出的“合同金额（万元”）必须转成元，字段名必须重新命名为“合同金额” </div>
             <div>• 份数(copy_count): 选填，纯数字（整数）</div>
@@ -367,7 +373,7 @@ const filters = reactive({
   handling_department: '',
   project: '',
   keyword: '',
-  has_file: false,
+  has_file: '',
   is_archived: null,
 })
 
@@ -382,6 +388,23 @@ const options = reactive({
 })
 
 const totalContracts = computed(() => sortedContracts.value ? sortedContracts.value.length : 0)
+
+const departmentFilterOptions = computed(() => {
+  const merged = new Set()
+  ;(departments.value || []).forEach((item) => {
+    const value = String(item || '').trim()
+    if (value) {
+      merged.add(value)
+    }
+  })
+  ;(contracts.value || []).forEach((row) => {
+    const value = String(row?.handling_department || row?.department || '').trim()
+    if (value) {
+      merged.add(value)
+    }
+  })
+  return Array.from(merged).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
 
 const quickMatchTargetIds = computed(() => {
   return (contracts.value || [])
@@ -514,8 +537,8 @@ const quickMatchInstructionText = () => {
     '快速批配说明：',
     '1. 本功能会处理“未归档 且 无附件”的合同。',
     '2. 处理方式：在合同管理存储空间中扫描所有文件夹/子文件夹的 PDF 文件。',
-    '3. 匹配规则：文件名包含合同名称时视为候选；仅 1 个候选则直接匹配；多个候选按文件名相似度选择最佳项。',
-    '4. 成功后会把匹配到的文件路径写入合同 file_path。',
+    '3. 匹配规则：文件名包含合同编号直接匹配，文件名包含合同名称时视为候选；仅 1 个候选则直接匹配；多个候选按文件名相似度选择最佳项。',
+    '4. 成功后会把匹配到的文件路径写入绑定到合同信息的附件',
     '',
     `当前可处理合同数量：${quickMatchTargetIds.value.length}`,
     '',

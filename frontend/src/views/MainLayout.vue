@@ -53,14 +53,6 @@
                 <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>项目设置</span>
               </el-menu-item>
-              <el-menu-item index="/settings/password">
-                <Icon :icon="passwordIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
-                <span>密码修改</span>
-              </el-menu-item>
-              <el-menu-item index="/settings/logout">
-                <Icon :icon="logoutIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
-                <span>退出</span>
-              </el-menu-item>
             </el-sub-menu>
           </el-menu>
         </div>
@@ -140,14 +132,6 @@
           <el-menu-item index="/settings/projects">
             <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
-          </el-menu-item>
-          <el-menu-item index="/settings/password">
-            <Icon :icon="passwordIcon" style="font-size:20px;vertical-align:middle;" />
-            <span>密码修改</span>
-          </el-menu-item>
-          <el-menu-item index="/settings/logout">
-            <Icon :icon="logoutIcon" style="font-size:20px;vertical-align:middle;" />
-            <span>退出</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>

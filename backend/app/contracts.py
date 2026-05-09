@@ -359,7 +359,7 @@ def _normalize_excel_date(value) -> str:
     return _normalize_date_value(_stringify_excel_value(value))
 
 
-def _load_excel_rows(uploaded_file):
+def _load_excel_sheets(uploaded_file):
     filename = (uploaded_file.filename or '').strip()
     ext = os.path.splitext(filename)[1].lower()
     if ext not in EXCEL_ALLOWED_EXTENSIONS:
@@ -380,9 +380,11 @@ def _load_excel_rows(uploaded_file):
             raise RuntimeError('缺少 openpyxl 依赖，无法导入 xlsx 文件') from exc
 
         workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
-        sheet = workbook.worksheets[0]
-        rows = [list(row) for row in sheet.iter_rows(values_only=True)]
-        return sheet.title, rows
+        sheets = []
+        for sheet in workbook.worksheets:
+            rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+            sheets.append((sheet.title, rows))
+        return sheets
 
     try:
         import xlrd
@@ -390,25 +392,27 @@ def _load_excel_rows(uploaded_file):
         raise RuntimeError('缺少 xlrd 依赖，无法导入 xls 文件') from exc
 
     workbook = xlrd.open_workbook(file_contents=content)
-    sheet = workbook.sheet_by_index(0)
-    rows = []
-    for row_index in range(sheet.nrows):
-        values = []
-        for col_index in range(sheet.ncols):
-            cell = sheet.cell(row_index, col_index)
-            if cell.ctype == xlrd.XL_CELL_DATE:
-                cell_value = xlrd.xldate.xldate_as_datetime(cell.value, workbook.datemode)
-                values.append(cell_value)
-            elif cell.ctype == xlrd.XL_CELL_NUMBER:
-                values.append(int(cell.value) if float(cell.value).is_integer() else cell.value)
-            elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
-                values.append(bool(cell.value))
-            elif cell.ctype in {xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK}:
-                values.append('')
-            else:
-                values.append(cell.value)
-        rows.append(values)
-    return sheet.name, rows
+    sheets = []
+    for sheet in workbook.sheets():
+        rows = []
+        for row_index in range(sheet.nrows):
+            values = []
+            for col_index in range(sheet.ncols):
+                cell = sheet.cell(row_index, col_index)
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    cell_value = xlrd.xldate.xldate_as_datetime(cell.value, workbook.datemode)
+                    values.append(cell_value)
+                elif cell.ctype == xlrd.XL_CELL_NUMBER:
+                    values.append(int(cell.value) if float(cell.value).is_integer() else cell.value)
+                elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                    values.append(bool(cell.value))
+                elif cell.ctype in {xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK}:
+                    values.append('')
+                else:
+                    values.append(cell.value)
+            rows.append(values)
+        sheets.append((sheet.name, rows))
+    return sheets
 
 
 def _build_contract_import_template():
@@ -500,7 +504,7 @@ def _build_import_error_report(sheet_name: str, source_headers, failed_rows):
         row_values = [_stringify_excel_value(value) for value in (item.get('row_values') or [])]
         padded_values = row_values + [''] * max(0, len(normalized_headers) - len(row_values))
         sheet.append([
-            sheet_name,
+            item.get('sheet_name') or sheet_name,
             item.get('row', ''),
             *padded_values[:len(normalized_headers)],
             item.get('message', ''),
@@ -604,12 +608,19 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     contract_amount_text = str(payload.get('contract_amount') or '').strip()
     amount = _safe_decimal(contract_amount_text) if contract_amount_text else None
     if contract_amount_text and amount is None:
-        return None, 'contract_amount is invalid', 400, False
+        if update_mode:
+            amount = None
+        else:
+            return None, 'contract_amount is invalid', 400, False
 
     copy_count_text = str(payload.get('copy_count') or '').strip()
     if copy_count_text and not re.fullmatch(r'\d+', copy_count_text):
-        return None, 'copy_count is invalid', 400, False
-    copy_count = int(copy_count_text) if copy_count_text else None
+        if update_mode:
+            copy_count = None
+        else:
+            return None, 'copy_count is invalid', 400, False
+    else:
+        copy_count = int(copy_count_text) if copy_count_text else None
 
     save_place_text = str(payload.get('save_place') or '').strip()
     if len(save_place_text) > 50:
@@ -624,18 +635,23 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     is_update = False
     
     if contract_number:
-        if contract_number in pending_contract_numbers:
+        if contract_number in pending_contract_numbers and not update_mode:
             return None, 'contract_number already exists', 409, False
         
         existing_contract = Contract.query.filter_by(contract_number=contract_number).first()
         if existing_contract:
             # Allow update if contract_number exists but belongs to the same record (e.g. during import with multiple rows sharing the same contract_number)
             if update_mode:
+                incoming_contract_name = (payload.get('contract_name') or '').strip()
+                existing_contract_name = (existing_contract.contract_name or '').strip()
+                if incoming_contract_name != existing_contract_name:
+                    return None, 'contract_number already exists with different contract_name', 409, False
+
                 '''
                 if existing_contract.is_archived == '已归档':
                     return None, '已归档的合同只能由管理员进行修改', 403, False
                 '''
-                existing_contract.contract_name = (payload.get('contract_name') or '').strip()
+                existing_contract.contract_name = incoming_contract_name
                 existing_contract.contract_unit = (payload.get('contract_unit') or '').strip() or None
                 existing_contract.amount = amount
                 existing_contract.currency = 'CNY'
@@ -661,9 +677,10 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 return None, 'contract_number already exists', 409, False
 
     department = (payload.get('handling_department') or '').strip()
-    allowed_departments = _get_department_names()
-    if department not in allowed_departments:
-        return None, 'handling_department is not in configured department settings', 400, False
+    if not update_mode:
+        allowed_departments = _get_department_names()
+        if department not in allowed_departments:
+            return None, 'handling_department is not in configured department settings', 400, False
     _department_dir(department)
 
     project = (payload.get('project') or '').strip() or None
@@ -1440,13 +1457,98 @@ def _collect_storage_files() -> list:
     return result
 
 
-def _select_best_pdf_match(contract_name: str, pdf_files: list):
+def _select_best_pdf_match(row, pdf_files: list):
+    def _to_year(value: str):
+        text = str(value or '').strip()
+        if not text.isdigit():
+            return None
+        num = int(text)
+        if 1000 <= num <= 9999:
+            return num
+        if 0 <= num <= 99:
+            return 2000 + num
+        return None
+
+    def _extract_path_year_range(path_value: str):
+        path_text = str(path_value or '')
+        if not path_text:
+            return None
+
+        # 匹配形如: 2021-2023 / 21-23 / 2021－23 等范围写法
+        range_match = re.search(r'(\d{2,4})[^\d]*[\-－~—–_][^\d]*(\d{2,4})', path_text)
+        if range_match:
+            start_year = _to_year(range_match.group(1))
+            end_year = _to_year(range_match.group(2))
+            if start_year and end_year:
+                return min(start_year, end_year), max(start_year, end_year)
+
+        # 匹配单个年份: 2024 或 24（按 20XX 解释）
+        single_match = re.search(r'(?<!\d)(\d{4}|\d{2})(?!\d)', path_text)
+        if single_match:
+            year = _to_year(single_match.group(1))
+            if year:
+                return year, year
+
+        return None
+
+    def _extract_contract_year(value):
+        if isinstance(value, date):
+            return value.year
+        if isinstance(value, datetime):
+            return value.year
+        text = str(value or '').strip()
+        match = re.search(r'(20\d{2})', text)
+        if match:
+            return int(match.group(1))
+        return None
+
+    contract_name = row.contract_name or ''
     normalized_contract = _normalize_match_text(contract_name)
     if not normalized_contract:
         return None, []
 
+    contract_year = _extract_contract_year(getattr(row, 'handling_date', None))
+
     matched = []
+
+    if row.handing_department:
+
+        for item in pdf_files.filter(lambda f: f.get('path', '').contains(row.handing_department)):
+            
+            #如果item的name中匹配row.contract_number,即有包含关系又要防止短的合同编号（字母数字和连字符）误匹配长的，则优先匹配
+            contract_number_in_name = re.search(r'([a-zA-Z0-9\-]{5,})', item.get('name') or '')
+            if row.contract_number and row.contract_number == contract_number_in_name.group(0):
+                return item, {
+                    'name': item.get('name') or '', 
+                    'path': item.get('path') or '',
+                    'similarity': 1.0,
+                    'mtime': item.get('mtime') or 0,
+                }
+            
+
+
+
+
+            year_range = _extract_path_year_range(item.get('path').split('/')[1] if len(item.get('path').split('/')) > 1 else '')
+            if contract_year and year_range:
+                start_year, end_year = year_range
+                if start_year <= contract_year <= end_year:
+                    similarity = SequenceMatcher(None, normalized_contract, _normalize_match_text(item.get('name') or '')).ratio()         
+                    matched.append({
+                        'name': item.get('name') or '', 
+                        'path': item.get('path') or '',
+                        'similarity': similarity,
+                        'mtime': item.get('mtime') or 0,
+                    })
+        if matched:
+            matched.sort(key=lambda row: (-row['similarity'], -row['mtime'], row['name']))
+            return matched[0], matched
+
+    matched = []
+
     for item in pdf_files:
+        
+
         file_name = item.get('name') or ''
         normalized_file = _normalize_match_text(file_name)
         if not normalized_file:
@@ -2378,7 +2480,7 @@ def list_contracts():
     project = (request.args.get('project') or '').strip()
     status = (request.args.get('status') or '').strip()
     keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
-    has_file = request.args.get('has_file') == 'true'
+    has_file = (request.args.get('has_file') or '').strip().lower()
     is_archived = (request.args.get('is_archived') or '').strip()
 
     query = Contract.query
@@ -2392,8 +2494,10 @@ def list_contracts():
         query = query.filter(Contract.project == project)
     if status:
         query = query.filter(Contract.status == status)
-    if has_file:
+    if has_file == 'true':
         query = query.filter(Contract.file_path.isnot(None))
+    elif has_file == 'false':
+        query = query.filter(or_(Contract.file_path.is_(None), Contract.file_path == ''))
     if is_archived:
         query = query.filter(Contract.is_archived == is_archived)
     if keyword:
@@ -2570,7 +2674,7 @@ def quick_match_contract_files():
             })
             continue
 
-        best_match, matched = _select_best_pdf_match(row.contract_name, pdf_files)
+        best_match, matched = _select_best_pdf_match(row,pdf_files)
         if not best_match:
             results.append({
                 'id': row.id,
@@ -2634,7 +2738,7 @@ def import_contracts_excel():
         return jsonify({'message': '仅支持上传 xls 或 xlsx 文件'}), 400
 
     try:
-        sheet_name, rows = _load_excel_rows(uploaded)
+        sheet_payloads = _load_excel_sheets(uploaded)
     except ValueError as exc:
         return jsonify({'message': str(exc)}), 400
     except RuntimeError as exc:
@@ -2643,22 +2747,14 @@ def import_contracts_excel():
         current_app.logger.exception('Excel import failed while reading workbook')
         return jsonify({'message': f'Excel解析失败: {exc}'}), 400
 
-    if not rows:
+    if not sheet_payloads:
         return jsonify({'message': 'Excel 文件中没有可读取的数据'}), 400
 
-    header_index, field_indexes, header_labels = _detect_excel_header(rows)
-    if not field_indexes:
-        return jsonify({'message': '未识别到可用表头，请确认 Excel 中包含合同名称、合同金额、承办部门等列'}), 400
-
+    option_sets = _get_contract_option_sets()
     required_headers = {
         'contract_name': '合同名称',
         'handling_department': '承办部门',
     }
-    missing_headers = [label for key, label in required_headers.items() if key not in field_indexes]
-    if missing_headers:
-        return jsonify({'message': f'Excel 缺少必要列: {", ".join(missing_headers)}'}), 400
-
-    option_sets = _get_contract_option_sets()
     pending_contract_numbers = set()
     imported_count = 0
     updated_count = 0
@@ -2666,47 +2762,86 @@ def import_contracts_excel():
     processed_rows = 0
     errors = []
     failed_rows = []
-    source_headers = [_stringify_excel_value(cell) for cell in (rows[header_index] if header_index is not None else [])]
+    source_headers = []
+    imported_sheet_names = []
+    header_rows = {}
+    skipped_sheets = []
 
-    for excel_row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
-        if _is_excel_row_empty(row):
+    for sheet_name, rows in sheet_payloads:
+        if not rows or all(_is_excel_row_empty(row) for row in rows):
+            skipped_sheets.append({'sheet_name': sheet_name, 'reason': '工作表为空'})
             continue
 
-        payload = _build_import_payload_from_row(row, field_indexes, header_labels, option_sets)
-        if not any(str(payload.get(key, '')).strip() for key in CONTRACT_FIELD_KEYS):
+        header_index, field_indexes, header_labels = _detect_excel_header(rows)
+        if not field_indexes:
+            skipped_sheets.append({'sheet_name': sheet_name, 'reason': '未识别到可用表头'})
             continue
 
-        processed_rows += 1
-        record, message, status_code, is_update = _build_contract_record(
-            payload,
-            g.current_user,
-            pending_contract_numbers=pending_contract_numbers,
-            update_mode=True,
-        )
-        if record is None:
-            skipped_count += 1
-            errors.append({
-                'row': excel_row_number,
-                'status_code': status_code,
-                'message': message,
-            })
-            failed_rows.append({
-                'row': excel_row_number,
-                'message': message,
-                'row_values': list(row),
+        missing_headers = [label for key, label in required_headers.items() if key not in field_indexes]
+        if missing_headers:
+            skipped_sheets.append({
+                'sheet_name': sheet_name,
+                'reason': f'缺少必要列: {", ".join(missing_headers)}',
             })
             continue
 
-        db.session.add(record)
-        if is_update:
-            updated_count += 1
-        else:
-            imported_count += 1
-        if record.contract_number:
-            pending_contract_numbers.add(record.contract_number)
+        if not source_headers:
+            source_headers = [_stringify_excel_value(cell) for cell in (rows[header_index] if header_index is not None else [])]
+
+        imported_sheet_names.append(sheet_name)
+        header_rows[sheet_name] = header_index + 1
+
+        for excel_row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+            if _is_excel_row_empty(row):
+                continue
+
+            payload = _build_import_payload_from_row(row, field_indexes, header_labels, option_sets)
+            if not any(str(payload.get(key, '')).strip() for key in CONTRACT_FIELD_KEYS):
+                continue
+
+            processed_rows += 1
+            record, message, status_code, is_update = _build_contract_record(
+                payload,
+                g.current_user,
+                pending_contract_numbers=pending_contract_numbers,
+                update_mode=True,
+            )
+            if record is None:
+                skipped_count += 1
+                errors.append({
+                    'sheet_name': sheet_name,
+                    'row': excel_row_number,
+                    'status_code': status_code,
+                    'message': message,
+                })
+                failed_rows.append({
+                    'sheet_name': sheet_name,
+                    'row': excel_row_number,
+                    'message': message,
+                    'row_values': list(row),
+                })
+                continue
+
+            db.session.add(record)
+            if is_update:
+                updated_count += 1
+            else:
+                imported_count += 1
+            if record.contract_number:
+                pending_contract_numbers.add(record.contract_number)
+
+    if not imported_sheet_names:
+        return jsonify({
+            'message': '未识别到可导入工作表，请确认每个工作表都包含合同名称、承办部门等列',
+            'skipped_sheets': skipped_sheets,
+        }), 400
 
     if processed_rows == 0:
-        return jsonify({'message': 'Excel 表头已识别，但没有可导入的数据行'}), 400
+        return jsonify({
+            'message': '已识别工作表，但没有可导入的数据行',
+            'sheet_names': imported_sheet_names,
+            'skipped_sheets': skipped_sheets,
+        }), 400
 
     try:
         db.session.commit()
@@ -2715,11 +2850,17 @@ def import_contracts_excel():
         current_app.logger.exception('Excel import failed while saving rows')
         return jsonify({'message': f'Excel导入保存失败: {exc}'}), 500
 
-    error_report_token, error_report_filename = _store_import_error_report(sheet_name, source_headers, failed_rows)
+    report_sheet_name = imported_sheet_names[0] if len(imported_sheet_names) == 1 else '多个工作表'
+    error_report_token, error_report_filename = _store_import_error_report(report_sheet_name, source_headers, failed_rows)
 
     return jsonify({
-        'sheet_name': sheet_name,
-        'header_row': header_index + 1,
+        'sheet_name': report_sheet_name,
+        'sheet_names': imported_sheet_names,
+        'header_row': header_rows.get(imported_sheet_names[0], 1),
+        'header_rows': header_rows,
+        'total_sheets': len(sheet_payloads),
+        'imported_sheets': len(imported_sheet_names),
+        'skipped_sheets': skipped_sheets,
         'total_rows': processed_rows,
         'imported_count': imported_count,
         'updated_count': updated_count,
