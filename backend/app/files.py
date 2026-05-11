@@ -9,11 +9,25 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from sqlalchemy import or_
 
 from .auth import require_auth
-from .contracts import (
-    _build_contract_file_index,
+from .contracts_core import (
     _collect_storage_pdf_files,
-    _build_folder_file_items,
     _build_synology_file_path,
+    _list_storage_entries,
+    _normalize_relative_path,
+    _remote_folder_path,
+    _safe_local_folder_path,
+    _sanitize_upload_filename,
+    _storage_root_name,
+    _synology_api_post,
+    _synology_error_code,
+    _synology_error_message,
+    _synology_json_array,
+    _synology_upload_file,
+    _next_available_filename,
+)
+from .files_core_helpers import (
+    _build_contract_file_index,
+    _build_folder_file_items,
     _clear_contract_file_path_by_relative_path,
     _count_storage_files_recursive,
     _create_storage_folder,
@@ -21,23 +35,11 @@ from .contracts import (
     _delete_storage_folder,
     _extract_match_key_from_filename,
     _list_folder_children_nodes,
-    _list_storage_entries,
     _load_storage_file_payload,
-    _normalize_relative_path,
-    _remote_folder_path,
     _rename_storage_file,
     _replace_contract_file_path_by_relative_path,
-    _safe_local_folder_path,
-    _sanitize_upload_filename,
     _select_best_contract_by_key,
-    _storage_root_name,
-    _synology_api_post,
-    _synology_error_code,
-    _synology_error_message,
-    _synology_json_array,
-    _synology_upload_file,
     _synology_upload_login,
-    _next_available_filename,
 )
 from .extensions import db
 from .models import Contract

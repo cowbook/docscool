@@ -10,6 +10,7 @@
         <section v-else class="main-column">
 
           <div class="card-grid">
+
             <div class="stat-panel">
               <div class="stat-content">
                 <span class="stat-icon stat-icon-users" />
@@ -1082,10 +1083,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  min-height: 48px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   background: rgba(243, 246, 252, 0.92);
   border-radius: 12px;
   margin-right: 4px;
@@ -1144,7 +1145,7 @@ onBeforeUnmount(() => {
 }
 
 .stat-value {
-  font-size: 34px;
+  font-size: 21px;
   font-weight: 700;
   color: #183765;
   line-height: 1;
@@ -1182,6 +1183,30 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
 }
+
+
+@media (max-width: 1600px) {
+  .golden-layout {
+    grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .side-placeholder {
+    padding: 16px;
+  }
+
+  .stat-value {
+    font-size: 30px;
+  }
+
+  .stat-value-amount {
+    font-size: 18px;
+  }
+}
+
 
 @media (max-width: 1366px) {
   .golden-layout {
@@ -1224,6 +1249,9 @@ onBeforeUnmount(() => {
     gap: 12px;
   }
 }
+
+
+
 
 @media (max-width: 768px) {
   .golden-layout {

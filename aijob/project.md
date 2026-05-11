@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-05-09
+更新时间：2026-05-11
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -18,8 +18,14 @@
 
 ## 目录约定
 - backend：Flask API、模型、SQLite、NAS 上传下载、AI 解析
-  - `backend/app/contracts.py`：合同主业务、AI 提取、导入等
+  - `backend/app/contracts.py`：合同蓝图入口（轻量）
+  - `backend/app/contracts_routes_settings.py`：合同设置相关路由
+  - `backend/app/contracts_routes_contracts.py`：合同主业务路由
+  - `backend/app/contracts_routes_contracts_helpers.py`：仅合同路由使用的导入与建模辅助
+  - `backend/app/contracts_core.py`：跨模块共享核心函数/常量（共享中心）
+  - `backend/app/contracts_core_ai.py`：AI 解析与候选匹配辅助
   - `backend/app/files.py`：文件/文件夹管理接口（`/api/folders/*`）
+  - `backend/app/files_core_helpers.py`：仅文件路由使用的目录/文件操作辅助
   - `backend/app/ocr_utils.py`：OCR 相关能力聚合模块（PDF提取、OCR回退、MinerU）
 - frontend：Vue 页面、API 请求、预览和编辑交互
 - docs：部署文档
@@ -108,6 +114,15 @@
 ## 本轮结构调整（2026-05-05）
 - OCR 相关函数已从 `contracts.py` 迁移到 `ocr_utils.py`，并由 `contracts.py` 导入调用。
 - 模块化后接口行为保持不变，主要目标为降低 `contracts.py` 复杂度与维护成本。
+
+## 本轮结构调整（2026-05-11）
+- 路由与核心进一步按“引用方内聚 + 共享中心”重构：
+  - `contracts_routes_contracts_helpers.py` 承接合同路由私有辅助函数。
+  - `files_core_helpers.py` 承接文件路由私有辅助函数。
+  - `contracts_core.py` 保持跨模块共享能力，避免继续膨胀。
+- 修复重构后的遗漏导入问题：
+  - 合同保存链路补齐 `_normalize_contract_type_value` 导入。
+  - 合同更新链路补齐 `_department_dir` 导入。
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页

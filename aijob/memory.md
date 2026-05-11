@@ -1,6 +1,6 @@
 # AI 工作记忆
 
-更新时间：2026-05-09
+更新时间：2026-05-11
 
 ## 使用约定
 - 本文件用于记录 AI 已完成、已确认、待回归的重要工作，按时间顺序持续追加。
@@ -8,6 +8,20 @@
 - 记录应以“已验证事实”为主，尽量避免写未经确认的猜测。
 
 ## 时间线
+
+### 2026-05-11 本轮更新
+- 后端深拆策略调整并落地：
+	- 不再仅按“大功能块”拆分，改为按“引用方内聚”拆分。
+	- 新增 `backend/app/contracts_routes_contracts_helpers.py`，承接仅合同路由使用的导入/建模辅助函数。
+	- 新增 `backend/app/files_core_helpers.py`，承接仅文件路由使用的目录与文件操作辅助函数。
+	- `backend/app/contracts_core.py` 进一步降至约 953 行，保持共享能力中心定位。
+- 合同保存/更新报错修复：
+	- 修复 `backend/app/contracts_routes_contracts_helpers.py` 中 `_build_contract_record` 调用 `_normalize_contract_type_value` 但未导入导致的运行时错误。
+	- 修复 `backend/app/contracts_routes_contracts.py` 中 `update_contract` 调用 `_department_dir` 但未导入导致的 `NameError`（PUT 500）。
+- 验证结果：
+	- `py_compile` 通过。
+	- `create_app` 冒烟通过。
+	- 合同创建接口与合同更新接口已完成带鉴权回归验证，修复后不再出现对应 500。
 
 ### 2026-05-09 本轮更新
 - 合同列表筛选调整：
