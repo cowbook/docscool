@@ -165,6 +165,8 @@ def list_folder_children():
     try:
         normalized = _normalize_relative_path(parent_path)
         children = _list_folder_children_nodes(normalized)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
     except ValueError:
@@ -185,6 +187,8 @@ def list_folder_files():
     try:
         normalized = _normalize_relative_path(folder_path)
         rows = _build_folder_file_items(normalized)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
     except ValueError:
@@ -205,6 +209,8 @@ def count_folder_files_recursive():
     try:
         normalized = _normalize_relative_path(folder_path)
         total = _count_storage_files_recursive(normalized)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
     except ValueError:
@@ -227,6 +233,8 @@ def batch_match_folder_files():
     try:
         normalized = _normalize_relative_path(folder_path)
         _directories, files = _list_storage_entries(normalized)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
     except ValueError:
@@ -603,6 +611,8 @@ def latest_uploaded_files():
 
     try:
         all_files = _collect_storage_pdf_files()
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except Exception as exc:
         return jsonify({'message': f'读取最新文件失败: {exc}'}), 500
 

@@ -8,40 +8,17 @@
             <el-tag type="danger" size="default">{{ totalContracts }} 条</el-tag>
           </div>
           
-          <div class="header-actions">
-            <el-button-group class="apple-button-group">
-            
-              <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
-                <Icon :icon="fileTypeExcel" />
-                <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
-              </el-button>
-              <el-button :loading="aiParsing" @click="triggerAiUpload">
-                <el-icon><Document /></el-icon>
-                <span>{{ aiParsing ? '解析中...' : 'AI上传' }}</span>
-              </el-button>
-              <el-button :loading="quickMatching" :disabled="aiParsing" @click="openQuickMatchDialog">
-                <span>快速批配</span>
-              </el-button>
-              <el-button type="primary" :disabled="aiParsing" @click="openCreate">
-                <el-icon><Plus /></el-icon>
-                <span>新建</span>
-              </el-button>
-            </el-button-group>
-          </div>
         </div>
-      <div class="header-notice">
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-top: 12px;"
-        >
-          <div class="notice-content">
-            <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有管理员可以修改</span>
-          </div>
-        </el-alert>
-      </div>
+     
       </template>
+
+
+       <div class="header-notice">
+     
+          <div class="notice-content">
+            ℹ️ <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有管理员可以修改</span>
+          </div>
+      </div>
 
       <input
         ref="excelUploadInput"
@@ -64,14 +41,34 @@
 
 
        
-    <el-switch
+          <el-switch
             v-model="filters.is_archived"
             active-text="已归档"
             inactive-text="未归档"
             @change="loadContracts"
           />
 
-        
+          
+          <div class="header-actions">
+            <el-button-group class="apple-button-group">
+            
+              <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
+                <Icon :icon="fileTypeExcel" />
+                <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
+              </el-button>
+              <el-button :loading="aiParsing" @click="triggerAiUpload">
+                <el-icon><Document /></el-icon>
+                <span>{{ aiParsing ? '解析中...' : 'AI上传' }}</span>
+              </el-button>
+              <el-button :loading="quickMatching" :disabled="aiParsing" @click="openQuickMatchDialog">
+                <span>快速批配</span>
+              </el-button>
+              <el-button type="primary" :disabled="aiParsing" @click="openCreate">
+                <el-icon><Plus /></el-icon>
+                <span>新建</span>
+              </el-button>
+            </el-button-group>
+          </div>
       
         </div>
         <div class="toolbar-row">
@@ -109,7 +106,6 @@
             @keyup.enter="loadContracts"
           />
           <el-button type="primary" @click="loadContracts">搜索</el-button>
-          <el-button @click="loadContracts">刷新</el-button>
         </div>
       </div>
 
@@ -246,9 +242,9 @@
           
           <el-button @click="importDialogVisible = false">取消</el-button>
          
-          <el-button type="primary" @click="triggerExcelUpload">
+          <el-button type="primary" :loading="importingExcel" :disabled="importingExcel" @click="triggerExcelUpload">
             <el-icon><Document /></el-icon>
-            选择文件
+            {{ importingExcel ? '导入中...' : '选择文件' }}
           </el-button>
         </div>
       </template>
@@ -469,6 +465,25 @@ const loadFieldOptions = async () => {
 
 const normalizeFolderPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
+const shouldForceLogout = (error) => {
+  const msg = error?.response?.data?.message || ''
+  const status = error?.response?.status
+  return (
+    status === 401 ||
+    /凭据已过期|登录凭据已过期|token失效|token过期|unauthorized|未授权/i.test(msg)
+  )
+}
+
+const forceLogoutToLogin = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('username')
+  const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  const loginPath = `${basePath}/login` || '/login'
+  if (window.location.pathname !== loginPath) {
+    window.location.href = loginPath
+  }
+}
+
 const loadLinkTreeSnapshot = async () => {
   try {
     const [{ data: treeData }, { data: childrenData }] = await Promise.all([
@@ -489,20 +504,9 @@ const loadLinkTreeSnapshot = async () => {
     }
     linkTreeSnapshot.refreshedAt = Date.now()
   } catch (error) {
-    // 检查是否凭据已过期，遇到则直接退出系统
     const msg = error?.response?.data?.message || ''
-    const status = error?.response?.status
-    if (
-      status === 401 ||
-      /凭据已过期|登录凭据已过期|token失效|token过期|unauthorized|未授权/i.test(msg)
-    ) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
-      const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
-      const loginPath = `${basePath}/login` || '/login'
-      if (window.location.pathname !== loginPath) {
-        window.location.href = loginPath
-      }
+    if (shouldForceLogout(error)) {
+      forceLogoutToLogin()
       return
     }
     linkTreeSnapshot.root = { name: '/', path: '' }
@@ -595,6 +599,11 @@ const startQuickMatch = async () => {
     ElMessage.success('快速批配已完成')
     await loadContracts()
   } catch (error) {
+    if (shouldForceLogout(error)) {
+      appendQuickMatchLog('执行失败：登录凭据已过期，正在跳转登录页...')
+      forceLogoutToLogin()
+      return
+    }
     appendQuickMatchLog(`执行失败：${error?.response?.data?.message || '请求失败'}`)
     ElMessage.error(error?.response?.data?.message || '快速批配执行失败')
   } finally {
@@ -969,6 +978,11 @@ watch(aiMatchDialogVisible, (visible) => {
 </script>
 
 <style scoped>
+.header-notice{
+  font-size: 14px;
+  color: #6b7280;
+  margin:0 0 8px 0;
+}
 .contract-page {
   display: grid;
   border-radius: 18px;
@@ -1005,6 +1019,8 @@ watch(aiMatchDialogVisible, (visible) => {
 }
 
 .header-actions {
+  position: relative;
+  top: -4px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1084,6 +1100,10 @@ watch(aiMatchDialogVisible, (visible) => {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.toolbar-row:first-child {
+    justify-content: space-between;
 }
 
 .contract-table :deep(.el-table__cell) {

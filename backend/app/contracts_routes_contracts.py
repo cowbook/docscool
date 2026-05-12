@@ -217,6 +217,8 @@ def quick_match_contract_files():
 
     try:
         pdf_files = _collect_storage_pdf_files()
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
     except Exception as exc:
         return jsonify({'message': f'读取存储目录失败: {exc}'}), 500
 
@@ -276,7 +278,7 @@ def quick_match_contract_files():
             'file_path': best_match['path'],
             'matched_count': len(matched),
             'matched_name': best_match['name'],
-            'similarity': round(best_match['similarity'], 6),
+            'similarity': round(float(best_match.get('similarity') or 0), 6),
         })
 
     db.session.commit()

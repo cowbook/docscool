@@ -1,6 +1,7 @@
 import mimetypes
 import os
 import posixpath
+import re
 
 import requests
 from difflib import SequenceMatcher
@@ -11,6 +12,7 @@ from .contracts_core import (
     _build_synology_file_path,
     _filename_from_content_disposition,
     _list_local_entries,
+    _list_storage_entries,
     _list_remote_entries,
     _normalize_contract_file_path,
     _normalize_match_text,

@@ -12,6 +12,7 @@ from .contracts_core import (
     AI_MATCH_CANDIDATE_LIMIT,
     CONTRACT_FIELD_KEYS,
     CSV_OPTION_DEFAULTS,
+    EXTERNAL_API_TIMEOUT_SECONDS,
     OPTION_FIELD_DEFAULTS,
     _format_decimal_plain,
     _get_department_names,

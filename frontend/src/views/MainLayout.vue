@@ -6,6 +6,7 @@
     <el-container class="shell-container">
       <el-header class="topbar">
         <div class="topbar-left">
+
           <div class="logo">
             <Icon :icon="docIcon" style="font-size:26px;color:#2563eb;margin-right:8px;vertical-align:middle;" />
             <span style="vertical-align:middle;">DocsCool</span>
@@ -256,6 +257,7 @@ onBeforeUnmount(() => {
 
 .menu {
   border-right: none;
+  margin-left:90px;
 }
 
 .topbar {

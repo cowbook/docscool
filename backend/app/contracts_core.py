@@ -236,11 +236,11 @@ def _synology_upload_login() -> str:
     if not base_url:
         raise RuntimeError('Missing SYNOLOGY_BASE_URL in .env')
     if not username:
-        raise RuntimeError('未找到当前登录用户，请重新登录后重试')
+        raise PermissionError('未找到当前登录用户，请重新登录后重试')
 
     password = get_cached_user_password(username)
     if not password:
-        raise RuntimeError('登录凭据已过期，请重新登录后重试')
+        raise PermissionError('登录凭据已过期，请重新登录后重试')
 
     return _synology_user_login(username, password, session_name='FileStation')
 
@@ -826,19 +826,24 @@ def _select_best_pdf_match(row, pdf_files: list):
 
     matched = []
 
-    if row.handing_department:
+    department = (getattr(row, 'department', '') or '').strip()
+    if department:
 
-        for item in pdf_files.filter(lambda f: f.get('path', '').contains(row.handing_department)):
+        for item in pdf_files:
+            item_path = item.get('path') or ''
+            if department not in item_path:
+                continue
             
             #如果item的name中匹配row.contract_number,即有包含关系又要防止短的合同编号（字母数字和连字符）误匹配长的，则优先匹配
             contract_number_in_name = re.search(r'([a-zA-Z0-9\-]{5,})', item.get('name') or '')
-            if row.contract_number and row.contract_number == contract_number_in_name.group(0):
-                return item, {
+            if row.contract_number and contract_number_in_name and row.contract_number == contract_number_in_name.group(0):
+                exact_match = {
                     'name': item.get('name') or '', 
                     'path': item.get('path') or '',
                     'similarity': 1.0,
                     'mtime': item.get('mtime') or 0,
                 }
+                return exact_match, [exact_match]
             
 
 
