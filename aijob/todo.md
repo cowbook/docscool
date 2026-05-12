@@ -1,6 +1,6 @@
 # 待完善任务清单
 
-更新时间：2026-05-11
+更新时间：2026-05-12
 
 ## 0.7 本轮新增回归项（附件筛选与部门候选）
 - 合同列表筛选回归：
@@ -23,6 +23,18 @@
 - 重构稳定性回归：
 	- 回归 `contracts_routes_contracts_helpers.py` 与 `files_core_helpers.py` 拆分后导入关系完整。
 	- 回归 `create_app` 启动、`py_compile`、核心路由注册均正常。
+
+## 0.9 本轮新增回归项（2026-05-12 快速匹配与凭据过期）
+- 快速匹配接口回归：
+	- 回归 `POST /api/contracts/quick-match-files` 在凭据过期场景返回 401，不再返回 500。
+	- 回归 `_select_best_pdf_match` 精确命中路径下返回结构稳定，`similarity` 字段可用。
+	- 回归部门路径优先筛选分支不再出现 `handing_department` 属性错误。
+- 前端自动退出回归：
+	- 回归合同列表页“快速批配 -> 开始”遇到 401/凭据过期消息后自动清 token 并跳转登录。
+- AI 解析回归：
+	- 回归 `POST /api/contracts/ai-parse` 不再出现 `EXTERNAL_API_TIMEOUT_SECONDS` 未定义错误。
+- 导入弹窗交互回归：
+	- 回归“选择文件”后按钮立即变为“导入中...”，且在导入完成前不可点击。
 
 ## 0.4 本轮新增回归项（OCR模块化与导入模板下载）
 - OCR 模块化回归：

@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-05-11
+更新时间：2026-05-12
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -123,6 +123,15 @@
 - 修复重构后的遗漏导入问题：
   - 合同保存链路补齐 `_normalize_contract_type_value` 导入。
   - 合同更新链路补齐 `_department_dir` 导入。
+
+## 本轮稳定性补充（2026-05-12）
+- `POST /api/contracts/ai-parse`：
+  - 修复 AI 模块中超时常量缺失导入，消除 `EXTERNAL_API_TIMEOUT_SECONDS is not defined` 运行时错误。
+- `POST /api/contracts/quick-match-files`：
+  - 凭据过期场景统一返回 401，不再误报 500。
+  - 修复 `_select_best_pdf_match` 的部门字段拼写错误与精确匹配分支返回结构错误，避免 `best_match['similarity']` 崩溃。
+- 前端凭据过期联动：
+  - 快速匹配“开始”执行时遇到 401/凭据过期文案，前端会自动清理登录态并跳转登录页。
 
 ## 前端关键页面
 - `frontend/src/views/LoginView.vue`：DSM 登录页
