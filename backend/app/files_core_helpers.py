@@ -414,6 +414,68 @@ def _rename_storage_file(relative_file_path: str, new_name: str) -> tuple[str, s
     return normalized, new_relative_path
 
 
+def _move_storage_file(relative_file_path: str, target_folder_path: str) -> tuple[str, str]:
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    normalized_target = _normalize_relative_path(target_folder_path)
+    file_name = posixpath.basename(normalized)
+    if not file_name:
+        raise ValueError('无效的文件路径')
+
+    new_relative_path = _build_synology_file_path(normalized_target, file_name)
+    if new_relative_path == normalized:
+        return normalized, normalized
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+
+        # Ensure destination folder exists before move.
+        _list_remote_entries(normalized_target, sid=sid)
+
+        old_remote_path = _remote_folder_path(normalized)
+        dest_remote_path = _remote_folder_path(normalized_target)
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.CopyMove',
+                'version': '3',
+                'method': 'start',
+            },
+            data={
+                'path': f'["{old_remote_path}"]',
+                'dest_folder_path': dest_remote_path,
+                'remove_src': 'true',
+                'overwrite': 'false',
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件或目标目录不存在')
+            if code in {408, 414}:
+                raise FileExistsError('目标目录已存在同名文件')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+
+        return normalized, new_relative_path
+
+    old_local_path = _safe_local_file_path(normalized)
+    if not os.path.isfile(old_local_path):
+        raise FileNotFoundError('文件不存在')
+
+    target_local_folder_path = _safe_local_folder_path(normalized_target)
+    if not os.path.isdir(target_local_folder_path):
+        raise FileNotFoundError('目标目录不存在')
+
+    new_local_path = _safe_local_file_path(new_relative_path)
+    if os.path.exists(new_local_path):
+        raise FileExistsError('目标目录已存在同名文件')
+
+    os.rename(old_local_path, new_local_path)
+    return normalized, new_relative_path
+
+
 def _clear_contract_file_path_by_relative_path(relative_file_path: str) -> list[int]:
     normalized_target = _normalize_relative_path(relative_file_path)
     if not normalized_target:

@@ -36,6 +36,7 @@ from .files_core_helpers import (
     _extract_match_key_from_filename,
     _list_folder_children_nodes,
     _load_storage_file_payload,
+    _move_storage_file,
     _rename_storage_file,
     _replace_contract_file_path_by_relative_path,
     _select_best_contract_by_key,
@@ -543,6 +544,40 @@ def rename_folder_file():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'message': f'重命名文件失败: {exc}'}), 500
+
+    return jsonify({
+        'success': True,
+        'old_path': old_path,
+        'path': new_path,
+        'affected_contract_count': len(affected_ids),
+        'affected_contract_ids': affected_ids,
+    })
+
+
+@files_bp.put('/folders/file/move')
+@require_auth
+def move_folder_file():
+    body = request.get_json(silent=True) or {}
+    file_path = body.get('path') or body.get('file_path') or ''
+    target_folder_path = body.get('target_folder_path') or body.get('target_path') or ''
+
+    try:
+        old_path, new_path = _move_storage_file(file_path, target_folder_path)
+        affected_ids = []
+        if old_path != new_path:
+            affected_ids = _replace_contract_file_path_by_relative_path(old_path, new_path)
+        db.session.commit()
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except FileExistsError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'message': f'移动文件失败: {exc}'}), 500
 
     return jsonify({
         'success': True,

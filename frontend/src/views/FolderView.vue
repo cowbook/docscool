@@ -256,6 +256,7 @@
           </el-table>
 
             <div v-if="fileContextMenuVisible" class="file-context-menu" :style="fileContextMenuStyle">
+              <button type="button" class="menu-item" :disabled="!fileContextTarget" @click="handleFileContextCommand('move')">移动</button>
               <button type="button" class="menu-item" :disabled="!fileContextTarget" @click="handleFileContextCommand('rename')">改名</button>
               <button type="button" class="menu-item menu-item-danger" :disabled="!fileContextTarget" @click="handleFileContextCommand('delete')">删除</button>
             </div>
@@ -311,6 +312,49 @@
       <template #footer>
         <el-button @click="batchMatchDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="batchMatching" @click="startBatchMatch">开始匹配</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="moveFileDialogVisible"
+      title="移动文件"
+      width="min(680px, 96vw)"
+      :close-on-click-modal="false"
+      @closed="resetMoveFileDialog"
+    >
+      <div class="move-dialog-content">
+        <div class="move-dialog-row"><span class="move-dialog-label">文件：</span>{{ moveFileSourceName || '-' }}</div>
+        <div class="move-dialog-row"><span class="move-dialog-label">当前路径：</span>{{ moveFileSourcePath || '-' }}</div>
+        <div class="move-dialog-row"><span class="move-dialog-label">目标目录：</span>{{ moveFileTargetPath || '/' }}</div>
+
+        <div class="move-dialog-actions">
+          <el-button size="small" @click="moveFileTargetPath = ''">选择根目录 /</el-button>
+        </div>
+
+        <el-tree
+          ref="moveTargetTreeRef"
+          class="move-target-tree"
+          :data="treeData"
+          node-key="path"
+          :props="treeProps"
+          lazy
+          :load="loadTreeChildren"
+          :expand-on-click-node="true"
+          highlight-current
+          @node-click="onMoveTargetNodeClick"
+        >
+          <template #default="{ node, data }">
+            <span class="tree-node-content" :data-path="normalizePath(data.path)">
+              <span class="tree-folder-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
+              <span class="tree-node-label">{{ data.name }}</span>
+            </span>
+          </template>
+        </el-tree>
+      </div>
+
+      <template #footer>
+        <el-button @click="moveFileDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="movingFile" @click="confirmMoveFile">移动</el-button>
       </template>
     </el-dialog>
 
@@ -390,6 +434,11 @@ const contextTargetPath = ref('')
 const fileContextMenuVisible = ref(false)
 const fileContextMenuStyle = ref({ left: '0px', top: '0px' })
 const fileContextTarget = ref(null)
+const moveFileDialogVisible = ref(false)
+const movingFile = ref(false)
+const moveFileSourceRow = ref(null)
+const moveFileTargetPath = ref('')
+const moveTargetTreeRef = ref(null)
 const folderUploadInputRef = ref(null)
 const uploadingFolderFiles = ref(false)
 const leftPanelRef = ref(null)
@@ -571,6 +620,86 @@ const handleFileContextCommand = async (command) => {
 
   if (command === 'rename') {
     await renameFileRow(row)
+    return
+  }
+
+  if (command === 'move') {
+    await openMoveFileDialog(row)
+  }
+}
+
+const resetMoveFileDialog = () => {
+  moveFileSourceRow.value = null
+  moveFileTargetPath.value = ''
+  movingFile.value = false
+}
+
+const onMoveTargetNodeClick = (node) => {
+  moveFileTargetPath.value = normalizePath(node?.path || '')
+}
+
+const openMoveFileDialog = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    return
+  }
+
+  moveFileSourceRow.value = row
+  moveFileTargetPath.value = selectedFolderPath.value || ''
+  moveFileDialogVisible.value = true
+
+  await nextTick()
+  if (moveFileTargetPath.value) {
+    moveTargetTreeRef.value?.setCurrentKey?.(normalizePath(moveFileTargetPath.value))
+  } else {
+    moveTargetTreeRef.value?.setCurrentKey?.(null)
+  }
+}
+
+const confirmMoveFile = async () => {
+  if (movingFile.value) {
+    return
+  }
+
+  const sourcePath = String(moveFileSourcePath.value || '').trim()
+  if (!sourcePath) {
+    ElMessage.warning('源文件路径为空')
+    return
+  }
+
+  const targetPath = normalizePath(moveFileTargetPath.value)
+  const sourceFolderPath = getParentPath(sourcePath)
+  if (sourceFolderPath === targetPath) {
+    ElMessage.warning('目标目录与当前目录一致，无需移动')
+    return
+  }
+
+  movingFile.value = true
+  try {
+    const { data } = await http.put('/folders/file/move', {
+      path: sourcePath,
+      target_folder_path: targetPath,
+    })
+
+    const newPath = String(data?.path || '').trim()
+    if (previewRow.value?.file_path === sourcePath && newPath) {
+      previewRow.value = {
+        ...(previewRow.value || {}),
+        file_path: newPath,
+        name: newPath.split('/').pop() || previewRow.value?.name,
+      }
+    }
+
+    moveFileDialogVisible.value = false
+    await loadFolderFiles(selectedFolderPath.value)
+    await loadRecursiveFileCount(selectedFolderPath.value)
+
+    const affectedCount = Number(data?.affected_contract_count) || 0
+    ElMessage.success(`移动成功，已同步 ${affectedCount} 个关联合同文件路径`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '移动文件失败')
+  } finally {
+    movingFile.value = false
   }
 }
 
@@ -612,6 +741,14 @@ const filteredFiles = computed(() => {
 
 const currentFileCount = computed(() => {
   return Array.isArray(files.value) ? files.value.length : 0
+})
+
+const moveFileSourcePath = computed(() => {
+  return String(moveFileSourceRow.value?.file_path || '').trim()
+})
+
+const moveFileSourceName = computed(() => {
+  return String(moveFileSourceRow.value?.name || '').trim()
 })
 
 const fileColumnAutoWidth = computed(() => {
@@ -1568,6 +1705,15 @@ watch(previewDialogVisible, (visible) => {
 </script>
 
 <style scoped>
+.folder-page {
+  border-radius: 12px;
+}
+
+.folder-page :deep(.el-card) {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
 .folder-layout {
   display: grid;
   gap: 0;
@@ -1767,6 +1913,35 @@ watch(previewDialogVisible, (visible) => {
 .batch-match-log :deep(textarea) {
   font-family: Consolas, 'Courier New', monospace;
   line-height: 1.55;
+}
+
+.move-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.move-dialog-row {
+  font-size: 13px;
+  color: #374151;
+  word-break: break-all;
+}
+
+.move-dialog-label {
+  color: #6b7280;
+}
+
+.move-dialog-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.move-target-tree {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  max-height: 48vh;
+  overflow: auto;
 }
 
 .card-header {
