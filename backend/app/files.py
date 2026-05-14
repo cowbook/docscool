@@ -1,6 +1,7 @@
 import os
 import posixpath
 import hashlib
+import re
 from io import BytesIO
 
 import fitz
@@ -228,6 +229,62 @@ def count_folder_files_recursive():
 @files_bp.post('/folders/batch-match')
 @require_auth
 def batch_match_folder_files():
+
+    def _to_year(value: str):
+        text = str(value or '').strip()
+        if not text.isdigit():
+            return None
+        num = int(text)
+        if 1000 <= num <= 9999:
+            return num
+        if 0 <= num <= 99:
+            return 2000 + num
+        return None
+
+    def _extract_path_year_range(path_value: str):
+        path_text = str(path_value or '')
+        if not path_text:
+            return None, None
+
+        # 匹配形如: 2021-2023 / 21-23 / 2021－23 等范围写法
+        range_match = re.search(r'(\d{2,4})[^\d]*[\-－~—–_][^\d]*(\d{2,4})', path_text)
+        if range_match:
+            start_year = _to_year(range_match.group(1))
+            end_year = _to_year(range_match.group(2))
+            if start_year and end_year:
+                return min(start_year, end_year), max(start_year, end_year)
+
+        # 匹配单个年份: 2024 或 24（按 20XX 解释）
+        single_match = re.search(r'(?<!\d)(\d{4}|\d{2})(?!\d)', path_text)
+        if single_match:
+            year = _to_year(single_match.group(1))
+            if year:
+                return year, year
+
+        return None, None
+
+    def _load_candidate_contracts(folder_value: str):
+        query = Contract.query.filter(
+            Contract.is_archived != '已归档',
+            or_(Contract.file_path.is_(None), Contract.file_path == ''),
+        )
+
+        match_year1, match_year2 = _extract_path_year_range(folder_value)
+        if match_year1 and match_year2:
+            query = query.filter(
+                or_(
+                    Contract.contract_date_year.is_(None),
+                    Contract.contract_date_year.between(match_year1, match_year2),
+                )
+            )
+
+        folder_parts = [segment.strip() for segment in str(folder_value or '').split('/') if segment.strip()]
+        match_dept = folder_parts[0] if folder_parts else None
+        if match_dept:
+            query = query.filter(Contract.department == match_dept)
+
+        return query.all()
+
     body = request.get_json(silent=True) or {}
     folder_path = body.get('folder_path') or body.get('folder') or ''
 
@@ -243,10 +300,7 @@ def batch_match_folder_files():
     except Exception as exc:
         return jsonify({'message': f'读取目录文件失败: {exc}'}), 500
 
-    candidate_contracts = Contract.query.filter(
-        Contract.is_archived != '已归档',
-        or_(Contract.file_path.is_(None), Contract.file_path == ''),
-    ).all()
+    candidate_contracts = _load_candidate_contracts(normalized)
     contract_index = _build_contract_file_index()
 
     used_contract_ids = set()
@@ -269,6 +323,34 @@ def batch_match_folder_files():
             })
             continue
 
+        available_contracts = [row for row in candidate_contracts if row.id not in used_contract_ids]
+
+        # 文件名中出现明确合同编号时优先按合同编号直连，避免名称模糊匹配误绑。
+        contract_number_in_name = re.search(r'([A-Za-z0-9\-]{5,})', file_name)
+        if contract_number_in_name:
+            contract_number = contract_number_in_name.group(1)
+            matched_contract = next(
+                (row for row in available_contracts if (row.contract_number or '') == contract_number),
+                None,
+            )
+            if matched_contract:
+                matched_contract.file_path = file_path
+                used_contract_ids.add(matched_contract.id)
+                success_count += 1
+                results.append({
+                    'name': file_name,
+                    'file_path': file_path,
+                    'match_key': contract_number,
+                    'status': 'success',
+                    'message': '匹配成功（合同编号优先）',
+                    'matched_contract_id': matched_contract.id,
+                    'matched_contract_name': matched_contract.contract_name,
+                    'match_method': '文件名包含合同编号',
+                    'candidate_count': 1,
+                })
+                continue
+
+
         match_key = _extract_match_key_from_filename(file_name)
 
         if not match_key:
@@ -280,7 +362,6 @@ def batch_match_folder_files():
             })
             continue
 
-        available_contracts = [row for row in candidate_contracts if row.id not in used_contract_ids]
         best_contract, match_method, matched_rows = _select_best_contract_by_key(match_key, available_contracts)
 
         if not best_contract:
