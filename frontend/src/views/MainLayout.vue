@@ -54,6 +54,10 @@
                 <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>项目设置</span>
               </el-menu-item>
+              <el-menu-item index="/settings/users">
+                <Icon :icon="userPermissionIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>用户权限</span>
+              </el-menu-item>
             </el-sub-menu>
           </el-menu>
         </div>
@@ -134,6 +138,10 @@
             <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
           </el-menu-item>
+          <el-menu-item index="/settings/users">
+            <Icon :icon="userPermissionIcon" style="font-size:20px;vertical-align:middle;" />
+            <span>用户权限</span>
+          </el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-drawer>
@@ -150,6 +158,7 @@ import folderIcon from '@iconify-icons/tabler/folder'
 import settingIcon from '@iconify-icons/tabler/settings'
 import officeIcon from '@iconify-icons/tabler/building'
 import projectIcon from '@iconify-icons/tabler/tag'
+import userPermissionIcon from '@iconify-icons/tabler/users-group'
 import passwordIcon from '@iconify-icons/tabler/password-user'
 import logoutIcon from '@iconify-icons/tabler/logout'
 
@@ -174,6 +183,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/contracts')) return '合同管理'
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'
+  if (route.path === '/settings/users') return '用户权限'
   if (route.path === '/settings/password') return '密码修改'
   if (route.path.startsWith('/settings')) return '系统设置'
   return 'DocsCool'

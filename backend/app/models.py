@@ -107,3 +107,30 @@ class ProjectOption(db.Model):
             'name': self.name,
             'created_at': self.created_at.isoformat(),
         }
+
+
+class UserPermission(db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    login_name = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(255), nullable=True)
+    permission = db.Column(db.String(32), nullable=False, default='view')
+    departments = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        department_list = [
+            item.strip() for item in str(self.departments or '').split(',') if item and item.strip()
+        ]
+        return {
+            'id': self.id,
+            'login_name': self.login_name,
+            'description': self.description or '',
+            'permission': self.permission,
+            'departments': self.departments or '',
+            'department_list': department_list,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+        }

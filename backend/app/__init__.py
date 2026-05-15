@@ -10,7 +10,7 @@ from .config import Config
 from .contracts import contracts_bp
 from .files import files_bp
 from .extensions import db
-from .models import Contract, Department, ProjectOption
+from .models import Contract, Department, ProjectOption, UserPermission
 
 
 DEFAULT_PROJECT_OPTIONS = [

@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-05-14
+更新时间：2026-05-15
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -72,6 +72,7 @@
 ## 数据模型关键约定
 - 合同主表：`contracts`
 - 部门表：`departments`
+- 用户权限表：`users`
 - 默认保底部门：`财务部`
 - 金额字段：`amount NUMERIC(20, 8)`
 - 全文字段：`fullbody TEXT`
@@ -107,6 +108,9 @@
 - `POST /api/folders/batch-match`：批量匹配当前文件夹下未关联合同的文件；先按路径中的部门与年份范围预筛候选，命中文件名合同编号时优先直连，否则再按中文关键名称匹配
 - `GET /api/folders/file-count`：返回当前目录及子目录文件总数
 - `PUT /api/folders/file/move`：将文件移动到目标目录，并同步更新已关联合同的 `file_path`
+- `GET /api/settings/users`：读取用户权限列表；触发群晖 `docscool` 组同步、返回部门候选与同步提示
+- `POST /api/settings/users`：新增用户权限记录（登录名需存在于群晖）
+- `PUT /api/settings/users/<id>`：更新用户权限级别与部门范围
 
 ## 本轮结构调整（2026-04-22）
 - `folders` 相关接口已从 `contracts.py` 拆分到 `files.py`，应用通过 `files_bp` 蓝图注册。
@@ -146,6 +150,7 @@
 - `frontend/src/views/HomeView.vue`：首页汇总
 - `frontend/src/views/ContractView.vue`：合同列表、创建、编辑、AI 上传、EXCEL 导入、PDF 预览、正文查看
 - `frontend/src/views/FolderView.vue`：目录树、目录文件列表、文件合同关联、批量匹配
+- `frontend/src/views/UserPermissionSettingsView.vue`：用户权限设置页（群晖 `docscool` 组映射）
 - `frontend/src/components/ContractItem.vue`：合同新建/编辑/预览复用组件
 - `frontend/src/components/AiMatchDialog.vue`：AI 识别结果确认复用组件
 
@@ -169,6 +174,20 @@
 - “文本”弹窗内容直接绑定 `form.fullbody`
 - 导入弹窗底部保留：`下载模板` 链接样式按钮、`取消` 按钮、`选择文件` 按钮
 - 主导航“系统设置”中不再显示“密码修改”和“退出”；右上角用户菜单暂时保留这两个入口
+- 主导航“系统设置”已新增“用户权限”，桌面端和移动端菜单保持一致
+
+## 本轮权限管理新增约定（2026-05-15）
+- 用户权限映射：
+  - `super_admin`：超管
+  - `edit`：编辑
+  - `view`：查看
+- 部门范围字段：
+  - 前端使用多选；后端按逗号拼接存储到 `users.departments`
+  - 候选来源为“部门设置表 + 合同表历史部门”的去重并集
+- 群晖组同步规则：
+  - 页面读取时保证数据库用户与群晖 `docscool` 组双向一致（按数据库为基准）
+  - 当前登录用户首次访问会自动补录到数据库
+  - 当前登录用户属于 `administrators` 时，自动赋予超管和“全部”部门范围
 
 ### LoginView 视觉约定（2026-04-27）
 - 登录右侧面板 `.login-panel`：
