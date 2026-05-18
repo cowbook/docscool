@@ -24,6 +24,9 @@
 	- 应用启动中已全局忽略 `urllib3` 的 `InsecureRequestWarning`，减少 `verify=False` 场景下日志干扰。
 - 代码清理：
 	- `contracts_routes_settings.py` 已删除当前流程下不再使用的函数与字段，保留最小必需链路。
+- 下次优化方向：
+	- 专门测试能正确验证“用户名与用户组关系”的 Synology API，不再接受校验不可用直接放行。
+	- 优先确认 `Group.Member.get_users`、`Group` 及相关成员接口在当前 DSM 上的真实返回与限制。
 
 ### 2026-05-15 本轮更新
 - 系统设置新增“用户权限”菜单与页面：

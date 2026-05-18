@@ -349,38 +349,257 @@ def _synology_create_group(sid: str, group_name: str) -> None:
     raise RuntimeError(_synology_error_message(payload, 'auth'))
 
 
+def _synology_get_group_member_users(sid: str, group_name: str) -> tuple[list[str], dict]:
+    attempts = [
+        {
+            'label': 'core-group-member-get_users-true',
+            'api': 'SYNO.Core.Group.Member',
+            'method': 'get_users',
+            'data': {
+                'group': group_name,
+                'in_group': 'true',
+            },
+        },
+        {
+            'label': 'core-group-member-get_users-1',
+            'api': 'SYNO.Core.Group.Member',
+            'method': 'get_users',
+            'data': {
+                'group': group_name,
+                'in_group': '1',
+            },
+        },
+    ]
+
+    last_payload = {}
+    for index, attempt in enumerate(attempts, start=1):
+        current_app.logger.info(
+            '[settings/users] group member get_users request: attempt=%s api=%s method=%s group=%s in_group=%s',
+            index,
+            attempt['api'],
+            attempt['method'],
+            group_name,
+            attempt['data'].get('in_group'),
+        )
+
+        payload = None
+        try:
+            payload = _synology_api_get(
+                sid,
+                {
+                    'api': attempt['api'],
+                    'version': '1',
+                    'method': attempt['method'],
+                    **attempt['data'],
+                },
+            )
+        except Exception as exc:
+            current_app.logger.info(
+                '[settings/users] group member get_users GET exception: attempt=%s group=%s exc=%s message=%s',
+                index,
+                group_name,
+                exc.__class__.__name__,
+                str(exc),
+            )
+
+        if not payload or not payload.get('success'):
+            try:
+                payload = _synology_api_post(
+                    sid,
+                    {
+                        'api': attempt['api'],
+                        'version': '1',
+                        'method': attempt['method'],
+                    },
+                    data=attempt['data'],
+                )
+            except Exception as exc:
+                current_app.logger.info(
+                    '[settings/users] group member get_users POST exception: attempt=%s group=%s exc=%s message=%s',
+                    index,
+                    group_name,
+                    exc.__class__.__name__,
+                    str(exc),
+                )
+                payload = None
+
+        last_payload = payload or {}
+        current_app.logger.info(
+            '[settings/users] group member get_users response: attempt=%s group=%s success=%s code=%s users_count=%s',
+            index,
+            group_name,
+            bool(payload and payload.get('success')),
+            _synology_error_code(payload or {}),
+            len((((payload or {}).get('data') or {}).get('users') or [])),
+        )
+
+        if not payload or not payload.get('success'):
+            continue
+
+        users = ((payload.get('data') or {}).get('users') or [])
+        normalized_users = []
+        for item in users:
+            if isinstance(item, str):
+                value = item.strip()
+            else:
+                value = (item.get('name') or '').strip()
+            if value:
+                normalized_users.append(value)
+
+        return normalized_users, last_payload
+
+    return [], last_payload
+
+
 def _synology_set_group_users(sid: str, group_name: str, usernames: list[str]) -> None:
     normalized = sorted({(item or '').strip() for item in usernames if (item or '').strip()})
-    payload = _synology_api_post(
-        sid,
-        {
-            'api': 'SYNO.Core.Group',
-            'version': '1',
-            'method': 'set',
-        },
-        data={
-            'name': group_name,
-            'users': json.dumps(normalized, ensure_ascii=False),
-        },
-    )
-    if payload.get('success'):
+    if not normalized:
+        current_app.logger.info(
+            '[settings/users] group add users skipped: group=%s reason=no-users',
+            group_name,
+        )
         return
 
-    payload_add = _synology_api_post(
-        sid,
+    expected_set = set(normalized)
+
+    def _verify_membership(stage: str) -> tuple[list[str], bool]:
+        try:
+            actual_users, verify_payload = _synology_get_group_member_users(sid, group_name)
+            actual_set = {(item or '').strip() for item in actual_users if (item or '').strip()}
+            missing = sorted(expected_set - actual_set)
+            verify_code = _synology_error_code(verify_payload or {})
+            current_app.logger.info(
+                '[settings/users] group add users verify: stage=%s group=%s expected=%s actual_count=%s missing=%s actual_sample=%s verify_code=%s',
+                stage,
+                group_name,
+                normalized,
+                len(actual_set),
+                missing,
+                sorted(actual_set)[:20],
+                verify_code,
+            )
+            if verify_code == 103:
+                current_app.logger.info(
+                    '[settings/users] group add users verify unavailable: stage=%s group=%s code=%s',
+                    stage,
+                    group_name,
+                    verify_code,
+                )
+                return [], False
+            return missing, True
+        except Exception as exc:
+            current_app.logger.info(
+                '[settings/users] group add users verify exception: stage=%s group=%s exc=%s message=%s',
+                stage,
+                group_name,
+                exc.__class__.__name__,
+                str(exc),
+            )
+            return list(expected_set), False
+
+    attempts = [
         {
+            'label': 'core-group-member-add_users',
+            'api': 'SYNO.Core.Group.Member',
+            'method': 'add_users',
+            'data': {
+                'group': group_name,
+                'users': json.dumps(normalized, ensure_ascii=False),
+            },
+        },
+        {
+            'label': 'core-group-set-add_users-name',
             'api': 'SYNO.Core.Group',
-            'version': '1',
             'method': 'set',
+            'data': {
+                'name': group_name,
+                'add_users': json.dumps(normalized, ensure_ascii=False),
+            },
         },
-        data={
-            'name': group_name,
-            'add_users': json.dumps(normalized, ensure_ascii=False),
+        {
+            'label': 'core-group-set-add_users-group',
+            'api': 'SYNO.Core.Group',
+            'method': 'set',
+            'data': {
+                'group': group_name,
+                'add_users': json.dumps(normalized, ensure_ascii=False),
+            },
         },
+    ]
+
+    last_payload = None
+    for index, attempt in enumerate(attempts, start=1):
+        current_app.logger.info(
+            '[settings/users] group add users attempt=%s api=%s method=%s group=%s users=%s count=%s',
+            index,
+            attempt['api'],
+            attempt['method'],
+            group_name,
+            normalized,
+            len(normalized),
+        )
+
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': attempt['api'],
+                'version': '1',
+                'method': attempt['method'],
+            },
+            data=attempt['data'],
+        )
+        last_payload = payload
+
+        current_app.logger.info(
+            '[settings/users] group add users response: attempt=%s api=%s method=%s group=%s success=%s code=%s',
+            index,
+            attempt['api'],
+            attempt['method'],
+            group_name,
+            bool(payload and payload.get('success')),
+            _synology_error_code(payload or {}),
+        )
+
+        if not payload.get('success'):
+            continue
+
+        missing, verified = _verify_membership(f"{attempt['label']}-after-success")
+        if not verified:
+            current_app.logger.info(
+                '[settings/users] group add users accepted without verification: attempt=%s api=%s method=%s group=%s',
+                index,
+                attempt['api'],
+                attempt['method'],
+                group_name,
+            )
+            return
+
+        if not missing:
+            current_app.logger.info(
+                '[settings/users] group add users effective: attempt=%s api=%s method=%s group=%s',
+                index,
+                attempt['api'],
+                attempt['method'],
+                group_name,
+            )
+            return
+
+        current_app.logger.warning(
+            '[settings/users] group add users success-but-missing: attempt=%s api=%s method=%s group=%s missing=%s',
+            index,
+            attempt['api'],
+            attempt['method'],
+            group_name,
+            missing,
+        )
+
+        # If we can verify and it still misses members, continue to next candidate.
+        # If later candidates also fail, the final exception will include the last payload.
+
+    raise RuntimeError(
+        f"群组添加用户失败: {_synology_error_message(last_payload or {}, 'auth')} | "
+        f"group={group_name} | attempts={len(attempts)} | last_payload={last_payload}"
     )
-    if payload_add.get('success'):
-        return
-    raise RuntimeError(_synology_error_message(payload_add, 'auth'))
 
 
 def _ensure_docscool_group_and_permissions(sid: str, warnings: list[str]) -> list[str]:
@@ -434,14 +653,25 @@ def _sync_docscool_membership(sid: str, warnings: list[str]) -> None:
 
     missing_members = sorted(db_usernames - group_set)
     if not missing_members:
+        current_app.logger.info(
+            '[settings/users] docscool membership sync add-only: no-missing-members db_count=%s group_count=%s',
+            len(db_usernames),
+            len(group_set),
+        )
         return
 
-    merged_members = sorted(group_set | db_usernames)
-    _synology_set_group_users(sid, DOCSCOOL_GROUP_NAME, merged_members)
+    current_app.logger.info(
+        '[settings/users] docscool membership sync add-only: to_add=%s db_count=%s group_count=%s',
+        missing_members,
+        len(db_usernames),
+        len(group_set),
+    )
+
+    _synology_set_group_users(sid, DOCSCOOL_GROUP_NAME, missing_members)
     current_app.logger.info(
         '[settings/users] docscool membership sync add-only: added=%s total=%s',
         missing_members,
-        len(merged_members),
+        len(group_set | db_usernames),
     )
 
 
