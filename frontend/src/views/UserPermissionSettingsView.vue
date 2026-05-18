@@ -61,10 +61,13 @@
             </el-select>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
             <el-button type="primary" link :loading="savingRowId === scope.row.id" @click="saveRow(scope.row)">
               保存
+            </el-button>
+            <el-button type="danger" link :loading="deletingRowId === scope.row.id" @click="deleteRow(scope.row)">
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -84,6 +87,7 @@ const departmentOptions = ref([])
 const syncWarnings = ref([])
 const creating = ref(false)
 const savingRowId = ref(0)
+const deletingRowId = ref(0)
 
 const normalizeDepartmentList = (value) => {
   if (!Array.isArray(value)) {
@@ -152,6 +156,34 @@ const saveRow = async (row) => {
     ElMessage.error(error?.response?.data?.message || '保存失败')
   } finally {
     savingRowId.value = 0
+  }
+}
+
+const deleteRow = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除用户 ${row.login_name} 吗？该操作会删除数据库中的用户权限记录。`,
+      '删除确认',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch (_error) {
+    return
+  }
+
+  deletingRowId.value = row.id
+  try {
+    const { data } = await http.delete(`/settings/users/${row.id}`)
+    syncWarnings.value = Array.isArray(data?.warnings) ? data.warnings : []
+    ElMessage.success('删除成功')
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '删除失败')
+  } finally {
+    deletingRowId.value = 0
   }
 }
 

@@ -1,6 +1,6 @@
 import json
 
-from flask import current_app, g, jsonify, request
+from flask import current_app, jsonify, request
 
 from .auth import require_auth
 from .contracts import contracts_bp
@@ -22,7 +22,6 @@ from .models import Contract, Department, ProjectOption, UserPermission
 
 
 DOCSCOOL_GROUP_NAME = 'docscool'
-ADMIN_GROUP_NAME = 'administrators'
 PERMISSION_SUPER_ADMIN = 'super_admin'
 PERMISSION_EDIT = 'edit'
 PERMISSION_VIEW = 'view'
@@ -65,94 +64,271 @@ def _department_option_values():
     return values
 
 
-def _sync_row_from_synology(row: UserPermission, sid: str, warnings: list[str]) -> bool:
-    info = _synology_get_user_info(sid, row.login_name)
-    if not info.get('exists'):
-        warnings.append(f'用户 {row.login_name} 不存在于群晖，描述未更新')
-        return False
-
-    if (row.description or '') != info.get('description', ''):
-        row.description = info.get('description', '')
-    return True
-
-
 def _synology_get_user_info(sid: str, username: str):
-    payload = _synology_api_get(
-        sid,
+
+    def _parse_user_row(row: dict):
+        description = (row.get('description') or row.get('desc') or '').strip()
+        name = (row.get('name') or row.get('username') or username or '').strip()
+        return {
+            'exists': True,
+            'name': name,
+            'description': description,
+        }
+
+    def _match_user_row(payload: dict):
+        users = ((payload.get('data') or {}).get('users') or [])
+        for row in users:
+            name = (row.get('name') or row.get('username') or '').strip()
+            if name == username:
+                return row
+        return users[0] if len(users) == 1 else None
+
+    attempts = [
         {
+            'label': 'get-name-plain',
             'api': 'SYNO.Core.User',
             'version': '1',
             'method': 'get',
-            'name': username,
-            'additional': '["description","groups"]',
+            'args': {
+                'name': username,
+                'additional': '["description"]',
+            },
         },
+        {
+            'label': 'get-name-json-array',
+            'api': 'SYNO.Core.User',
+            'version': '1',
+            'method': 'get',
+            'args': {
+                'name': json.dumps([username], ensure_ascii=False),
+                'additional': '["description"]',
+            },
+        },
+        {
+            'label': 'get-self-no-name',
+            'api': 'SYNO.Core.User',
+            'version': '1',
+            'method': 'get',
+            'args': {
+                'additional': '["description"]',
+            },
+        },
+        {
+            'label': 'list-all-users',
+            'api': 'SYNO.Core.User',
+            'version': '1',
+            'method': 'list',
+            'args': {
+                'offset': '0',
+                'limit': '5000',
+                'additional': '["description"]',
+            },
+        },
+    ]
+
+    failures = []
+    for params in attempts:
+        query = {
+            'api': params['api'],
+            'version': params['version'],
+            'method': params['method'],
+            **(params.get('args') or {}),
+        }
+
+        payload = None
+        try:
+            current_app.logger.info(
+                '[settings/users] synology user lookup GET request: username=%s attempt=%s query=%s',
+                username,
+                params.get('label'),
+                query,
+            )
+            payload = _synology_api_get(sid, query)
+            current_app.logger.info(
+                '[settings/users] synology user lookup GET response: username=%s attempt=%s success=%s code=%s users_count=%s',
+                username,
+                params.get('label'),
+                bool(payload and payload.get('success')),
+                _synology_error_code(payload or {}),
+                len((((payload or {}).get('data') or {}).get('users') or [])),
+            )
+        except Exception as exc:
+            current_app.logger.info(
+                '[settings/users] synology user lookup GET exception: username=%s attempt=%s exc=%s',
+                username,
+                params.get('label'),
+                exc.__class__.__name__,
+            )
+            failures.append({'attempt': params.get('label'), 'stage': 'get-exception'})
+
+        if not payload or not payload.get('success'):
+            try:
+                current_app.logger.info(
+                    '[settings/users] synology user lookup POST request: username=%s attempt=%s args=%s',
+                    username,
+                    params.get('label'),
+                    params.get('args') or {},
+                )
+                payload = _synology_api_post(
+                    sid,
+                    {
+                        'api': params['api'],
+                        'version': params['version'],
+                        'method': params['method'],
+                    },
+                    data=params.get('args') or {},
+                )
+                current_app.logger.info(
+                    '[settings/users] synology user lookup POST response: username=%s attempt=%s success=%s code=%s users_count=%s',
+                    username,
+                    params.get('label'),
+                    bool(payload and payload.get('success')),
+                    _synology_error_code(payload or {}),
+                    len((((payload or {}).get('data') or {}).get('users') or [])),
+                )
+            except Exception as exc:
+                current_app.logger.info(
+                    '[settings/users] synology user lookup POST exception: username=%s attempt=%s exc=%s',
+                    username,
+                    params.get('label'),
+                    exc.__class__.__name__,
+                )
+                failures.append({'attempt': params.get('label'), 'stage': 'post-exception'})
+                payload = None
+
+        if not payload or not payload.get('success'):
+            failures.append({
+                'attempt': params.get('label'),
+                'stage': 'api-failed',
+                'code': _synology_error_code(payload or {}),
+            })
+            continue
+
+        target = _match_user_row(payload)
+        if not target:
+            continue
+
+        parsed = _parse_user_row(target)
+        return parsed
+
+    current_app.logger.warning(
+        '[settings/users] synology user lookup exhausted: username=%s failures=%s',
+        username,
+        failures,
     )
-    if not payload.get('success'):
-        return {
-            'exists': False,
-            'description': '',
-            'groups': [],
-            'raw': payload,
-        }
-
-    users = ((payload.get('data') or {}).get('users') or [])
-    if not users:
-        return {
-            'exists': False,
-            'description': '',
-            'groups': [],
-            'raw': payload,
-        }
-
-    target = users[0] or {}
-    group_rows = target.get('groups') or []
-    groups = []
-    for item in group_rows:
-        if isinstance(item, str):
-            value = item.strip()
-        else:
-            value = (item.get('name') or '').strip()
-        if value:
-            groups.append(value)
 
     return {
-        'exists': True,
-        'description': (target.get('description') or '').strip(),
-        'groups': groups,
-        'raw': payload,
+        'exists': False,
+        'description': '',
     }
 
 
 def _synology_get_group(sid: str, group_name: str):
-    payload = _synology_api_get(
-        sid,
+    def _extract_users_from_group(row: dict):
+        users = []
+        for item in row.get('users') or []:
+            if isinstance(item, str):
+                value = item.strip()
+            else:
+                value = (item.get('name') or '').strip()
+            if value:
+                users.append(value)
+        return users
+
+    def _extract_users(row: dict):
+        users = []
+        for item in row.get('users') or []:
+            if isinstance(item, str):
+                value = item.strip()
+            else:
+                value = (item.get('name') or '').strip()
+            if value:
+                users.append(value)
+        return users
+
+    def _match_group(payload: dict):
+        rows = ((payload.get('data') or {}).get('groups') or [])
+        for row in rows:
+            if (row.get('name') or '').strip() == group_name:
+                return row
+        return rows[0] if len(rows) == 1 else None
+
+    attempts = [
         {
+            'label': 'group-get-name-plain',
             'api': 'SYNO.Core.Group',
             'version': '1',
             'method': 'get',
-            'name': group_name,
-            'additional': '["users","description"]',
+            'args': {
+                'name': group_name,
+                'additional': '["users","description"]',
+            },
         },
-    )
+        {
+            'label': 'group-get-name-json-array',
+            'api': 'SYNO.Core.Group',
+            'version': '1',
+            'method': 'get',
+            'args': {
+                'name': json.dumps([group_name], ensure_ascii=False),
+                'additional': '["users","description"]',
+            },
+        },
+        {
+            'label': 'group-list-all',
+            'api': 'SYNO.Core.Group',
+            'version': '1',
+            'method': 'list',
+            'args': {
+                'offset': '0',
+                'limit': '5000',
+                'additional': '["users","description"]',
+            },
+        },
+    ]
 
-    if not payload.get('success'):
-        return {'exists': False, 'users': [], 'payload': payload}
+    last_payload = None
+    for params in attempts:
+        query = {
+            'api': params['api'],
+            'version': params['version'],
+            'method': params['method'],
+            **(params.get('args') or {}),
+        }
 
-    groups = ((payload.get('data') or {}).get('groups') or [])
-    if not groups:
-        return {'exists': False, 'users': [], 'payload': payload}
+        payload = _synology_api_get(sid, query)
+        if not payload.get('success'):
+            payload = _synology_api_post(
+                sid,
+                {
+                    'api': params['api'],
+                    'version': params['version'],
+                    'method': params['method'],
+                },
+                data=params.get('args') or {},
+            )
 
-    group_row = groups[0] or {}
-    users = []
-    for item in group_row.get('users') or []:
-        if isinstance(item, str):
-            value = item.strip()
-        else:
-            value = (item.get('name') or '').strip()
-        if value:
-            users.append(value)
+        last_payload = payload
+        if not payload.get('success'):
+            current_app.logger.warning(
+                '[settings/users] synology group lookup failed: group=%s attempt=%s code=%s',
+                group_name,
+                params.get('label'),
+                _synology_error_code(payload),
+            )
+            continue
 
-    return {'exists': True, 'users': users, 'payload': payload}
+        target = _match_group(payload)
+        if not target:
+            continue
+
+        return {
+            'exists': True,
+            'users': _extract_users(target),
+            'payload': payload,
+        }
+
+    return {'exists': False, 'users': [], 'payload': last_payload or {}}
 
 
 def _synology_create_group(sid: str, group_name: str) -> None:
@@ -249,57 +425,31 @@ def _try_grant_storage_root_edit_permission(sid: str, group_name: str, warnings:
     warnings.append(f'群组目录编辑权限授予未完成(错误码: {code if code is not None else "unknown"})')
 
 
-def _ensure_current_user_row(sid: str) -> UserPermission:
-    username = (g.current_user or '').strip()
-    row = UserPermission.query.filter_by(login_name=username).first()
-    if row:
-        return row
-
-    info = _synology_get_user_info(sid, username)
-    groups = set(info.get('groups') or [])
-    is_admin = ADMIN_GROUP_NAME in groups
-
-    row = UserPermission(
-        login_name=username,
-        description=info.get('description', ''),
-        permission=PERMISSION_SUPER_ADMIN if is_admin else PERMISSION_VIEW,
-        departments='全部' if is_admin else '',
-    )
-    db.session.add(row)
-    db.session.commit()
-    return row
-
-
 def _sync_docscool_membership(sid: str, warnings: list[str]) -> None:
-    _ensure_current_user_row(sid)
     group_members = _ensure_docscool_group_and_permissions(sid, warnings)
+    group_set = {(name or '').strip() for name in group_members if (name or '').strip()}
 
     db_rows = UserPermission.query.order_by(UserPermission.login_name.asc()).all()
-    db_usernames = {row.login_name for row in db_rows}
+    db_usernames = {(row.login_name or '').strip() for row in db_rows if (row.login_name or '').strip()}
 
-    changed = False
-    for row in db_rows:
-        try:
-            exists_in_synology = _sync_row_from_synology(row, sid, warnings)
-            if exists_in_synology and row.login_name not in group_members:
-                group_members.append(row.login_name)
-                changed = True
-        except Exception as exc:
-            warnings.append(f'同步用户 {row.login_name} 到群组失败: {exc}')
+    missing_members = sorted(db_usernames - group_set)
+    if not missing_members:
+        return
 
-    filtered_members = [name for name in group_members if name in db_usernames]
-    if len(filtered_members) != len(group_members):
-        changed = True
-
-    if changed:
-        _synology_set_group_users(sid, DOCSCOOL_GROUP_NAME, filtered_members)
-
-    db.session.commit()
+    merged_members = sorted(group_set | db_usernames)
+    _synology_set_group_users(sid, DOCSCOOL_GROUP_NAME, merged_members)
+    current_app.logger.info(
+        '[settings/users] docscool membership sync add-only: added=%s total=%s',
+        missing_members,
+        len(merged_members),
+    )
 
 
-def _settings_login() -> str:
+def _settings_login() -> tuple[str, str]:
     try:
-        return _synology_upload_login()
+        return _synology_upload_login(), ''
+    except PermissionError as exc:
+        return '', str(exc)
     except Exception as exc:
         raise RuntimeError(f'无法连接群晖: {exc}')
 
@@ -308,7 +458,9 @@ def _settings_login() -> str:
 @require_auth
 def list_user_permissions():
     warnings = []
-    sid = _settings_login()
+    sid, auth_error = _settings_login()
+    if auth_error:
+        return jsonify({'message': auth_error}), 401
     _sync_docscool_membership(sid, warnings)
 
     rows = UserPermission.query.order_by(UserPermission.login_name.asc()).all()
@@ -333,7 +485,9 @@ def create_user_permission():
     if existing:
         return jsonify(existing.to_dict()), 200
 
-    sid = _settings_login()
+    sid, auth_error = _settings_login()
+    if auth_error:
+        return jsonify({'message': auth_error}), 401
     info = _synology_get_user_info(sid, login_name)
     if not info.get('exists'):
         return jsonify({'message': '群晖中不存在该用户'}), 404
@@ -369,6 +523,23 @@ def update_user_permission(user_id):
     db.session.commit()
 
     return jsonify(row.to_dict())
+
+
+@contracts_bp.delete('/settings/users/<int:user_id>')
+@require_auth
+def delete_user_permission(user_id):
+    row = UserPermission.query.get_or_404(user_id)
+
+    sid, auth_error = _settings_login()
+    if auth_error:
+        return jsonify({'message': auth_error}), 401
+
+    db.session.delete(row)
+    db.session.commit()
+
+    warnings = []
+    _sync_docscool_membership(sid, warnings)
+    return jsonify({'success': True, 'warnings': warnings})
 
 @contracts_bp.get('/departments')
 @require_auth

@@ -1,9 +1,11 @@
 import os
 import posixpath
 import logging
+import warnings
 
 from flask import Flask, jsonify
 from flask_cors import CORS
+from urllib3.exceptions import InsecureRequestWarning
 
 from .auth import auth_bp
 from .config import Config
@@ -27,6 +29,9 @@ DEFAULT_PROJECT_OPTIONS = [
 ]
 
 DEFAULT_DEPARTMENT_NAME = '财务部'
+
+
+warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
 
 def _ensure_contract_columns():
