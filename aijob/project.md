@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-05-18
+更新时间：2026-05-20
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -73,6 +73,7 @@
 - 合同主表：`contracts`
 - 部门表：`departments`
 - 用户权限表：`users`
+- 用户权限附加字段：`users.folders`（逗号拼接存储，前端多选回显为 `folder_list`）
 - 默认保底部门：`财务部`
 - 金额字段：`amount NUMERIC(20, 8)`
 - 全文字段：`fullbody TEXT`
@@ -110,8 +111,15 @@
 - `PUT /api/folders/file/move`：将文件移动到目标目录，并同步更新已关联合同的 `file_path`
 - `GET /api/settings/users`：读取用户权限列表；触发群晖 `docscool` 组同步、返回部门候选与同步提示
 - `POST /api/settings/users`：新增用户权限记录（登录名需存在于群晖）
-- `PUT /api/settings/users/<id>`：更新用户权限级别与部门范围
+- `PUT /api/settings/users/<id>`：更新用户权限级别、部门范围、文件夹范围
 - `DELETE /api/settings/users/<id>`：删除用户权限记录；删除后触发 `docscool` 组补齐型同步
+
+## 本轮权限管理补充（2026-05-20）
+- 设置页群晖调用已迁移为 `synology-api` SDK（`contracts_routes_settings.py`）。
+- 用户权限新增“文件夹”字段：
+  - 后端 `GET /api/settings/users` 新增 `folder_options` 返回。
+  - 前端用户权限页新增“文件夹”多选列，并保存到 `users.folders`。
+  - 文件夹候选当前规则：仅存储根目录下一级目录，首项“全部”。
 
 ## 本轮结构调整（2026-04-22）
 - `folders` 相关接口已从 `contracts.py` 拆分到 `files.py`，应用通过 `files_bp` 蓝图注册。

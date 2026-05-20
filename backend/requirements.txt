@@ -13,3 +13,4 @@ Pillow==11.2.1
 numpy==2.2.5
 openpyxl==3.1.5
 xlrd==2.0.1
+synology-api==0.8.2

@@ -117,12 +117,16 @@ class UserPermission(db.Model):
     description = db.Column(db.String(255), nullable=True)
     permission = db.Column(db.String(32), nullable=False, default='view')
     departments = db.Column(db.Text, nullable=True)
+    folders = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
         department_list = [
             item.strip() for item in str(self.departments or '').split(',') if item and item.strip()
+        ]
+        folder_list = [
+            item.strip() for item in str(self.folders or '').split(',') if item and item.strip()
         ]
         return {
             'id': self.id,
@@ -131,6 +135,8 @@ class UserPermission(db.Model):
             'permission': self.permission,
             'departments': self.departments or '',
             'department_list': department_list,
+            'folders': self.folders or '',
+            'folder_list': folder_list,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }

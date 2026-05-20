@@ -61,6 +61,27 @@
             </el-select>
           </template>
         </el-table-column>
+        <el-table-column label="文件夹" min-width="360">
+          <template #default="scope">
+            <el-select
+              v-model="scope.row.folder_list"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              clearable
+              placeholder="请选择文件夹"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="item in folderOptions"
+                :key="item"
+                :label="item"
+                :value="item"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
             <el-button type="primary" link :loading="savingRowId === scope.row.id" @click="saveRow(scope.row)">
@@ -84,6 +105,7 @@ import http from '../api/http'
 
 const rows = ref([])
 const departmentOptions = ref([])
+const folderOptions = ref([])
 const syncWarnings = ref([])
 const creating = ref(false)
 const savingRowId = ref(0)
@@ -106,14 +128,31 @@ const normalizeDepartmentList = (value) => {
   return normalized
 }
 
+const normalizeDepartmentOptions = (value) => {
+  const source = Array.isArray(value) ? value : []
+  const normalized = []
+  const seen = new Set(['全部'])
+  source.forEach((item) => {
+    const text = String(item || '').trim()
+    if (!text || seen.has(text)) {
+      return
+    }
+    seen.add(text)
+    normalized.push(text)
+  })
+  return ['全部', ...normalized]
+}
+
 const loadUsers = async () => {
   const { data } = await http.get('/settings/users')
   const list = Array.isArray(data?.users) ? data.users : []
   rows.value = list.map((item) => ({
     ...item,
     department_list: normalizeDepartmentList(item.department_list),
+    folder_list: normalizeDepartmentList(item.folder_list),
   }))
-  departmentOptions.value = Array.isArray(data?.department_options) ? data.department_options : []
+  departmentOptions.value = normalizeDepartmentOptions(data?.department_options)
+  folderOptions.value = normalizeDepartmentOptions(data?.folder_options)
   syncWarnings.value = Array.isArray(data?.warnings) ? data.warnings : []
 }
 
@@ -150,6 +189,7 @@ const saveRow = async (row) => {
     await http.put(`/settings/users/${row.id}`, {
       permission: row.permission,
       departments: normalizeDepartmentList(row.department_list),
+      folders: normalizeDepartmentList(row.folder_list),
     })
     ElMessage.success('保存成功')
   } catch (error) {

@@ -174,6 +174,19 @@ def _seed_departments():
     db.session.commit()
 
 
+def _ensure_user_permission_columns():
+    required_columns = {
+        'folders': 'ALTER TABLE users ADD COLUMN folders TEXT',
+    }
+
+    result = db.session.execute(db.text('PRAGMA table_info(users)'))
+    existing = {row[1] for row in result.fetchall()}
+    for column, ddl in required_columns.items():
+        if column not in existing:
+            db.session.execute(db.text(ddl))
+    db.session.commit()
+
+
 def _normalize_file_path(raw_path: str, base_url: str, storage_root: str) -> str:
     if not raw_path:
         return raw_path
@@ -233,6 +246,7 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         _ensure_contract_columns()
+        _ensure_user_permission_columns()
         _drop_legacy_contract_columns()
         _seed_departments()
         _seed_project_options()

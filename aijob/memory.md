@@ -1,6 +1,6 @@
 # AI 工作记忆
 
-更新时间：2026-05-18
+更新时间：2026-05-20
 
 ## 使用约定
 - 本文件用于记录 AI 已完成、已确认、待回归的重要工作，按时间顺序持续追加。
@@ -8,6 +8,23 @@
 - 记录应以“已验证事实”为主，尽量避免写未经确认的猜测。
 
 ## 时间线
+
+### 2026-05-20 本轮更新
+- Synology SDK 路径验证与落地：
+	- 新增 `backend/scripts/test_synology_admin_group_users_sdk.py`，使用 `synology-api` SDK 实测管理员组成员读取。
+	- 已验证 `group.get_users(in_group=True)` 在当前环境可返回成员，并可识别 `zhangyan`。
+- 设置页群晖调用改造：
+	- `backend/app/contracts_routes_settings.py` 已切换为 `synology-api` SDK 进行用户/群组读取、建组、加组成员等操作。
+	- 保留调用前后日志摘要，便于继续定位 DSM 行为差异。
+- 用户权限新增“文件夹”字段（全链路）：
+	- 数据库模型 `users` 新增 `folders` 字段，`to_dict()` 返回 `folders/folder_list`。
+	- 设置页接口 `GET /api/settings/users` 返回 `folder_options`；`PUT /api/settings/users/<id>` 支持保存 `folders`。
+	- 前端用户权限页新增“文件夹”多选列并接入保存。
+- 文件夹选项规则最终确认：
+	- 仅列出存储根目录下一级目录；不再枚举二级/三级目录。
+	- 前端选项首项固定为“全部”。
+- 运行观察：
+	- 获取 `folder_options` 时偶发 FileStation `119` 会话失效，触发过一次 `/api/settings/users` 500（后续重试可恢复）。
 
 ### 2026-05-18 本轮更新
 - 用户权限同步策略改为“单向补齐”：

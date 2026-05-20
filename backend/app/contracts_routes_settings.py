@@ -1,8 +1,10 @@
 import json
+from importlib import import_module
+from urllib.parse import urlparse
 
-from flask import current_app, jsonify, request
+from flask import current_app, g, jsonify, request
 
-from .auth import require_auth
+from .auth import get_cached_user_password, require_auth
 from .contracts import contracts_bp
 from .contracts_core import (
     CSV_OPTION_DEFAULTS,
@@ -11,11 +13,7 @@ from .contracts_core import (
     _department_dir,
     _get_department_names,
     _get_project_names,
-    _synology_api_get,
-    _synology_api_post,
-    _synology_error_code,
-    _synology_error_message,
-    _synology_upload_login,
+    _list_storage_entries,
 )
 from .extensions import db
 from .models import Contract, Department, ProjectOption, UserPermission
@@ -64,6 +62,121 @@ def _department_option_values():
     return values
 
 
+def _folder_option_values():
+    level1_dirs, _files = _list_storage_entries('')
+    values = set()
+
+    for level1 in level1_dirs:
+        level1_path = (level1.get('path') or '').strip().replace('\\', '/')
+        if not level1_path:
+            continue
+
+        parts = [part for part in level1_path.split('/') if part]
+        if len(parts) != 1:
+            continue
+        values.add(parts[0])
+
+    return sorted(values)
+
+
+def _synology_error_code(payload: dict):
+    code = (payload.get('error') or {}).get('code')
+    try:
+        return int(code) if code is not None else None
+    except Exception:
+        return None
+
+
+def _synology_error_message(payload: dict, default: str = 'unknown') -> str:
+    error = payload.get('error') or {}
+    message = (error.get('message') or '').strip()
+    if message:
+        return message
+    code = _synology_error_code(payload)
+    return f'error_code={code}' if code is not None else default
+
+
+def _sdk_error_payload(exc: Exception) -> dict:
+    code = getattr(exc, 'error_code', None)
+    return {
+        'success': False,
+        'error': {
+            'code': code if code is not None else 'exception',
+            'message': f'{exc.__class__.__name__}: {exc}',
+        },
+        'data': {},
+    }
+
+
+def _get_synology_sdk_clients():
+    base_url = (current_app.config.get('SYNOLOGY_BASE_URL') or '').strip()
+    if not base_url:
+        raise RuntimeError('Missing SYNOLOGY_BASE_URL in .env')
+
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        raise PermissionError('未找到当前登录用户，请重新登录后重试')
+
+    password = get_cached_user_password(username)
+    if not password:
+        raise PermissionError('登录凭据已过期，请重新登录后重试')
+
+    parsed = urlparse(base_url)
+    if not parsed.hostname:
+        raise RuntimeError(f'Invalid SYNOLOGY_BASE_URL: {base_url}')
+
+    secure = parsed.scheme.lower() == 'https'
+    port = parsed.port or (5001 if secure else 5000)
+
+    core_group = import_module('synology_api.core_group')
+    core_user = import_module('synology_api.core_user')
+
+    common_kwargs = {
+        'secure': secure,
+        'cert_verify': bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+        'dsm_version': int(current_app.config.get('SYNOLOGY_DSM_VERSION', 7)),
+        'debug': False,
+        'application': 'Core',
+    }
+
+    group_api = core_group.Group(parsed.hostname, str(port), username, password, **common_kwargs)
+    user_api = core_user.User(parsed.hostname, str(port), username, password, **common_kwargs)
+    return username, group_api, user_api
+
+
+def _sdk_call(label: str, func):
+    try:
+        payload = func()
+        if not isinstance(payload, dict):
+            payload = {
+                'success': False,
+                'error': {'code': 'non-dict-payload', 'message': str(payload)},
+                'data': {},
+            }
+    except Exception as exc:
+        payload = _sdk_error_payload(exc)
+        current_app.logger.info(
+            '[settings/users] synology sdk call exception: label=%s exc=%s message=%s code=%s',
+            label,
+            exc.__class__.__name__,
+            str(exc),
+            _synology_error_code(payload),
+        )
+
+    data = payload.get('data') or {}
+    users = data.get('users') if isinstance(data.get('users'), list) else []
+    groups = data.get('groups') if isinstance(data.get('groups'), list) else []
+    current_app.logger.info(
+        '[settings/users] synology sdk call result: label=%s success=%s code=%s users_count=%s groups_count=%s',
+        label,
+        bool(payload.get('success')),
+        _synology_error_code(payload),
+        len(users),
+        len(groups),
+    )
+    return payload
+
+
 def _synology_get_user_info(sid: str, username: str):
 
     def _parse_user_row(row: dict):
@@ -83,139 +196,41 @@ def _synology_get_user_info(sid: str, username: str):
                 return row
         return users[0] if len(users) == 1 else None
 
-    attempts = [
-        {
-            'label': 'get-name-plain',
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'get',
-            'args': {
-                'name': username,
-                'additional': '["description"]',
-            },
-        },
-        {
-            'label': 'get-name-json-array',
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'get',
-            'args': {
-                'name': json.dumps([username], ensure_ascii=False),
-                'additional': '["description"]',
-            },
-        },
-        {
-            'label': 'get-self-no-name',
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'get',
-            'args': {
-                'additional': '["description"]',
-            },
-        },
-        {
-            'label': 'list-all-users',
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'list',
-            'args': {
-                'offset': '0',
-                'limit': '5000',
-                'additional': '["description"]',
-            },
-        },
-    ]
-
-    failures = []
-    for params in attempts:
-        query = {
-            'api': params['api'],
-            'version': params['version'],
-            'method': params['method'],
-            **(params.get('args') or {}),
+    _ = sid
+    try:
+        operator, _group_api, user_api = _get_synology_sdk_clients()
+    except Exception as exc:
+        current_app.logger.warning(
+            '[settings/users] synology sdk init failed: lookup_user=%s operator=%s exc=%s message=%s',
+            username,
+            (getattr(g, 'current_user', '') or '').strip(),
+            exc.__class__.__name__,
+            str(exc),
+        )
+        return {
+            'exists': False,
+            'description': '',
         }
 
-        payload = None
-        try:
-            current_app.logger.info(
-                '[settings/users] synology user lookup GET request: username=%s attempt=%s query=%s',
-                username,
-                params.get('label'),
-                query,
-            )
-            payload = _synology_api_get(sid, query)
-            current_app.logger.info(
-                '[settings/users] synology user lookup GET response: username=%s attempt=%s success=%s code=%s users_count=%s',
-                username,
-                params.get('label'),
-                bool(payload and payload.get('success')),
-                _synology_error_code(payload or {}),
-                len((((payload or {}).get('data') or {}).get('users') or [])),
-            )
-        except Exception as exc:
-            current_app.logger.info(
-                '[settings/users] synology user lookup GET exception: username=%s attempt=%s exc=%s',
-                username,
-                params.get('label'),
-                exc.__class__.__name__,
-            )
-            failures.append({'attempt': params.get('label'), 'stage': 'get-exception'})
-
-        if not payload or not payload.get('success'):
-            try:
-                current_app.logger.info(
-                    '[settings/users] synology user lookup POST request: username=%s attempt=%s args=%s',
-                    username,
-                    params.get('label'),
-                    params.get('args') or {},
-                )
-                payload = _synology_api_post(
-                    sid,
-                    {
-                        'api': params['api'],
-                        'version': params['version'],
-                        'method': params['method'],
-                    },
-                    data=params.get('args') or {},
-                )
-                current_app.logger.info(
-                    '[settings/users] synology user lookup POST response: username=%s attempt=%s success=%s code=%s users_count=%s',
-                    username,
-                    params.get('label'),
-                    bool(payload and payload.get('success')),
-                    _synology_error_code(payload or {}),
-                    len((((payload or {}).get('data') or {}).get('users') or [])),
-                )
-            except Exception as exc:
-                current_app.logger.info(
-                    '[settings/users] synology user lookup POST exception: username=%s attempt=%s exc=%s',
-                    username,
-                    params.get('label'),
-                    exc.__class__.__name__,
-                )
-                failures.append({'attempt': params.get('label'), 'stage': 'post-exception'})
-                payload = None
-
-        if not payload or not payload.get('success'):
-            failures.append({
-                'attempt': params.get('label'),
-                'stage': 'api-failed',
-                'code': _synology_error_code(payload or {}),
-            })
-            continue
-
-        target = _match_user_row(payload)
-        if not target:
-            continue
-
-        parsed = _parse_user_row(target)
-        return parsed
-
-    current_app.logger.warning(
-        '[settings/users] synology user lookup exhausted: username=%s failures=%s',
-        username,
-        failures,
+    payload = _sdk_call(
+        f'user.get_user name={username} operator={operator}',
+        lambda: user_api.get_user(username, additional=['description']),
     )
+    if payload.get('success'):
+        target = _match_user_row(payload)
+        if target:
+            return _parse_user_row(target)
+
+    payload = _sdk_call(
+        f'user.get_users name={username} operator={operator}',
+        lambda: user_api.get_users(0, 5000, additional=['description']),
+    )
+    if payload.get('success'):
+        target = _match_user_row(payload)
+        if target:
+            return _parse_user_row(target)
+
+    current_app.logger.warning('[settings/users] synology user lookup exhausted via sdk: username=%s', username)
 
     return {
         'exists': False,
@@ -224,17 +239,6 @@ def _synology_get_user_info(sid: str, username: str):
 
 
 def _synology_get_group(sid: str, group_name: str):
-    def _extract_users_from_group(row: dict):
-        users = []
-        for item in row.get('users') or []:
-            if isinstance(item, str):
-                value = item.strip()
-            else:
-                value = (item.get('name') or '').strip()
-            if value:
-                users.append(value)
-        return users
-
     def _extract_users(row: dict):
         users = []
         for item in row.get('users') or []:
@@ -246,103 +250,46 @@ def _synology_get_group(sid: str, group_name: str):
                 users.append(value)
         return users
 
-    def _match_group(payload: dict):
-        rows = ((payload.get('data') or {}).get('groups') or [])
-        for row in rows:
-            if (row.get('name') or '').strip() == group_name:
-                return row
-        return rows[0] if len(rows) == 1 else None
+    _ = sid
+    try:
+        _operator, group_api, _user_api = _get_synology_sdk_clients()
+    except Exception as exc:
+        current_app.logger.warning(
+            '[settings/users] synology sdk init failed: lookup_group=%s exc=%s message=%s',
+            group_name,
+            exc.__class__.__name__,
+            str(exc),
+        )
+        return {'exists': False, 'users': [], 'payload': _sdk_error_payload(exc)}
 
-    attempts = [
-        {
-            'label': 'group-get-name-plain',
-            'api': 'SYNO.Core.Group',
-            'version': '1',
-            'method': 'get',
-            'args': {
-                'name': group_name,
-                'additional': '["users","description"]',
-            },
-        },
-        {
-            'label': 'group-get-name-json-array',
-            'api': 'SYNO.Core.Group',
-            'version': '1',
-            'method': 'get',
-            'args': {
-                'name': json.dumps([group_name], ensure_ascii=False),
-                'additional': '["users","description"]',
-            },
-        },
-        {
-            'label': 'group-list-all',
-            'api': 'SYNO.Core.Group',
-            'version': '1',
-            'method': 'list',
-            'args': {
-                'offset': '0',
-                'limit': '5000',
-                'additional': '["users","description"]',
-            },
-        },
-    ]
+    groups_payload = _sdk_call(
+        f'group.get_groups name={group_name}',
+        lambda: group_api.get_groups(0, 5000, False),
+    )
+    member_payload = _sdk_call(
+        f'group.get_users.in_group=true name={group_name}',
+        lambda: group_api.get_users(group_name, True),
+    )
 
-    last_payload = None
-    for params in attempts:
-        query = {
-            'api': params['api'],
-            'version': params['version'],
-            'method': params['method'],
-            **(params.get('args') or {}),
-        }
+    groups = ((groups_payload.get('data') or {}).get('groups') or [])
+    exists = any((row.get('name') or '').strip() == group_name for row in groups)
+    if member_payload.get('success'):
+        exists = True
 
-        payload = _synology_api_get(sid, query)
-        if not payload.get('success'):
-            payload = _synology_api_post(
-                sid,
-                {
-                    'api': params['api'],
-                    'version': params['version'],
-                    'method': params['method'],
-                },
-                data=params.get('args') or {},
-            )
-
-        last_payload = payload
-        if not payload.get('success'):
-            current_app.logger.warning(
-                '[settings/users] synology group lookup failed: group=%s attempt=%s code=%s',
-                group_name,
-                params.get('label'),
-                _synology_error_code(payload),
-            )
-            continue
-
-        target = _match_group(payload)
-        if not target:
-            continue
-
-        return {
-            'exists': True,
-            'users': _extract_users(target),
-            'payload': payload,
-        }
-
-    return {'exists': False, 'users': [], 'payload': last_payload or {}}
+    users = _extract_users({'users': ((member_payload.get('data') or {}).get('users') or [])})
+    return {
+        'exists': exists,
+        'users': users,
+        'payload': member_payload if member_payload else groups_payload,
+    }
 
 
 def _synology_create_group(sid: str, group_name: str) -> None:
-    payload = _synology_api_post(
-        sid,
-        {
-            'api': 'SYNO.Core.Group',
-            'version': '1',
-            'method': 'create',
-        },
-        data={
-            'name': group_name,
-            'description': 'DocsCool 系统用户权限组',
-        },
+    _ = sid
+    _operator, group_api, _user_api = _get_synology_sdk_clients()
+    payload = _sdk_call(
+        f'group.create name={group_name}',
+        lambda: group_api.create(group_name, 'DocsCool 系统用户权限组'),
     )
     if payload.get('success'):
         return
@@ -350,105 +297,29 @@ def _synology_create_group(sid: str, group_name: str) -> None:
 
 
 def _synology_get_group_member_users(sid: str, group_name: str) -> tuple[list[str], dict]:
-    attempts = [
-        {
-            'label': 'core-group-member-get_users-true',
-            'api': 'SYNO.Core.Group.Member',
-            'method': 'get_users',
-            'data': {
-                'group': group_name,
-                'in_group': 'true',
-            },
-        },
-        {
-            'label': 'core-group-member-get_users-1',
-            'api': 'SYNO.Core.Group.Member',
-            'method': 'get_users',
-            'data': {
-                'group': group_name,
-                'in_group': '1',
-            },
-        },
-    ]
+    _ = sid
+    try:
+        _operator, group_api, _user_api = _get_synology_sdk_clients()
+    except Exception as exc:
+        return [], _sdk_error_payload(exc)
 
-    last_payload = {}
-    for index, attempt in enumerate(attempts, start=1):
-        current_app.logger.info(
-            '[settings/users] group member get_users request: attempt=%s api=%s method=%s group=%s in_group=%s',
-            index,
-            attempt['api'],
-            attempt['method'],
-            group_name,
-            attempt['data'].get('in_group'),
-        )
+    payload = _sdk_call(
+        f'group.get_users.in_group=true group={group_name}',
+        lambda: group_api.get_users(group_name, True),
+    )
+    if not payload.get('success'):
+        return [], payload
 
-        payload = None
-        try:
-            payload = _synology_api_get(
-                sid,
-                {
-                    'api': attempt['api'],
-                    'version': '1',
-                    'method': attempt['method'],
-                    **attempt['data'],
-                },
-            )
-        except Exception as exc:
-            current_app.logger.info(
-                '[settings/users] group member get_users GET exception: attempt=%s group=%s exc=%s message=%s',
-                index,
-                group_name,
-                exc.__class__.__name__,
-                str(exc),
-            )
-
-        if not payload or not payload.get('success'):
-            try:
-                payload = _synology_api_post(
-                    sid,
-                    {
-                        'api': attempt['api'],
-                        'version': '1',
-                        'method': attempt['method'],
-                    },
-                    data=attempt['data'],
-                )
-            except Exception as exc:
-                current_app.logger.info(
-                    '[settings/users] group member get_users POST exception: attempt=%s group=%s exc=%s message=%s',
-                    index,
-                    group_name,
-                    exc.__class__.__name__,
-                    str(exc),
-                )
-                payload = None
-
-        last_payload = payload or {}
-        current_app.logger.info(
-            '[settings/users] group member get_users response: attempt=%s group=%s success=%s code=%s users_count=%s',
-            index,
-            group_name,
-            bool(payload and payload.get('success')),
-            _synology_error_code(payload or {}),
-            len((((payload or {}).get('data') or {}).get('users') or [])),
-        )
-
-        if not payload or not payload.get('success'):
-            continue
-
-        users = ((payload.get('data') or {}).get('users') or [])
-        normalized_users = []
-        for item in users:
-            if isinstance(item, str):
-                value = item.strip()
-            else:
-                value = (item.get('name') or '').strip()
-            if value:
-                normalized_users.append(value)
-
-        return normalized_users, last_payload
-
-    return [], last_payload
+    users = ((payload.get('data') or {}).get('users') or [])
+    normalized_users = []
+    for item in users:
+        if isinstance(item, str):
+            value = item.strip()
+        else:
+            value = (item.get('name') or '').strip()
+        if value:
+            normalized_users.append(value)
+    return normalized_users, payload
 
 
 def _synology_set_group_users(sid: str, group_name: str, usernames: list[str]) -> None:
@@ -497,108 +368,35 @@ def _synology_set_group_users(sid: str, group_name: str, usernames: list[str]) -
             )
             return list(expected_set), False
 
-    attempts = [
-        {
-            'label': 'core-group-member-add_users',
-            'api': 'SYNO.Core.Group.Member',
-            'method': 'add_users',
-            'data': {
-                'group': group_name,
-                'users': json.dumps(normalized, ensure_ascii=False),
-            },
-        },
-        {
-            'label': 'core-group-set-add_users-name',
-            'api': 'SYNO.Core.Group',
-            'method': 'set',
-            'data': {
-                'name': group_name,
-                'add_users': json.dumps(normalized, ensure_ascii=False),
-            },
-        },
-        {
-            'label': 'core-group-set-add_users-group',
-            'api': 'SYNO.Core.Group',
-            'method': 'set',
-            'data': {
-                'group': group_name,
-                'add_users': json.dumps(normalized, ensure_ascii=False),
-            },
-        },
-    ]
+    _ = sid
+    _operator, group_api, _user_api = _get_synology_sdk_clients()
 
-    last_payload = None
-    for index, attempt in enumerate(attempts, start=1):
+    payload = _sdk_call(
+        f'group.add_users group={group_name} count={len(normalized)}',
+        lambda: group_api.add_users(group_name, normalized),
+    )
+    if not payload.get('success'):
+        raise RuntimeError(f"群组添加用户失败: {_synology_error_message(payload or {}, 'auth')}")
+
+    missing, verified = _verify_membership('sdk-group-add_users-after-success')
+    if not verified:
         current_app.logger.info(
-            '[settings/users] group add users attempt=%s api=%s method=%s group=%s users=%s count=%s',
-            index,
-            attempt['api'],
-            attempt['method'],
+            '[settings/users] group add users accepted without verification: group=%s users=%s',
             group_name,
             normalized,
-            len(normalized),
         )
+        return
 
-        payload = _synology_api_post(
-            sid,
-            {
-                'api': attempt['api'],
-                'version': '1',
-                'method': attempt['method'],
-            },
-            data=attempt['data'],
-        )
-        last_payload = payload
-
+    if not missing:
         current_app.logger.info(
-            '[settings/users] group add users response: attempt=%s api=%s method=%s group=%s success=%s code=%s',
-            index,
-            attempt['api'],
-            attempt['method'],
+            '[settings/users] group add users effective via sdk: group=%s users=%s',
             group_name,
-            bool(payload and payload.get('success')),
-            _synology_error_code(payload or {}),
+            normalized,
         )
-
-        if not payload.get('success'):
-            continue
-
-        missing, verified = _verify_membership(f"{attempt['label']}-after-success")
-        if not verified:
-            current_app.logger.info(
-                '[settings/users] group add users accepted without verification: attempt=%s api=%s method=%s group=%s',
-                index,
-                attempt['api'],
-                attempt['method'],
-                group_name,
-            )
-            return
-
-        if not missing:
-            current_app.logger.info(
-                '[settings/users] group add users effective: attempt=%s api=%s method=%s group=%s',
-                index,
-                attempt['api'],
-                attempt['method'],
-                group_name,
-            )
-            return
-
-        current_app.logger.warning(
-            '[settings/users] group add users success-but-missing: attempt=%s api=%s method=%s group=%s missing=%s',
-            index,
-            attempt['api'],
-            attempt['method'],
-            group_name,
-            missing,
-        )
-
-        # If we can verify and it still misses members, continue to next candidate.
-        # If later candidates also fail, the final exception will include the last payload.
+        return
 
     raise RuntimeError(
-        f"群组添加用户失败: {_synology_error_message(last_payload or {}, 'auth')} | "
-        f"group={group_name} | attempts={len(attempts)} | last_payload={last_payload}"
+        f"群组添加用户后校验失败: group={group_name} missing={missing} requested={normalized}"
     )
 
 
@@ -614,28 +412,30 @@ def _ensure_docscool_group_and_permissions(sid: str, warnings: list[str]) -> lis
 
 def _try_grant_storage_root_edit_permission(sid: str, group_name: str, warnings: list[str]) -> None:
     # Best-effort ACL assignment for DSM shared folder. Some DSM builds may not expose this API.
+    _ = sid
     storage_root = (current_app.config.get('CONTRACT_STORAGE_ROOT') or '').replace('\\', '/').strip('/')
     share_name = storage_root.split('/')[-1] if storage_root else ''
     if not share_name:
         warnings.append('无法从 CONTRACT_STORAGE_ROOT 解析共享目录名，已跳过授权')
         return
 
-    payload = _synology_api_post(
-        sid,
-        {
-            'api': 'SYNO.Core.Share',
-            'version': '1',
-            'method': 'set',
-        },
-        data={
-            'name': share_name,
-            'add_privilege': json.dumps([
+    try:
+        _operator, group_api, _user_api = _get_synology_sdk_clients()
+    except Exception as exc:
+        warnings.append(f'群组目录编辑权限授予未完成(SDK初始化失败: {exc})')
+        return
+
+    payload = _sdk_call(
+        f'group.set_share_permissions group={group_name} share={share_name}',
+        lambda: group_api.set_share_permissions(
+            group_name,
+            [
                 {
-                    'name': group_name,
+                    'name': share_name,
                     'rw': True,
                 }
-            ], ensure_ascii=False),
-        },
+            ],
+        ),
     )
     if payload.get('success'):
         return
@@ -677,7 +477,8 @@ def _sync_docscool_membership(sid: str, warnings: list[str]) -> None:
 
 def _settings_login() -> tuple[str, str]:
     try:
-        return _synology_upload_login(), ''
+        username, _group_api, _user_api = _get_synology_sdk_clients()
+        return username, ''
     except PermissionError as exc:
         return '', str(exc)
     except Exception as exc:
@@ -697,6 +498,7 @@ def list_user_permissions():
     return jsonify({
         'users': [row.to_dict() for row in rows],
         'department_options': _department_option_values(),
+        'folder_options': _folder_option_values(),
         'warnings': warnings,
     })
 
@@ -727,6 +529,7 @@ def create_user_permission():
         description=info.get('description', ''),
         permission=PERMISSION_VIEW,
         departments='',
+        folders='',
     )
     db.session.add(row)
     db.session.commit()
@@ -747,9 +550,11 @@ def update_user_permission(user_id):
         return jsonify({'message': 'permission is invalid'}), 400
 
     departments = _format_department_text(body.get('departments') or body.get('department_list') or '')
+    folders = _format_department_text(body.get('folders') or body.get('folder_list') or '')
 
     row.permission = permission
     row.departments = departments
+    row.folders = folders
     db.session.commit()
 
     return jsonify(row.to_dict())
