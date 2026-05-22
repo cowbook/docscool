@@ -41,6 +41,7 @@ class Contract(db.Model):
     status = db.Column(db.String(32), nullable=False, default='active')
     file_path = db.Column(db.String(512), nullable=True)
     created_by = db.Column(db.String(128), nullable=False)
+    updated_by = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -71,6 +72,7 @@ class Contract(db.Model):
             'status': self.status,
             'file_path': self.file_path,
             'created_by': self.created_by,
+            'updated_by': self.updated_by,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }
@@ -114,6 +116,7 @@ class UserPermission(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     login_name = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    me_added = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))
     description = db.Column(db.String(255), nullable=True)
     permission = db.Column(db.String(32), nullable=False, default='view')
     departments = db.Column(db.Text, nullable=True)
@@ -131,6 +134,7 @@ class UserPermission(db.Model):
         return {
             'id': self.id,
             'login_name': self.login_name,
+            'me_added': bool(self.me_added),
             'description': self.description or '',
             'permission': self.permission,
             'departments': self.departments or '',

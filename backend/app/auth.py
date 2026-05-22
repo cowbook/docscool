@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from importlib import import_module
+from urllib.parse import urlparse
 
 import jwt
-import requests
 from flask import Blueprint, current_app, g, jsonify, request
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 _USER_PASSWORD_CACHE = {}
-EXTERNAL_API_TIMEOUT_SECONDS = 300
 
 
 def _synology_error_message(code: int) -> str:
@@ -29,167 +29,69 @@ def _synology_login(username: str, password: str, otp_code: str = ''):
     return success, message
 
 
-def _synology_login_with_sid(username: str, password: str, otp_code: str = ''):
-    base_url = current_app.config['SYNOLOGY_BASE_URL']
+def _synology_error_code_from_exception(exc: Exception):
+    code = getattr(exc, 'error_code', None)
+    try:
+        return int(code) if code is not None else None
+    except Exception:
+        return None
+
+
+def _get_synology_user_client(username: str, password: str, otp_code: str = ''):
+    base_url = (current_app.config.get('SYNOLOGY_BASE_URL') or '').strip()
     if not base_url:
-        current_app.logger.warning('[auth] synology login aborted: base url is empty; user=%s', username)
-        return False, 'SYNOLOGY_BASE_URL is empty', None
+        raise RuntimeError('SYNOLOGY_BASE_URL is empty')
 
-    endpoints = [
-        f"{base_url}/webapi/entry.cgi",
-        f"{base_url}/webapi/auth.cgi",
-    ]
-    versions = ['7', '6']
-    last_message = 'Synology authentication failed'
+    parsed = urlparse(base_url)
+    if not parsed.hostname:
+        raise RuntimeError(f'Invalid SYNOLOGY_BASE_URL: {base_url}')
 
-    for endpoint in endpoints:
-        for version in versions:
-            params = {
-                'api': 'SYNO.API.Auth',
-                'version': version,
-                'method': 'login',
-                'account': username,
-                'passwd': password,
-                'session': current_app.config['SYNOLOGY_AUTH_SESSION'],
-                'format': 'sid',
-            }
-            if otp_code:
-                params['otp_code'] = otp_code
+    secure = parsed.scheme.lower() == 'https'
+    port = parsed.port or (5001 if secure else 5000)
 
-            try:
-                current_app.logger.info(
-                    '[auth] synology login attempt: user=%s endpoint=%s version=%s has_otp=%s',
-                    username,
-                    endpoint,
-                    version,
-                    bool(otp_code),
-                )
-                response = requests.get(
-                    endpoint,
-                    params=params,
-                    timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-                    verify=current_app.config['SYNOLOGY_VERIFY_SSL'],
-                )
-                response.raise_for_status()
-                payload = response.json()
-
-                if payload.get('success'):
-                    sid = ((payload.get('data') or {}).get('sid') or '').strip()
-                    if sid:
-                        current_app.logger.info(
-                            '[auth] synology login succeeded: user=%s endpoint=%s version=%s sid_len=%s',
-                            username,
-                            endpoint,
-                            version,
-                            len(sid),
-                        )
-                        return True, '', {
-                            'endpoint': endpoint,
-                            'version': version,
-                            'sid': sid,
-                        }
-
-                    current_app.logger.warning(
-                        '[auth] synology login response missing sid: user=%s endpoint=%s version=%s',
-                        username,
-                        endpoint,
-                        version,
-                    )
-                    last_message = 'Synology authentication succeeded but sid is missing'
-                    continue
-
-                error = payload.get('error') or {}
-                code = error.get('code')
-                if code is not None:
-                    current_app.logger.warning(
-                        '[auth] synology login failed with code: user=%s endpoint=%s version=%s code=%s',
-                        username,
-                        endpoint,
-                        version,
-                        code,
-                    )
-                    last_message = _synology_error_message(int(code))
-                else:
-                    current_app.logger.warning(
-                        '[auth] synology login failed without error code: user=%s endpoint=%s version=%s payload_keys=%s',
-                        username,
-                        endpoint,
-                        version,
-                        list(payload.keys()),
-                    )
-                    last_message = 'Synology authentication failed'
-            except requests.RequestException as exc:
-                current_app.logger.warning(
-                    '[auth] synology login request exception: user=%s endpoint=%s version=%s exc=%s',
-                    username,
-                    endpoint,
-                    version,
-                    exc.__class__.__name__,
-                )
-                last_message = f'Synology request failed: {exc.__class__.__name__}'
-
-    return False, last_message, None
+    core_user = import_module('synology_api.core_user')
+    # synology-api 0.8.2 复用全局 shared_session，会导致不同 application 的 API 列表串用。
+    # 这里强制重置，确保当前客户端按 User/Core 场景重新拉取 API 列表。
+    base_api = import_module('synology_api.base_api')
+    base_api.BaseApi.shared_session = None
+    return core_user.User(
+        parsed.hostname,
+        str(port),
+        username,
+        password,
+        secure=secure,
+        cert_verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+        dsm_version=int(current_app.config.get('SYNOLOGY_DSM_VERSION', 7)),
+        debug=False,
+        otp_code=otp_code or None,
+        application=current_app.config.get('SYNOLOGY_AUTH_SESSION') or 'Core',
+    )
 
 
-def _synology_logout(endpoint: str, version: str, sid: str) -> None:
-    if not endpoint or not sid:
-        return
-
-    params = {
-        'api': 'SYNO.API.Auth',
-        'version': version,
-        'method': 'logout',
-        'session': current_app.config['SYNOLOGY_AUTH_SESSION'],
-        '_sid': sid,
-    }
-
+def _synology_login_with_sid(username: str, password: str, otp_code: str = ''):
     try:
-        requests.get(
-            endpoint,
-            params=params,
-            timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-            verify=current_app.config['SYNOLOGY_VERIFY_SSL'],
+        current_app.logger.info(
+            '[auth] synology sdk login attempt: user=%s has_otp=%s',
+            username,
+            bool(otp_code),
         )
-    except requests.RequestException:
-        # Best-effort logout only.
-        return
-
-
-def _synology_query_api_info(endpoint: str):
-    params = {
-        'api': 'SYNO.API.Info',
-        'version': '1',
-        'method': 'query',
-        'query': 'SYNO.Core.User,SYNO.Core.User.Password',
-    }
-
-    try:
-        response = requests.get(
-            endpoint,
-            params=params,
-            timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-            verify=current_app.config['SYNOLOGY_VERIFY_SSL'],
+        client = _get_synology_user_client(username, password, otp_code)
+        current_app.logger.info('[auth] synology sdk login succeeded: user=%s', username)
+        return True, '', {'client': client}
+    except Exception as exc:
+        code = _synology_error_code_from_exception(exc)
+        if code is not None:
+            message = _synology_error_message(code)
+        else:
+            message = f'Synology SDK login failed: {exc.__class__.__name__}'
+        current_app.logger.warning(
+            '[auth] synology sdk login failed: user=%s code=%s exc=%s message=%s',
+            username,
+            code,
+            exc.__class__.__name__,
+            str(exc),
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get('success'):
-            return {'success': False, 'message': f'query failed: {payload.get("error") or {}}'}
-
-        data = payload.get('data') or {}
-        info_map = {}
-        for api_name in ('SYNO.Core.User', 'SYNO.Core.User.Password'):
-            info = data.get(api_name)
-            if info:
-                info_map[api_name] = {
-                    'path': info.get('path'),
-                    'minVersion': info.get('minVersion'),
-                    'maxVersion': info.get('maxVersion'),
-                    'requestFormat': info.get('requestFormat'),
-                }
-
-        return {'success': True, 'apis': info_map}
-    except requests.RequestException as exc:
-        return {'success': False, 'message': f'request exception: {exc.__class__.__name__}'}
+        return False, message, None
 
 
 def _synology_change_own_password(username: str, current_password: str, new_password: str):
@@ -204,154 +106,78 @@ def _synology_change_own_password(username: str, current_password: str, new_pass
         current_app.logger.warning('[auth] change-password aborted: user=%s login_with_current_password_failed msg=%s', username, message)
         return False, message
 
-    endpoint = session['endpoint']
-    version = session['version']
-    sid = session['sid']
+    user_api = session['client']
     last_message = 'Synology password change failed'
 
-    api_info = _synology_query_api_info(endpoint)
-    if api_info.get('success'):
-        current_app.logger.info('[auth] change-password api-info: user=%s details=%s', username, api_info.get('apis'))
-    else:
-        current_app.logger.warning('[auth] change-password api-info query failed: user=%s msg=%s', username, api_info.get('message'))
-
-    # Ordered by observed effectiveness in production logs.
-    payload_candidates = [
-        {
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'set',
-            'name': username,
-            'password': new_password,
-            'old_password': current_password,
-        },
-        {
-            'api': 'SYNO.Core.User',
-            'version': '1',
-            'method': 'set',
-            'name': username,
-            'passwd': new_password,
-            'old_passwd': current_password,
-        },
-        {
-            'api': 'SYNO.Core.User.Password',
-            'version': '1',
-            'method': 'set',
-            'new_password': new_password,
-            'old_password': current_password,
-        },
-        {
-            'api': 'SYNO.Core.User.Password',
-            'version': '1',
-            'method': 'set',
-            'passwd': new_password,
-            'old_passwd': current_password,
-        },
-    ]
-
     try:
-        for payload_index, payload in enumerate(payload_candidates, start=1):
-            request_payload = {
-                **payload,
-                '_sid': sid,
-            }
-            payload_signature = {
-                'api': payload.get('api'),
-                'version': payload.get('version'),
-                'method': payload.get('method'),
-                'keys': sorted(payload.keys()),
-            }
+        current_app.logger.info('[auth] change-password sdk modify_user attempt: user=%s', username)
+        payload = user_api.modify_user(
+            name=username,
+            new_name=username,
+            password=new_password,
+        )
 
-            try:
-                current_app.logger.info(
-                    '[auth] change-password attempt: user=%s payload_index=%s http_method=%s signature=%s',
-                    username,
-                    payload_index,
-                    'post',
-                    payload_signature,
-                )
-                response = requests.post(
-                    endpoint,
-                    data=request_payload,
-                    timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-                    verify=current_app.config['SYNOLOGY_VERIFY_SSL'],
-                )
+        if not payload.get('success'):
+            error = payload.get('error') or {}
+            code = error.get('code')
+            if code is not None:
+                last_message = f'密码修改失败 (code={code})'
+            else:
+                last_message = '密码修改失败，请稍后重试'
+            current_app.logger.warning(
+                '[auth] change-password sdk modify_user failed: user=%s code=%s error=%s',
+                username,
+                code,
+                error,
+            )
+            return False, last_message
 
-                response.raise_for_status()
-                body = response.json()
+        verify_ok, verify_message = _synology_login(username, new_password)
+        if not verify_ok:
+            current_app.logger.warning(
+                '[auth] change-password verification failed: user=%s new_password_login_ok=false msg=%s',
+                username,
+                verify_message,
+            )
+            return False, f'密码修改未生效：{verify_message or "新密码校验失败"}'
 
-                if body.get('success'):
-                    current_app.logger.info(
-                        '[auth] change-password api returned success: user=%s payload_index=%s http_method=%s body_keys=%s data_keys=%s',
-                        username,
-                        payload_index,
-                        'post',
-                        list(body.keys()),
-                        list((body.get('data') or {}).keys()),
-                    )
+        current_app.logger.info('[auth] change-password verification passed: user=%s new_password_login_ok=true', username)
 
-                    verify_ok, verify_message = _synology_login(username, new_password)
-                    if not verify_ok:
-                        current_app.logger.warning(
-                            '[auth] change-password verification failed: user=%s new_password_login_ok=false msg=%s',
-                            username,
-                            verify_message,
-                        )
-                        last_message = f'密码修改未生效：{verify_message or "新密码校验失败"}'
-                        continue
+        old_password_still_valid, old_password_message = _synology_login(username, current_password)
+        if old_password_still_valid:
+            current_app.logger.warning(
+                '[auth] change-password anomaly: user=%s old_password_still_valid=true',
+                username,
+            )
+        else:
+            current_app.logger.info(
+                '[auth] change-password old-password check: user=%s old_password_still_valid=false msg=%s',
+                username,
+                old_password_message,
+            )
 
-                    current_app.logger.info('[auth] change-password verification passed: user=%s new_password_login_ok=true', username)
-
-                    old_password_still_valid, old_password_message = _synology_login(username, current_password)
-                    if old_password_still_valid:
-                        current_app.logger.warning(
-                            '[auth] change-password anomaly: user=%s old_password_still_valid=true',
-                            username,
-                        )
-                    else:
-                        current_app.logger.info(
-                            '[auth] change-password old-password check: user=%s old_password_still_valid=false msg=%s',
-                            username,
-                            old_password_message,
-                        )
-
-                    return True, ''
-
-                error = body.get('error') or {}
-                code = error.get('code')
-                if code is not None:
-                    current_app.logger.warning(
-                        '[auth] change-password api failed: user=%s payload_index=%s http_method=%s code=%s',
-                        username,
-                        payload_index,
-                        'post',
-                        code,
-                    )
-                    last_message = f'密码修改失败 (code={code})'
-                else:
-                    current_app.logger.warning(
-                        '[auth] change-password api failed without code: user=%s payload_index=%s http_method=%s payload_keys=%s',
-                        username,
-                        payload_index,
-                        'post',
-                        list(body.keys()),
-                    )
-                    last_message = '密码修改失败，请稍后重试'
-            except requests.RequestException as exc:
-                current_app.logger.warning(
-                    '[auth] change-password request exception: user=%s payload_index=%s http_method=%s exc=%s',
-                    username,
-                    payload_index,
-                    'post',
-                    exc.__class__.__name__,
-                )
-                last_message = f'Synology request failed: {exc.__class__.__name__}'
-
-        current_app.logger.warning('[auth] change-password all attempts failed: user=%s last_message=%s', username, last_message)
+        return True, ''
+    except Exception as exc:
+        code = _synology_error_code_from_exception(exc)
+        if code is not None:
+            last_message = _synology_error_message(code)
+        else:
+            last_message = f'Synology SDK request failed: {exc.__class__.__name__}'
+        current_app.logger.warning(
+            '[auth] change-password sdk exception: user=%s code=%s exc=%s message=%s',
+            username,
+            code,
+            exc.__class__.__name__,
+            str(exc),
+        )
         return False, last_message
     finally:
-        current_app.logger.info('[auth] change-password logout sid: user=%s endpoint=%s version=%s', username, endpoint, version)
-        _synology_logout(endpoint, version, sid)
+        try:
+            user_api.logout()
+            current_app.logger.info('[auth] change-password sdk logout: user=%s', username)
+        except Exception:
+            # Best-effort logout only.
+            pass
 
 
 def _encode_token(username: str) -> str:

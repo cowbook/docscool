@@ -18,6 +18,11 @@
           <div class="notice-content">
             ℹ️ <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有管理员可以修改</span>
           </div>
+
+          <div v-if="showDepartmentRestrictedNotice" class="notice-content">
+            🚦 <span>以下只显示具有权限的部门合同：{{ currentUserDepartmentListText }}</span>
+          </div>
+
       </div>
 
       <input
@@ -49,25 +54,35 @@
           />
 
           
-          <div class="header-actions">
+          <div v-if="!isViewPermissionUser" class="header-actions">
             <el-button-group class="apple-button-group">
-            
-              <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
-                <Icon :icon="fileTypeExcel" />
-                <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
+
+              <el-button type="primary" :disabled="aiParsing" @click="openCreate">
+                <el-icon><Plus /></el-icon>
+                <span>新建合同</span>
               </el-button>
-              <el-button :loading="aiParsing" @click="triggerAiUpload">
+
+
+               <el-button :loading="aiParsing" @click="triggerAiUpload">
                 <el-icon><Document /></el-icon>
                 <span>{{ aiParsing ? '解析中...' : 'AI上传' }}</span>
               </el-button>
+            
+              <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
+                <el-icon><Upload /></el-icon>
+                <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
+              </el-button>
+
+             
+
               <el-button :loading="quickMatching" :disabled="aiParsing" @click="openQuickMatchDialog">
+                <el-icon><Search /></el-icon>
                 <span>快速批配</span>
               </el-button>
-              <el-button type="primary" :disabled="aiParsing" @click="openCreate">
-                <el-icon><Plus /></el-icon>
-                <span>新建</span>
-              </el-button>
+          
             </el-button-group>
+
+            
           </div>
       
         </div>
@@ -110,6 +125,11 @@
       </div>
 
       <div class="pager-top">
+        <div class="pager-top-actions">
+          <el-tooltip content="字段排序" placement="top">
+            <el-button class="field-sort-button" circle :icon="Operation" @click="openFieldSortDialog" />
+          </el-tooltip>
+        </div>
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -121,63 +141,82 @@
       </div>
 
       <el-table :data="pagedContracts" stripe border resizable size="small" class="contract-table" @sort-change="handleSortChange">
-         
-        <el-table-column prop="contract_number" label="合同编号" :min-width="contractNumberColumnWidth" sortable show-overflow-tooltip>
-          <template #default="scope">
-            <span class="no-wrap-cell" :title="scope.row.contract_number || ''">
-              {{ scope.row.contract_number || '' }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="contract_name" label="合同名称" :min-width="contractNameColumnWidth" show-overflow-tooltip sortable>
-          <template #default="scope">
-            <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
-              <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
-            </button>
-          </template>
-        </el-table-column>
-
-
-        <el-table-column label="文件" min-width="220">
-          <template #default="scope">
-            <el-link class="file-cell"  @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
-
-              <el-tooltip :content="scope.row.file_path" placement="top">
-                <Icon
-                  v-if="scope.row.file_path"
-                  :icon="getFileIcon(scope.row.file_path)"
-                  class="file-ok file-download"
-                />
-              </el-tooltip>
-
-
-              <span class="file-name" :title="getFileName(scope.row.file_path)">
-                {{ getFileName(scope.row.file_path) || '缺失' }}
+        <template v-for="column in visibleTableColumns" :key="column.key">
+          <el-table-column
+            v-if="column.key === 'contract_number'"
+            prop="contract_number"
+            label="合同编号"
+            :min-width="contractNumberColumnWidth"
+            sortable
+            show-overflow-tooltip
+          >
+            <template #default="scope">
+              <span class="no-wrap-cell" :title="scope.row.contract_number || ''">
+                {{ scope.row.contract_number || '' }}
               </span>
-            </el-link>
-            <div v-else>
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            v-else-if="column.key === 'contract_name'"
+            prop="contract_name"
+            label="合同名称"
+            :min-width="contractNameColumnWidth"
+            show-overflow-tooltip
+            sortable
+          >
+            <template #default="scope">
+              <button class="contract-name-link" type="button" @click.stop="openEdit(scope.row)">
+                <span class="contract-name-cell">{{ scope.row.contract_name }}</span>
+              </button>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-else-if="column.key === 'file_path'" prop="file_path" label="文件" min-width="220">
+            <template #default="scope">
+              <el-link class="file-cell" @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
+                <el-tooltip :content="scope.row.file_path" placement="top">
+                  <Icon
+                    v-if="scope.row.file_path"
+                    :icon="getFileIcon(scope.row.file_path)"
+                    class="file-ok file-download"
+                  />
+                </el-tooltip>
+
+                <span class="file-name" :title="getFileName(scope.row.file_path)">
+                  {{ getFileName(scope.row.file_path) || '缺失' }}
+                </span>
+              </el-link>
+              <div v-else>
                 <el-icon class="file-miss"><CircleCloseFilled /></el-icon>
                 <span class="no-file-name">未上传</span>
-            
-            </div>
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip sortable />
-        <el-table-column prop="contract_amount" label="合同金额" min-width="120" sortable />
-        <el-table-column prop="copy_count" label="份数" min-width="80" sortable />
-        <el-table-column prop="handler" label="承办人" min-width="100" sortable />
-        <el-table-column prop="handling_department" label="承办部门" min-width="130" sortable />
-        <el-table-column prop="handling_date" label="承办日期" min-width="110" sortable />
-        <el-table-column prop="contract_type" label="合同类型" min-width="110" sortable />
-        <el-table-column prop="purchase_type" label="采购类型" min-width="110" sortable />
-        <el-table-column prop="stamp_tax_rate" label="印花税率" min-width="100" sortable />
-        <el-table-column prop="is_archived" label="是否归档" min-width="90" sortable />
-        <el-table-column prop="save_place" label="存档位置" min-width="140" show-overflow-tooltip sortable />
-        <el-table-column prop="project" label="项目" min-width="220" show-overflow-tooltip sortable />
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-else-if="column.key === 'created_at'" prop="created_at" label="创建时间" min-width="170" sortable>
+            <template #default="scope">
+              <span>{{ formatDateTime(scope.row.created_at) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-else-if="column.key === 'updated_at'" prop="updated_at" label="修改时间" min-width="170" sortable>
+            <template #default="scope">
+              <span>{{ formatDateTime(scope.row.updated_at) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            v-else
+            :prop="column.prop"
+            :label="column.label"
+            :min-width="column.minWidth"
+            :show-overflow-tooltip="column.showOverflowTooltip"
+            :sortable="column.sortable"
+          />
+        </template>
      
-        <el-table-column label="操作" width="140" fixed="right" align="center">
+        <el-table-column v-if="!isViewPermissionUser" label="操作" width="140" fixed="right" align="center">
           <template #default="scope">
             <div class="action-buttons">
               <el-tooltip content="编辑" placement="top">
@@ -202,6 +241,53 @@
         />
       </div>
     </el-card>
+
+    <el-dialog
+      v-model="fieldSortDialogVisible"
+      title="字段排序"
+      width="min(760px, 96vw)"
+      :close-on-click-modal="false"
+    >
+      <div class="field-sort-tip">勾选表示显示，取消勾选表示隐藏。拖动左侧手柄可调整表格列顺序。</div>
+      <div class="field-sort-list">
+        <div
+          ref="fieldSortListRef"
+          v-for="column in fieldSortDraftColumns"
+          :key="column.key"
+          class="field-sort-item"
+          :class="{
+            'is-hidden': !column.visible,
+            'is-dragging': draggingColumnKey === column.key,
+          }"
+          :data-column-key="column.key"
+        >
+          <span
+            class="field-sort-drag-handle"
+            aria-hidden="true"
+            @pointerdown.prevent="handleColumnPointerDown(column.key, $event)"
+          >
+            <el-icon><Rank /></el-icon>
+          </span>
+          <el-checkbox v-model="column.visible" :label="column.label" class="field-sort-checkbox" />
+        </div>
+      </div>
+      <div
+        v-if="dragPreview.visible"
+        class="field-sort-drag-preview"
+        :style="{
+          left: `${dragPreview.x}px`,
+          top: `${dragPreview.y}px`,
+        }"
+      >
+        <span class="field-sort-drag-preview-icon" aria-hidden="true"><el-icon><Rank /></el-icon></span>
+        <span class="field-sort-drag-preview-label">{{ dragPreview.label }}</span>
+      </div>
+      <template #footer>
+        <el-button @click="resetFieldSortDraft">恢复默认</el-button>
+        <el-button @click="fieldSortDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmFieldSortDialog">完成</el-button>
+      </template>
+    </el-dialog>
 
     <AiMatchDialog
       v-model="aiMatchDialogVisible"
@@ -271,6 +357,41 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="aiFolderDialogVisible"
+      title="选择AI上传目录"
+      width="min(760px, 96vw)"
+      :close-on-click-modal="false"
+    >
+      <div class="ai-folder-dialog-tip">请先选择目标目录，再选择本地 PDF 文件。</div>
+      <div class="ai-folder-dialog-selected">当前选择：{{ aiFolderSelectedPath || '未选择' }}</div>
+
+      <div class="ai-folder-tree-wrap" v-loading="aiFolderTreeLoading">
+        <el-tree
+          :data="aiFolderTreeData"
+          node-key="path"
+          :props="aiFolderTreeProps"
+          lazy
+          :load="loadAiFolderChildren"
+          :expand-on-click-node="true"
+          highlight-current
+          @node-click="onAiFolderNodeClick"
+        >
+          <template #default="{ node, data }">
+            <span class="ai-folder-tree-node" :title="normalizeFolderPath(data.path || '')">
+              <span class="ai-folder-tree-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
+              <span class="ai-folder-tree-label">{{ data.name }}</span>
+            </span>
+          </template>
+        </el-tree>
+      </div>
+
+      <template #footer>
+        <el-button @click="aiFolderDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!canConfirmAiFolder" @click="confirmAiFolderSelection">下一步：选择本地文件</el-button>
+      </template>
+    </el-dialog>
+
     <ContractItem
       ref="contractItemRef"
       :departments="departments"
@@ -285,20 +406,80 @@
 
 <script setup>
 
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
-import { CircleCloseFilled, Delete, Document, Download, Edit, Plus, Upload } from '@element-plus/icons-vue'
+import { CircleCloseFilled, Delete, Document, Download, Edit, Operation, Plus, Rank, Search, Upload } from '@element-plus/icons-vue'
 
 import http from '../api/http'
 import ContractItem from '../components/ContractItem.vue'
 import AiMatchDialog from '../components/AiMatchDialog.vue'
 
 const AI_NEW_CONTRACT_VALUE = '__new_contract__'
+const TABLE_COLUMN_STORAGE_KEY = 'docscool.contract-list.columns.v1'
+
+const DEFAULT_TABLE_COLUMNS = [
+  { key: 'contract_number', prop: 'contract_number', label: '合同编号', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'contract_name', prop: 'contract_name', label: '合同名称', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'file_path', prop: 'file_path', label: '文件', minWidth: 220, visible: true, sortable: false, showOverflowTooltip: false },
+  { key: 'contract_unit', prop: 'contract_unit', label: '合同单位', minWidth: 180, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'contract_amount', prop: 'contract_amount', label: '合同金额', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'copy_count', prop: 'copy_count', label: '份数', minWidth: 80, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'handler', prop: 'handler', label: '承办人', minWidth: 100, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'handling_department', prop: 'handling_department', label: '承办部门', minWidth: 130, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'handling_date', prop: 'handling_date', label: '承办日期', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'contract_type', prop: 'contract_type', label: '合同类型', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'purchase_type', prop: 'purchase_type', label: '采购类型', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'stamp_tax_rate', prop: 'stamp_tax_rate', label: '印花税率', minWidth: 100, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'is_archived', prop: 'is_archived', label: '是否归档', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'save_place', prop: 'save_place', label: '存档位置', minWidth: 140, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'project', prop: 'project', label: '项目', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'created_by', prop: 'created_by', label: '创建人', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'created_at', prop: 'created_at', label: '创建时间', minWidth: 170, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'updated_by', prop: 'updated_by', label: '修改人', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'updated_at', prop: 'updated_at', label: '修改时间', minWidth: 170, visible: true, sortable: true, showOverflowTooltip: false },
+]
+
+const cloneTableColumns = () => DEFAULT_TABLE_COLUMNS.map((item) => ({ ...item }))
+
+const loadStoredTableColumns = () => {
+  try {
+    const raw = window.localStorage.getItem(TABLE_COLUMN_STORAGE_KEY)
+    if (!raw) {
+      return cloneTableColumns()
+    }
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return cloneTableColumns()
+    }
+
+    const merged = []
+    const seen = new Set()
+
+    parsed.forEach((item) => {
+      const base = DEFAULT_TABLE_COLUMNS.find((column) => column.key === item?.key)
+      if (base) {
+        merged.push({ ...base, ...item, visible: item.visible !== false })
+        seen.add(base.key)
+      }
+    })
+
+    DEFAULT_TABLE_COLUMNS.forEach((item) => {
+      if (!seen.has(item.key)) {
+        merged.push({ ...item })
+      }
+    })
+
+    return merged.length ? merged : cloneTableColumns()
+  } catch (_error) {
+    return cloneTableColumns()
+  }
+}
 
 const contracts = ref([])
 const departments = ref([])
@@ -313,11 +494,31 @@ const aiMatchCandidates = ref([])
 const aiParsedFields = ref(null)
 const aiParsedFullbody = ref('')
 const aiParsedUploadFile = ref(null)
+const aiUploadedFilePath = ref('')
+const aiFolderDialogVisible = ref(false)
+const aiFolderTreeLoading = ref(false)
+const aiFolderTreeData = ref([])
+const aiFolderSelectedPath = ref('')
+const aiUploadTargetFolderPath = ref('')
+const fieldSortDialogVisible = ref(false)
+const fieldSortListRef = ref(null)
+const draggingColumnKey = ref('')
+const draggingPointerId = ref(null)
+const dragPreview = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  label: '',
+})
+const fieldSortDraftColumns = ref([])
 const importingExcel = ref(false)
 const importDialogVisible = ref(false)
 const currentPage = ref(1)
 const contractItemRef = ref(null)
+const currentUserPermission = ref('view')
+const currentUserDepartmentList = ref([])
 const sortState = reactive({ prop: '', order: '' })
+const tableColumns = ref(loadStoredTableColumns())
 const linkTreeSnapshot = reactive({
   root: { name: '/', path: '' },
   rootChildren: [],
@@ -328,6 +529,137 @@ const linkTreeSnapshot = reactive({
 const handleSortChange = ({ prop, order }) => {
   sortState.prop = prop
   sortState.order = order
+}
+
+const openFieldSortDialog = () => {
+  fieldSortDraftColumns.value = tableColumns.value.map((item) => ({ ...item }))
+  fieldSortDialogVisible.value = true
+}
+
+const resetFieldSortDraft = () => {
+  fieldSortDraftColumns.value = cloneTableColumns()
+}
+
+const confirmFieldSortDialog = () => {
+  tableColumns.value = fieldSortDraftColumns.value.map((item) => ({ ...item }))
+  fieldSortDialogVisible.value = false
+}
+
+const visibleTableColumns = computed(() => tableColumns.value.filter((item) => item.visible))
+
+const persistTableColumns = () => {
+  try {
+    window.localStorage.setItem(TABLE_COLUMN_STORAGE_KEY, JSON.stringify(tableColumns.value))
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
+const resetTableColumns = () => {
+  tableColumns.value = cloneTableColumns()
+  persistTableColumns()
+}
+
+const moveTableColumn = (fromKey, toKey) => {
+  if (!fromKey || !toKey || fromKey === toKey) {
+    return
+  }
+
+  const nextColumns = [...fieldSortDraftColumns.value]
+  const fromIndex = nextColumns.findIndex((item) => item.key === fromKey)
+  const toIndex = nextColumns.findIndex((item) => item.key === toKey)
+
+  if (fromIndex < 0 || toIndex < 0) {
+    return
+  }
+
+  const [moved] = nextColumns.splice(fromIndex, 1)
+  nextColumns.splice(toIndex, 0, moved)
+  fieldSortDraftColumns.value = nextColumns
+}
+
+const updateDragPreviewPosition = (clientX, clientY) => {
+  const offsetX = 18
+  const offsetY = 18
+  const previewWidth = 220
+  const previewHeight = 44
+  const maxX = Math.max(12, window.innerWidth - previewWidth - 12)
+  const maxY = Math.max(12, window.innerHeight - previewHeight - 12)
+  dragPreview.x = Math.min(clientX + offsetX, maxX)
+  dragPreview.y = Math.min(clientY + offsetY, maxY)
+}
+
+const getColumnKeyFromPoint = (clientX, clientY) => {
+  const element = document.elementFromPoint(clientX, clientY)
+  const itemElement = element?.closest?.('.field-sort-item')
+  return itemElement?.dataset?.columnKey || ''
+}
+
+const handleColumnPointerMove = (event) => {
+  if (!draggingColumnKey.value || draggingPointerId.value !== event.pointerId) {
+    return
+  }
+
+  updateDragPreviewPosition(event.clientX, event.clientY)
+
+  const targetKey = getColumnKeyFromPoint(event.clientX, event.clientY)
+  if (targetKey && targetKey !== draggingColumnKey.value) {
+    moveTableColumn(draggingColumnKey.value, targetKey)
+  }
+}
+
+const stopColumnPointerDrag = () => {
+  draggingColumnKey.value = ''
+  draggingPointerId.value = null
+  dragPreview.visible = false
+  dragPreview.label = ''
+  window.removeEventListener('pointermove', handleColumnPointerMove)
+  window.removeEventListener('pointerup', stopColumnPointerDrag)
+  window.removeEventListener('pointercancel', stopColumnPointerDrag)
+}
+
+const handleColumnPointerDown = (key, event) => {
+  if (event.button !== 0) {
+    return
+  }
+
+  draggingColumnKey.value = key
+  draggingPointerId.value = event.pointerId
+  dragPreview.label = fieldSortDraftColumns.value.find((item) => item.key === key)?.label || ''
+  dragPreview.visible = true
+  updateDragPreviewPosition(event.clientX, event.clientY)
+  event.currentTarget?.setPointerCapture?.(event.pointerId)
+  window.addEventListener('pointermove', handleColumnPointerMove)
+  window.addEventListener('pointerup', stopColumnPointerDrag)
+  window.addEventListener('pointercancel', stopColumnPointerDrag)
+}
+
+watch(tableColumns, persistTableColumns, { deep: true })
+
+watch(fieldSortDialogVisible, (visible) => {
+  if (visible) {
+    fieldSortDraftColumns.value = tableColumns.value.map((item) => ({ ...item }))
+    stopColumnPointerDrag()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopColumnPointerDrag()
+})
+
+const formatDateTime = (value) => {
+  const text = String(value || '').trim()
+  if (!text) {
+    return ''
+  }
+
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) {
+    return text
+  }
+
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 const sortedContracts = computed(() => {
@@ -364,6 +696,10 @@ const pagedContracts = computed(() => {
 const excelUploadInput = ref(null)
 const aiUploadInput = ref(null)
 const pageSize = ref(100)
+const aiFolderTreeProps = {
+  label: 'name',
+  children: 'children',
+}
 
 const filters = reactive({
   handling_department: '',
@@ -384,6 +720,28 @@ const options = reactive({
 })
 
 const totalContracts = computed(() => sortedContracts.value ? sortedContracts.value.length : 0)
+const isViewPermissionUser = computed(() => String(currentUserPermission.value || '').trim() === 'view')
+
+const showDepartmentRestrictedNotice = computed(() => {
+  const isSuperAdmin = String(currentUserPermission.value || '').trim() === 'super_admin'
+  if (isSuperAdmin) {
+    return false
+  }
+  return !currentUserDepartmentList.value.includes('全部')
+})
+
+const currentUserDepartmentListText = computed(() => {
+  const items = Array.isArray(currentUserDepartmentList.value)
+    ? currentUserDepartmentList.value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    : []
+
+  if (!items.length) {
+    return '（未配置部门权限）'
+  }
+  return items.join(', ')
+})
 
 const departmentFilterOptions = computed(() => {
   const merged = new Set()
@@ -407,6 +765,11 @@ const quickMatchTargetIds = computed(() => {
     .filter((row) => (row?.is_archived || '').trim() !== '已归档' && !String(row?.file_path || '').trim())
     .map((row) => Number(row?.id))
     .filter((id) => Number.isInteger(id) && id > 0)
+})
+
+const canConfirmAiFolder = computed(() => {
+  const path = normalizeFolderPath(aiFolderSelectedPath.value)
+  return !!path
 })
 
 const contractNameColumnWidth = computed(() => {
@@ -438,6 +801,7 @@ const resetAiMatchState = () => {
   aiParsedFields.value = null
   aiParsedFullbody.value = ''
   aiParsedUploadFile.value = null
+  aiUploadedFilePath.value = ''
   aiMatchLoading.value = false
   aiMatchProcessing.value = false
 }
@@ -463,7 +827,68 @@ const loadFieldOptions = async () => {
   options.project = data?.project || []
 }
 
+const loadCurrentUserPermission = async () => {
+  const { data } = await http.get('/settings/users/current-permission')
+  currentUserPermission.value = String(data?.permission || 'view').trim() || 'view'
+  currentUserDepartmentList.value = Array.isArray(data?.department_list)
+    ? data.department_list.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+}
+
 const normalizeFolderPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const loadAiFolderTree = async () => {
+  aiFolderTreeLoading.value = true
+  try {
+    const [{ data: childrenData }] = await Promise.all([
+      http.get('/folders/children', { params: { parent_path: '' } }),
+    ])
+
+    const rootChildren = Array.isArray(childrenData?.children) ? childrenData.children : []
+
+    // Show only root children in the picker tree; the storage root itself should stay hidden.
+    aiFolderTreeData.value = rootChildren
+  } catch (error) {
+    aiFolderTreeData.value = []
+    ElMessage.error(error?.response?.data?.message || '加载文件夹树失败')
+  } finally {
+    aiFolderTreeLoading.value = false
+  }
+}
+
+const loadAiFolderChildren = async (node, resolve) => {
+  const parentPath = node?.level === 0 ? '' : normalizeFolderPath(node?.data?.path || '')
+  try {
+    const { data } = await http.get('/folders/children', {
+      params: { parent_path: parentPath },
+    })
+    resolve(Array.isArray(data?.children) ? data.children : [])
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '读取子目录失败')
+    resolve([])
+  }
+}
+
+const onAiFolderNodeClick = (node) => {
+  aiFolderSelectedPath.value = normalizeFolderPath(node?.path || '')
+}
+
+const openAiFolderDialog = async () => {
+  aiFolderSelectedPath.value = normalizeFolderPath(aiUploadTargetFolderPath.value)
+  aiFolderDialogVisible.value = true
+  await loadAiFolderTree()
+}
+
+const confirmAiFolderSelection = () => {
+  const selected = normalizeFolderPath(aiFolderSelectedPath.value)
+  if (!selected) {
+    ElMessage.warning('请选择目标目录')
+    return
+  }
+  aiUploadTargetFolderPath.value = selected
+  aiFolderDialogVisible.value = false
+  aiUploadInput.value?.click()
+}
 
 
 
@@ -626,7 +1051,9 @@ const openCreateFromAi = (file, fields) => {
 }
 
 const openEditWithSupplementalFields = async (row, fields) => {
-  await contractItemRef.value?.openEditWithSupplementalFields(row, fields)
+  await contractItemRef.value?.openEditWithSupplementalFields(row, fields, {
+    readOnly: isViewPermissionUser.value,
+  })
 }
 
 const triggerExcelUpload = () => {
@@ -640,7 +1067,7 @@ const triggerAiUpload = () => {
   if (aiParsing.value) {
     return
   }
-  aiUploadInput.value?.click()
+  openAiFolderDialog()
 }
 
 const handleExcelSelected = async (event) => {
@@ -726,10 +1153,16 @@ const proceedAiMatchSelection = async (selectedValue) => {
   }
 
   const selectedFile = aiParsedUploadFile.value
+  const uploadedFilePath = normalizeFolderPath(aiUploadedFilePath.value)
   const parsedFields = aiParsedFields.value || {}
 
   if (!selectedFile) {
     ElMessage.error('AI上传文件状态已丢失，请重新上传')
+    closeAiMatchDialog()
+    return
+  }
+  if (!uploadedFilePath) {
+    ElMessage.error('AI上传后的存储路径丢失，请重新上传')
     closeAiMatchDialog()
     return
   }
@@ -738,7 +1171,7 @@ const proceedAiMatchSelection = async (selectedValue) => {
   try {
     if (selectedValue === AI_NEW_CONTRACT_VALUE) {
       aiMatchDialogVisible.value = false
-      openCreateFromAi(selectedFile, parsedFields)
+      await contractItemRef.value?.openCreateWithFilePath(uploadedFilePath, parsedFields)
       resetAiMatchState()
       return
     }
@@ -750,10 +1183,12 @@ const proceedAiMatchSelection = async (selectedValue) => {
       return
     }
 
-    const uploadResult = await doUpload(matchedRow.id, selectedFile)
+    await http.put(`/contracts/${selectedId}`, {
+      file_path: uploadedFilePath,
+    })
     const mergedRow = {
       ...matchedRow,
-      file_path: uploadResult?.file_path || matchedRow.file_path,
+      file_path: uploadedFilePath,
     }
 
     aiMatchDialogVisible.value = false
@@ -771,6 +1206,13 @@ const handleAiPdfSelected = async (event) => {
     return
   }
 
+  const targetFolderPath = normalizeFolderPath(aiUploadTargetFolderPath.value)
+  if (!targetFolderPath) {
+    ElMessage.warning('请先选择上传目录')
+    event.target.value = ''
+    return
+  }
+
   if (!/\.pdf$/i.test(file.name)) {
     ElMessage.warning('请上传PDF文件')
     event.target.value = ''
@@ -782,12 +1224,27 @@ const handleAiPdfSelected = async (event) => {
   aiMatchDialogVisible.value = true
   aiMatchLoading.value = true
   aiParsing.value = true
-  ElMessage.info('AI正在解析PDF，请稍候')
+  ElMessage.info('正在上传并解析PDF，请稍候')
   try {
-    const fd = new FormData()
-    fd.append('file', file)
-    const { data } = await http.post('/contracts/ai-parse', fd, {
+    const uploadFd = new FormData()
+    uploadFd.append('folder_path', targetFolderPath)
+    uploadFd.append('files', file)
+
+    const uploadResponse = await http.post('/folders/upload', uploadFd, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+
+    const uploadedRows = Array.isArray(uploadResponse?.data?.uploaded) ? uploadResponse.data.uploaded : []
+    const uploadedPath = normalizeFolderPath(uploadedRows?.[0]?.file_path || '')
+    if (!uploadedPath) {
+      throw new Error('上传成功但未返回文件路径')
+    }
+    aiUploadedFilePath.value = uploadedPath
+
+    const { data } = await http.post('/contracts/ai-parse', {
+      file_path: uploadedPath,
+    }, {
       timeout: 300000,
     })
 
@@ -966,6 +1423,7 @@ const parseErrorMessage = async (error, fallbackMessage) => {
 onMounted(async () => {
   try {
     await Promise.all([
+      loadCurrentUserPermission(),
       loadDepartments(),
       loadFieldOptions(),
       loadContracts(),
@@ -1209,7 +1667,99 @@ watch(aiMatchDialogVisible, (visible) => {
 .pager-top {
   margin-bottom: 12px;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+}
+
+.field-sort-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 60vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.field-sort-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+}
+
+.field-sort-item:active {
+  cursor: grabbing;
+}
+
+.field-sort-item.is-hidden {
+  background: #f9fafb;
+  color: #9ca3af;
+  opacity: 0.85;
+}
+
+.field-sort-item.is-dragging {
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.12);
+}
+
+.field-sort-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: #6b7280;
+  flex-shrink: 0;
+  cursor: grab;
+}
+
+.field-sort-checkbox {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-sort-checkbox :deep(.el-checkbox__label) {
+  white-space: normal;
+}
+
+.field-sort-drag-preview {
+  position: fixed;
+  z-index: 3000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.2);
+  color: #1d4ed8;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.field-sort-drag-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.field-sort-drag-preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .ai-match-dialog {
@@ -1265,7 +1815,9 @@ watch(aiMatchDialogVisible, (visible) => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  width: fit-content;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   cursor: pointer;
   color: #111827;
   font-weight: 500;
@@ -1274,6 +1826,47 @@ watch(aiMatchDialogVisible, (visible) => {
 .quick-match-log :deep(textarea) {
   font-family: Consolas, 'Courier New', monospace;
   line-height: 1.55;
+}
+
+.ai-folder-dialog-tip {
+  margin-bottom: 8px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.ai-folder-dialog-selected {
+  margin-bottom: 10px;
+  color: #1f2937;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.ai-folder-tree-wrap {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 280px;
+  max-height: 56vh;
+  overflow: auto;
+}
+
+.ai-folder-tree-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-folder-tree-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ai-folder-tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dialog-layout {
@@ -1457,6 +2050,16 @@ watch(aiMatchDialogVisible, (visible) => {
 
   .ai-match-preview-column .preview-panel {
     height: min(48vh, 520px);
+  }
+
+  .field-sort-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .field-sort-list {
+    grid-template-columns: 1fr;
   }
 }
 

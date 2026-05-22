@@ -49,6 +49,7 @@ def _ensure_contract_columns():
         'is_archived': 'ALTER TABLE contracts ADD COLUMN is_archived VARCHAR(32)',
         'project': 'ALTER TABLE contracts ADD COLUMN project VARCHAR(255)',
         'fullbody': 'ALTER TABLE contracts ADD COLUMN fullbody TEXT',
+        'updated_by': 'ALTER TABLE contracts ADD COLUMN updated_by VARCHAR(128)',
     }
 
     result = db.session.execute(db.text("PRAGMA table_info(contracts)"))
@@ -85,6 +86,7 @@ def _drop_legacy_contract_columns():
         'status',
         'file_path',
         'created_by',
+        'updated_by',
         'created_at',
         'updated_at',
     }
@@ -124,6 +126,7 @@ def _drop_legacy_contract_columns():
             status VARCHAR(32) NOT NULL,
             file_path VARCHAR(512),
             created_by VARCHAR(128) NOT NULL,
+            updated_by VARCHAR(128),
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id)
@@ -137,14 +140,14 @@ def _drop_legacy_contract_columns():
             handler, department, contract_determination_method,
             handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
             fullbody, start_date, end_date, status, file_path, created_by,
-            created_at, updated_at
+            updated_by, created_at, updated_at
         )
         SELECT
             id, contract_number, contract_name, contract_unit, amount, currency,
             handler, department, contract_determination_method,
             handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
             fullbody, start_date, end_date, status, file_path, created_by,
-            created_at, updated_at
+            created_by, created_at, updated_at
         FROM contracts_legacy_drop_fields
         '''
     ))
@@ -177,6 +180,7 @@ def _seed_departments():
 def _ensure_user_permission_columns():
     required_columns = {
         'folders': 'ALTER TABLE users ADD COLUMN folders TEXT',
+        'me_added': 'ALTER TABLE users ADD COLUMN me_added BOOLEAN NOT NULL DEFAULT 0',
     }
 
     result = db.session.execute(db.text('PRAGMA table_info(users)'))

@@ -2,17 +2,20 @@ import os
 import posixpath
 import hashlib
 import re
+import html as html_lib
+import textwrap
 from io import BytesIO
 
 import fitz
 from PIL import Image, ImageDraw
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, current_app, g, jsonify, request, send_file, send_from_directory
 from sqlalchemy import or_
 
 from .auth import require_auth
 from .contracts_core import (
     _collect_storage_pdf_files,
     _build_synology_file_path,
+    _coerce_unix_timestamp,
     _list_storage_entries,
     _normalize_relative_path,
     _remote_folder_path,
@@ -29,6 +32,7 @@ from .contracts_core import (
 from .files_core_helpers import (
     _build_contract_file_index,
     _build_folder_file_items,
+    _clear_contract_file_path_by_relative_folder_path,
     _clear_contract_file_path_by_relative_path,
     _count_storage_files_recursive,
     _create_storage_folder,
@@ -44,7 +48,7 @@ from .files_core_helpers import (
     _synology_upload_login,
 )
 from .extensions import db
-from .models import Contract
+from .models import Contract, UserPermission
 
 
 files_bp = Blueprint('files', __name__, url_prefix='/api')
@@ -52,6 +56,182 @@ files_bp = Blueprint('files', __name__, url_prefix='/api')
 THUMB_WIDTH = 210
 THUMB_HEIGHT = 290
 LATEST_UPLOAD_LIMIT = 12
+PERMISSION_SUPER_ADMIN = 'super_admin'
+PERMISSION_ALL = '全部'
+
+
+def _markdown_to_html_document(markdown_text: str, title: str) -> str:
+    safe_title = html_lib.escape(title or 'Markdown Preview')
+    normalized_markdown = textwrap.dedent((markdown_text or '').replace('\r\n', '\n')).lstrip('\ufeff')
+
+    # Prefer the standard markdown package for rich rendering.
+    try:
+        import markdown as markdown_lib  # type: ignore
+
+        body_html = markdown_lib.markdown(
+            normalized_markdown,
+            extensions=['extra', 'tables', 'fenced_code'],
+        )
+
+        # OCR markdown can contain irregular leading indentation per line.
+        # If it was parsed as one giant code block, strip left padding and parse again.
+        if body_html.strip().startswith('<pre>') and '</pre>' in body_html:
+            flattened_markdown = '\n'.join(line.lstrip() for line in normalized_markdown.split('\n'))
+            retry_html = markdown_lib.markdown(
+                flattened_markdown,
+                extensions=['extra', 'tables', 'fenced_code'],
+            )
+            if not retry_html.strip().startswith('<pre>'):
+                body_html = retry_html
+    except Exception:
+        escaped = html_lib.escape(normalized_markdown)
+        body_html = f'<pre>{escaped}</pre>'
+
+    return f"""<!doctype html>
+<html lang=\"zh-CN\">
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>{safe_title}</title>
+        <style>
+            :root {{
+                color-scheme: light;
+            }}
+            body {{
+                margin: 0;
+                background: #f6f8fa;
+                color: #24292f;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+                font-size: 16px;
+            }}
+            .page {{
+                max-width: 1012px;
+                margin: 24px auto;
+                padding: 0 16px;
+            }}
+            .markdown-body {{
+                box-sizing: border-box;
+                background: #ffffff;
+                border: 1px solid #d0d7de;
+                border-radius: 10px;
+                padding: 32px;
+                line-height: 1.6;
+                word-wrap: break-word;
+            }}
+            .markdown-body h1,
+            .markdown-body h2,
+            .markdown-body h3,
+            .markdown-body h4,
+            .markdown-body h5,
+            .markdown-body h6 {{
+                margin-top: 24px;
+                margin-bottom: 16px;
+                line-height: 1.25;
+                font-weight: 600;
+            }}
+            .markdown-body h1,
+            .markdown-body h2 {{
+                border-bottom: 1px solid #d8dee4;
+                padding-bottom: 0.3em;
+            }}
+            .markdown-body p,
+            .markdown-body ul,
+            .markdown-body ol,
+            .markdown-body blockquote,
+            .markdown-body table,
+            .markdown-body pre {{
+                margin-top: 0;
+                margin-bottom: 16px;
+            }}
+            .markdown-body a {{
+                color: #0969da;
+                text-decoration: none;
+            }}
+            .markdown-body a:hover {{
+                text-decoration: underline;
+            }}
+            .markdown-body code {{
+                font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+                font-size: 85%;
+                background: rgba(175, 184, 193, 0.2);
+                border-radius: 6px;
+                padding: 0.2em 0.4em;
+            }}
+            .markdown-body pre {{
+                background: #f6f8fa;
+                border-radius: 8px;
+                padding: 16px;
+                overflow: auto;
+                line-height: 1.45;
+            }}
+            .markdown-body pre code {{
+                background: transparent;
+                padding: 0;
+            }}
+            .markdown-body blockquote {{
+                margin-left: 0;
+                padding: 0 1em;
+                color: #57606a;
+                border-left: 0.25em solid #d0d7de;
+            }}
+            .markdown-body table {{
+                width: max-content;
+                max-width: 100%;
+                border-collapse: collapse;
+            }}
+            .markdown-body th,
+            .markdown-body td {{
+                border: 1px solid #d0d7de;
+                padding: 6px 13px;
+            }}
+            .markdown-body tr:nth-child(2n) {{
+                background: #f6f8fa;
+            }}
+            .markdown-body hr {{
+                border: 0;
+                height: 0.25em;
+                padding: 0;
+                margin: 24px 0;
+                background: #d0d7de;
+            }}
+            @media (max-width: 768px) {{
+                .markdown-body {{
+                    padding: 16px;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <main class=\"page\">
+            <article class=\"markdown-body\">{body_html}</article>
+        </main>
+    </body>
+</html>
+"""
+
+
+def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return False, set()
+
+    row = UserPermission.query.filter_by(login_name=username).first()
+    if not row:
+        return False, set()
+
+    permission_value = str(row.permission or '').strip()
+    if permission_value == PERMISSION_SUPER_ADMIN:
+        return True, set()
+
+    allowed_folders = {
+        item.strip()
+        for item in str(row.folders or '').split(',')
+        if item and item.strip()
+    }
+    if PERMISSION_ALL in allowed_folders:
+        return True, set()
+
+    return False, allowed_folders
 
 
 def _thumbs_root_dir() -> str:
@@ -417,35 +597,76 @@ def upload_folder_files():
     if not valid_uploads:
         return jsonify({'message': 'files is required'}), 400
 
+    raw_relative_paths = request.form.getlist('relative_paths')
+    relative_paths = [str(item or '') for item in raw_relative_paths]
+
+    def _resolve_upload_target(index: int, uploaded_file):
+        raw_relative = relative_paths[index] if index < len(relative_paths) else ''
+        normalized_relative = _normalize_relative_path(raw_relative) if raw_relative else ''
+        relative_dir = posixpath.dirname(normalized_relative) if normalized_relative else ''
+        target_folder = _build_synology_file_path(normalized, relative_dir)
+        filename_hint = posixpath.basename(normalized_relative) if normalized_relative else ''
+        filename = _sanitize_upload_filename(filename_hint or uploaded_file.filename)
+        return target_folder, filename
+
+    def _ensure_storage_folder_exists(relative_folder_path: str, cache: set | None = None):
+        normalized_folder = _normalize_relative_path(relative_folder_path)
+        if not normalized_folder:
+            return
+
+        current = ''
+        for segment in [part for part in normalized_folder.split('/') if part]:
+            parent = current
+            current = _build_synology_file_path(current, segment)
+            if cache is not None and current in cache:
+                continue
+            try:
+                _create_storage_folder(parent, segment)
+            except FileExistsError:
+                pass
+            if cache is not None:
+                cache.add(current)
+
     results = []
     try:
         if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
-            remote_folder = _remote_folder_path(normalized)
-            for uploaded in valid_uploads:
-                filename = _sanitize_upload_filename(uploaded.filename)
+            for index, uploaded in enumerate(valid_uploads):
+                target_folder, filename = _resolve_upload_target(index, uploaded)
+                remote_folder = _remote_folder_path(target_folder)
                 final_name = _synology_upload_file(remote_folder, filename, uploaded)
                 results.append({
                     'name': final_name,
-                    'file_path': _build_synology_file_path(normalized, final_name),
+                    'file_path': _build_synology_file_path(target_folder, final_name),
                 })
         else:
-            target_folder = _safe_local_folder_path(normalized)
-            if not os.path.isdir(target_folder):
+            base_folder = _safe_local_folder_path(normalized)
+            if not os.path.isdir(base_folder):
                 raise FileNotFoundError('目录不存在')
 
-            existing_names = [
-                name for name in os.listdir(target_folder)
-                if os.path.isfile(os.path.join(target_folder, name))
-            ]
-            for uploaded in valid_uploads:
-                filename = _sanitize_upload_filename(uploaded.filename)
+            created_dirs = set()
+            existing_names_by_folder = {}
+            for index, uploaded in enumerate(valid_uploads):
+                target_folder, filename = _resolve_upload_target(index, uploaded)
+                _ensure_storage_folder_exists(target_folder, cache=created_dirs)
+                target_folder_abs = _safe_local_folder_path(target_folder)
+                if not os.path.isdir(target_folder_abs):
+                    raise FileNotFoundError('目录不存在')
+
+                existing_names = existing_names_by_folder.get(target_folder)
+                if existing_names is None:
+                    existing_names = [
+                        name for name in os.listdir(target_folder_abs)
+                        if os.path.isfile(os.path.join(target_folder_abs, name))
+                    ]
+                    existing_names_by_folder[target_folder] = existing_names
+
                 final_name = _next_available_filename(existing_names, filename)
                 existing_names.append(final_name)
-                target_path = os.path.join(target_folder, final_name)
+                target_path = os.path.join(target_folder_abs, final_name)
                 uploaded.save(target_path)
                 results.append({
                     'name': final_name,
-                    'file_path': _build_synology_file_path(normalized, final_name),
+                    'file_path': _build_synology_file_path(target_folder, final_name),
                 })
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
@@ -487,19 +708,35 @@ def create_folder():
 def delete_folder():
     body = request.get_json(silent=True) or {}
     folder_path = body.get('path') or request.args.get('path') or ''
+    raw_force = (body.get('force') if isinstance(body, dict) else request.args.get('force')) or ''
+    force_text = str(raw_force).strip().lower()
+    force_delete = force_text in {'1', 'true', 'yes', 'y'}
 
     try:
-        _delete_storage_folder(folder_path)
+        affected_ids = []
+        if force_delete:
+            affected_ids = _clear_contract_file_path_by_relative_folder_path(folder_path)
+        _delete_storage_folder(folder_path, force=force_delete)
+        if force_delete:
+            db.session.commit()
     except FileNotFoundError as exc:
         return jsonify({'message': str(exc)}), 404
     except ValueError as exc:
+        db.session.rollback()
         return jsonify({'message': str(exc)}), 400
     except RuntimeError as exc:
+        db.session.rollback()
         return jsonify({'message': str(exc)}), 409
     except Exception as exc:
+        db.session.rollback()
         return jsonify({'message': f'删除文件夹失败: {exc}'}), 500
 
-    return jsonify({'success': True})
+    return jsonify({
+        'success': True,
+        'force': bool(force_delete),
+        'affected_contract_count': len(affected_ids) if force_delete else 0,
+        'affected_contract_ids': affected_ids if force_delete else [],
+    })
 
 
 @files_bp.put('/folders')
@@ -732,18 +969,29 @@ def latest_uploaded_files():
     except Exception as exc:
         return jsonify({'message': f'读取最新文件失败: {exc}'}), 500
 
+    unrestricted, allowed_folders = _resolve_current_user_folder_scope()
+
+    def _is_allowed_file_path(path: str) -> bool:
+        if unrestricted:
+            return True
+        normalized = _normalize_relative_path(path)
+        if not normalized or not allowed_folders:
+            return False
+        top_folder = normalized.split('/', 1)[0].strip()
+        return bool(top_folder) and top_folder in allowed_folders
+
     sorted_files = sorted(
         [
             {
                 'name': item.get('name') or '',
                 'path': _normalize_relative_path(item.get('path') or ''),
-                'mtime': int(item.get('mtime') or 0),
+                'mtime': _coerce_unix_timestamp(item.get('mtime')),
                 'modified_by': (item.get('modified_by') or '').strip() or '-',
             }
             for item in all_files
-            if (item.get('path') or '').strip()
+            if (item.get('path') or '').strip() and _is_allowed_file_path(item.get('path') or '')
         ],
-        key=lambda row: (row['mtime'], row['name']),
+        key=lambda row: (row['mtime'] or 0, row['name']),
         reverse=True,
     )
 
@@ -794,3 +1042,50 @@ def get_file_thumbnail():
         mimetype='image/jpeg',
         as_attachment=False,
     )
+
+
+@files_bp.route('/html/', defaults={'relative_path': ''}, methods=['GET'])
+@files_bp.route('/html/<path:relative_path>', methods=['GET'])
+def serve_ocr_html_assets(relative_path):
+    ocr_root = os.path.realpath(os.path.join(current_app.instance_path, 'ocr'))
+    relative = posixpath.normpath(str(relative_path or '').replace('\\', '/')).lstrip('/')
+
+    if relative in ('', '.'):
+        index_abs = os.path.join(ocr_root, 'index.html')
+        if os.path.isfile(index_abs):
+            return send_from_directory(ocr_root, 'index.html', as_attachment=False)
+        return jsonify({
+            'message': 'OCR HTML root is available',
+            'root': '/api/html/',
+        })
+
+    if relative == '..' or relative.startswith('../'):
+        return jsonify({'message': '非法路径'}), 400
+
+    target_abs = os.path.realpath(os.path.join(ocr_root, relative))
+    if not (target_abs == ocr_root or target_abs.startswith(ocr_root + os.sep)):
+        return jsonify({'message': '非法路径'}), 400
+
+    if os.path.isdir(target_abs):
+        directory_index_abs = os.path.join(target_abs, 'index.html')
+        if not os.path.isfile(directory_index_abs):
+            return jsonify({'message': '目录下不存在 index.html'}), 404
+        relative = posixpath.join(relative.rstrip('/'), 'index.html')
+
+    if not os.path.exists(target_abs):
+        return jsonify({'message': '文件不存在'}), 404
+
+    if relative.lower().endswith('.md'):
+        try:
+            with open(target_abs, 'r', encoding='utf-8') as fp:
+                markdown_text = fp.read()
+        except UnicodeDecodeError:
+            with open(target_abs, 'r', encoding='utf-8', errors='replace') as fp:
+                markdown_text = fp.read()
+        except Exception as exc:
+            return jsonify({'message': f'读取 Markdown 失败: {exc}'}), 500
+
+        html_doc = _markdown_to_html_document(markdown_text, os.path.basename(relative))
+        return html_doc, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+    return send_from_directory(ocr_root, relative, as_attachment=False)

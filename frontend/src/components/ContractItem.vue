@@ -12,32 +12,42 @@
       </div>
 
       <template v-else>
-      <el-form :model="form" label-width="120px" class="dialog-form">
+      <el-form :model="form" :disabled="contractDialogLoading || dialogReadOnly" label-width="120px" class="dialog-form">
         <div class="dialog-layout">
           <div class="preview-column">
             <div class="preview-header">
               <div class="preview-title">文件预览</div>
               <div class="preview-actions">
-                <el-button
-                  size="small"
-                  type="primary"
-                  :loading="aiParsing"
-                  :disabled="aiParsing || (!form.file_path && !pendingAiUploadFile)"
-                  @click="runAiRecognitionFromPreview"
-                >
-                  {{ aiParsing ? '识别中...' : 'AI识别' }}
-                </el-button>
-                <el-button size="small" @click="textDialogVisible = true">文本</el-button>
+                <el-button-group class="preview-action-group">
+                  <el-button
+                    size="small"
+                    :icon="Search"
+                    :loading="aiParsing"
+                    :disabled="dialogReadOnly || aiParsing || (!form.file_path && !pendingAiUploadFile)"
+                    @click="runAiRecognitionFromPreview"
+                  >
+                    {{ aiParsing ? '识别中...' : 'AI识别' }}
+                  </el-button>
+                  <el-button size="small" :icon="Document" @click="textDialogVisible = true">文本</el-button>
 
-                <el-upload
-                  v-if="props.showFileActions"
-                  :show-file-list="false"
-                  :http-request="(options) => handleDialogUpload(options.file)"
-                >
-                  <el-button :icon="Upload" size="small">上传文件</el-button>
-                </el-upload>
+                  <el-button
+                    v-if="props.showFileActions && !dialogReadOnly"
+                    :icon="Upload"
+                    size="small"
+                    @click="openUploadFolderDialog"
+                  >
+                    上传文件
+                  </el-button>
 
-                <el-button v-if="props.showFileActions" size="small" @click="openLinkFileDialog">链接文件</el-button>
+                  <el-button
+                    v-if="props.showFileActions && !dialogReadOnly"
+                    size="small"
+                    :icon="Link"
+                    @click="openLinkFileDialog"
+                  >
+                    链接文件
+                  </el-button>
+                </el-button-group>
               </div>
             </div>
             <div
@@ -155,6 +165,12 @@
                 />
               </el-form-item>
             </div>
+            <div class="contract-meta-info">
+              <span>创建人：{{ form.created_by || '—' }}</span>
+              <span>创建时间：{{ formatMetaDateTime(form.created_at) }}</span>
+              <span>修改人：{{ form.updated_by || '—' }}</span>
+              <span>修改时间：{{ formatMetaDateTime(form.updated_at) }}</span>
+            </div>
           </div>
         </div>
       </el-form>
@@ -162,7 +178,7 @@
 
       <template #footer>
         <el-button
-          v-if="!props.showFileActions"
+          v-if="!props.showFileActions && !dialogReadOnly"
           type="danger"
           :loading="saving"
           :disabled="contractDialogLoading || !editing?.id"
@@ -171,7 +187,15 @@
           解绑合同
         </el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button :loading="saving" :disabled="contractDialogLoading" type="primary" @click="saveContract">保存</el-button>
+        <el-button
+          v-if="!dialogReadOnly"
+          :loading="saving"
+          :disabled="contractDialogLoading"
+          type="primary"
+          @click="saveContract"
+        >
+          保存
+        </el-button>
       </template>
     </el-dialog>
 
@@ -218,11 +242,47 @@
         type="textarea"
         :rows="24"
         resize="vertical"
+        :readonly="dialogReadOnly"
         placeholder="暂无文本内容"
       />
 
       <template #footer>
         <el-button @click="textDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="uploadFolderDialogVisible"
+      title="选择上传目录"
+      width="min(760px, 96vw)"
+      :close-on-click-modal="false"
+    >
+      <div class="upload-folder-dialog-tip">请先选择目标目录，再选择本地文件。</div>
+      <div class="upload-folder-dialog-selected">当前选择：{{ uploadFolderSelectedPath || '未选择' }}</div>
+
+      <div class="upload-folder-tree-wrap" v-loading="linkTreeLoading">
+        <el-tree
+          :data="linkTreeData"
+          node-key="path"
+          :props="linkTreeProps"
+          lazy
+          :load="loadLinkTreeChildren"
+          :expand-on-click-node="true"
+          highlight-current
+          @node-click="onUploadFolderNodeClick"
+        >
+          <template #default="{ node, data }">
+            <span class="upload-folder-tree-node" :title="normalizePath(data.path || '')">
+              <span class="upload-folder-tree-icon" aria-hidden="true">{{ node.expanded ? '📂' : '📁' }}</span>
+              <span class="upload-folder-tree-label">{{ data.name }}</span>
+            </span>
+          </template>
+        </el-tree>
+      </div>
+
+      <template #footer>
+        <el-button @click="uploadFolderDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!canConfirmUploadFolder" @click="confirmUploadFolderSelection">下一步：选择本地文件</el-button>
       </template>
     </el-dialog>
 
@@ -356,6 +416,13 @@
       </template>
     </el-dialog>
 
+    <input
+      ref="uploadFileInputRef"
+      type="file"
+      style="display: none"
+      @change="handleUploadFileSelected"
+    />
+
 
   </div>
 </template>
@@ -369,7 +436,7 @@ import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
 import fileTypeExcel from '@iconify-icons/vscode-icons/file-type-excel'
 import fileTypePdf from '@iconify-icons/vscode-icons/file-type-pdf2'
 import microsoftOffice from '@iconify-icons/simple-icons/microsoftoffice'
-import { Document, Loading, Upload } from '@element-plus/icons-vue'
+import { Document, Link, Loading, Search, Upload } from '@element-plus/icons-vue'
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import PdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
@@ -439,9 +506,14 @@ const linkPreviewUrl = ref('')
 const linkPreviewLoading = ref(false)
 const linkPreviewMessage = ref('请选择PDF文件进行预览')
 const smartMatchingFile = ref(false)
+const uploadFolderDialogVisible = ref(false)
+const uploadFolderSelectedPath = ref('')
+const uploadTargetFolderPath = ref('')
+const uploadFileInputRef = ref(null)
 
 const saving = ref(false)
 const contractDialogLoading = ref(false)
+const dialogReadOnly = ref(false)
 const editing = ref(null)
 const currentPreviewRow = ref(null)
 const pendingAiUploadFile = ref(null)
@@ -449,6 +521,7 @@ const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewMessage = ref('暂无文件')
 const previewFileName = ref('')
+const canConfirmUploadFolder = computed(() => !!normalizePath(uploadFolderSelectedPath.value))
 
 const linkTreeProps = {
   label: 'name',
@@ -474,7 +547,26 @@ const form = reactive({
   project: '',
   save_place: '',
   fullbody: '',
+  created_by: '',
+  created_at: '',
+  updated_by: '',
+  updated_at: '',
 })
+
+const formatMetaDateTime = (value) => {
+  const text = String(value || '').trim()
+  if (!text) {
+    return '—'
+  }
+
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) {
+    return text
+  }
+
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
 const fullPreviewTitle = computed(() => {
   if (previewFileName.value) {
@@ -504,6 +596,10 @@ const resetForm = () => {
   form.project = ''
   form.save_place = ''
   form.fullbody = ''
+  form.created_by = ''
+  form.created_at = ''
+  form.updated_by = ''
+  form.updated_at = ''
 }
 
 const setAiParsing = (value) => {
@@ -517,6 +613,7 @@ const loadContractDetail = async (contractId) => {
 
 const openCreate = () => {
   contractDialogLoading.value = false
+  dialogReadOnly.value = false
   editing.value = null
   pendingAiUploadFile.value = null
   currentPreviewRow.value = null
@@ -547,6 +644,10 @@ const populateFormFromContract = (row) => {
   form.project = row.project || ''
   form.save_place = row.save_place || ''
   form.fullbody = row.fullbody || ''
+  form.created_by = row.created_by || ''
+  form.created_at = row.created_at || ''
+  form.updated_by = row.updated_by || ''
+  form.updated_at = row.updated_at || ''
 }
 
 const applyAiSupplementalFields = (fields, sourceRow = {}) => {
@@ -614,6 +715,7 @@ const applyParsedFields = (fields) => {
 
 const openCreateFromAi = (file, fields) => {
   contractDialogLoading.value = false
+  dialogReadOnly.value = false
   editing.value = null
   pendingAiUploadFile.value = file
   currentPreviewRow.value = null
@@ -627,6 +729,7 @@ const openCreateFromAi = (file, fields) => {
 
 const openCreateWithFilePath = async (filePath, fields) => {
   contractDialogLoading.value = false
+  dialogReadOnly.value = false
   editing.value = null
   pendingAiUploadFile.value = null
   currentPreviewRow.value = null
@@ -643,8 +746,9 @@ const openCreateWithFilePath = async (filePath, fields) => {
   }
 }
 
-const openEditWithSupplementalFields = async (row, fields) => {
+const openEditWithSupplementalFields = async (row, fields, options = {}) => {
   contractDialogLoading.value = true
+  dialogReadOnly.value = Boolean(options?.readOnly)
   editing.value = row || {}
   currentPreviewRow.value = row || null
   previewFileName.value = ''
@@ -668,7 +772,7 @@ const openEditWithSupplementalFields = async (row, fields) => {
   }
 }
 
-const openEdit = (row) => openEditWithSupplementalFields(row, null)
+const openEdit = (row, options = {}) => openEditWithSupplementalFields(row, null, options)
 
 const normalizeAmountInputValue = (value) => {
   const raw = String(value ?? '').trim()
@@ -704,6 +808,11 @@ const normalizeCopyCount = () => {
 }
 
 const unbindContract = async () => {
+  if (dialogReadOnly.value) {
+    ElMessage.warning('当前为只读模式，无法执行解绑')
+    return
+  }
+
   if (!editing.value?.id) {
     ElMessage.warning('仅已存在的合同支持解绑')
     return
@@ -736,6 +845,11 @@ const unbindContract = async () => {
 }
 
 const saveContract = async () => {
+  if (dialogReadOnly.value) {
+    ElMessage.warning('当前为只读模式，无法保存')
+    return
+  }
+
   const normalizedAmount = normalizeAmountInputValue(form.contract_amount)
   const normalizedCopyCount = normalizeCopyCountInput(form.copy_count)
   const normalizedSavePlace = String(form.save_place || '').trim()
@@ -869,35 +983,6 @@ watch(
     form.stamp_tax_rate = getStampTaxRateByContractType(value)
   },
 )
-
-const doUpload = async (contractId, file) => {
-  const fd = new FormData()
-  fd.append('file', file)
-  const { data } = await http.post(`/contracts/${contractId}/upload`, fd, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return data
-}
-
-const handleDialogUpload = async (file) => {
-  if (!editing.value?.id) {
-    pendingAiUploadFile.value = file
-    form.file_path = file?.name || ''
-    currentPreviewRow.value = null
-    setPreviewFromFile(file)
-    ElMessage.success('文件已选择，保存合同后会自动上传')
-    return
-  }
-
-  try {
-    const data = await doUpload(editing.value.id, file)
-    await syncEditingFileState(data?.file_path)
-    ElMessage.success('上传成功')
-    emit('saved')
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '上传失败')
-  }
-}
 
 const revokePreviewUrl = () => {
   if (previewUrl.value) {
@@ -1390,13 +1475,7 @@ const openLinkFileDialog = async () => {
   linkSelectedFilePath.value = form.file_path || ''
   cleanupLinkPreview()
   try {
-    applyLinkTreeSnapshot(props.linkTreeSnapshot || {})
-    if (!linkTreeData.value.length) {
-      const { data } = await http.get('/folders/tree')
-      const root = data?.root || { name: '/', path: '' }
-      linkRootName.value = root?.name || '/'
-      linkTreeData.value = await fetchLinkFolderChildren('', { force: true })
-    }
+    await ensureLinkTreeLoaded()
 
     const initialFolder = normalizePath(getParentPath(form.file_path || ''))
     await expandLinkTreeToPath(initialFolder)
@@ -1407,6 +1486,97 @@ const openLinkFileDialog = async () => {
     ElMessage.error(error?.response?.data?.message || '加载文件选择器失败')
   } finally {
     linkTreeLoading.value = false
+  }
+}
+
+const ensureLinkTreeLoaded = async () => {
+  applyLinkTreeSnapshot(props.linkTreeSnapshot || {})
+  if (linkTreeData.value.length) {
+    return
+  }
+
+  const { data } = await http.get('/folders/tree')
+  const root = data?.root || { name: '/', path: '' }
+  linkRootName.value = root?.name || '/'
+  linkTreeData.value = await fetchLinkFolderChildren('', { force: true })
+}
+
+const onUploadFolderNodeClick = (node) => {
+  uploadFolderSelectedPath.value = normalizePath(node?.path || '')
+}
+
+const openUploadFolderDialog = async () => {
+  uploadFolderDialogVisible.value = true
+  linkTreeLoading.value = true
+  uploadFolderSelectedPath.value = normalizePath(uploadTargetFolderPath.value)
+  try {
+    await ensureLinkTreeLoaded()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '加载文件夹树失败')
+  } finally {
+    linkTreeLoading.value = false
+  }
+}
+
+const confirmUploadFolderSelection = () => {
+  const selected = normalizePath(uploadFolderSelectedPath.value)
+  if (!selected) {
+    ElMessage.warning('请选择上传目录')
+    return
+  }
+
+  uploadTargetFolderPath.value = selected
+  uploadFolderDialogVisible.value = false
+  uploadFileInputRef.value?.click()
+}
+
+const handleUploadFileSelected = async (event) => {
+  const file = event?.target?.files?.[0]
+  if (!file) {
+    return
+  }
+
+  const targetFolderPath = normalizePath(uploadTargetFolderPath.value)
+  if (!targetFolderPath) {
+    ElMessage.warning('请先选择上传目录')
+    event.target.value = ''
+    return
+  }
+
+  try {
+    const fd = new FormData()
+    fd.append('folder_path', targetFolderPath)
+    fd.append('files', file)
+
+    const { data } = await http.post('/folders/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+
+    const uploadedRows = Array.isArray(data?.uploaded) ? data.uploaded : []
+    const uploadedPath = String(uploadedRows?.[0]?.file_path || '').trim()
+    if (!uploadedPath) {
+      throw new Error('上传成功但未返回文件路径')
+    }
+
+    pendingAiUploadFile.value = null
+
+    if (editing.value?.id) {
+      await http.put(`/contracts/${editing.value.id}`, {
+        file_path: uploadedPath,
+      })
+      await syncEditingFileState(uploadedPath)
+      ElMessage.success('上传成功')
+      emit('saved')
+    } else {
+      form.file_path = uploadedPath
+      await syncMainPreviewFromLinkedFile(uploadedPath)
+      ElMessage.success('上传成功，点击“保存”后生效')
+    }
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '上传失败')
+  } finally {
+    event.target.value = ''
   }
 }
 
@@ -1558,98 +1728,20 @@ const runAiRecognitionFromPreview = async () => {
     duration: 5000,
   })
 
-  const existingFullbody = String(form.fullbody || '').trim()
-  if (existingFullbody.length > 20) {
-    setAiParsing(true)
-    ElMessage.info('检测到已有合同文本，跳过OCR，直接进行AI结构化解析')
-    try {
-      const { data } = await http.post('/contracts/ai-parse', {
-        fullbody: existingFullbody,
-      }, {
-        timeout: 300000,
-      })
-
-      const parsedFullbody = data?.fullbody || existingFullbody
-      const parsedFields = {
-        ...(data?.fields || {}),
-        fullbody: parsedFullbody,
-      }
-
-      const sourceSnapshot = {
-        ...(editing.value || {}),
-        ...form,
-      }
-
-      applyAiSupplementalFields(parsedFields, sourceSnapshot)
-      ElMessage.success('AI解析成功，合同信息已根据识别结果更新')
-      return
-    } catch (error) {
-      if (error?.code === 'ECONNABORTED') {
-        ElMessage.error('AI解析超时，请稍后重试')
-        return
-      }
-
-      const baseMessage = error?.response?.data?.message || 'AI解析失败'
-      const previewLines = error?.response?.data?.ocr_preview_lines
-      if (Array.isArray(previewLines) && previewLines.length > 0) {
-        const preview = previewLines.slice(0, 3).join(' / ')
-        ElMessage.error(`${baseMessage}；识别预览：${preview}`)
-      } else {
-        ElMessage.error(baseMessage)
-      }
-      return
-    } finally {
-      setAiParsing(false)
-    }
-  }
-
-  let sourceFile = null
-  let fileName = ''
-
-  if (pendingAiUploadFile.value) {
-    sourceFile = pendingAiUploadFile.value
-    fileName = sourceFile.name || 'contract.pdf'
-  } else if (form.file_path) {
-    try {
-      if (editing.value?.id) {
-        const response = await http.get(`/contracts/${editing.value.id}/download`, {
-          responseType: 'blob',
-        })
-        const blob = response.data
-        fileName = getFileName(form.file_path) || `contract-${editing.value.id}.pdf`
-        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
-      } else {
-        const response = await http.get('/folders/file-preview', {
-          params: { path: normalizePath(form.file_path) },
-          responseType: 'blob',
-        })
-        const blob = response.data
-        fileName = getFileName(form.file_path) || 'contract.pdf'
-        sourceFile = new File([blob], fileName, { type: blob.type || 'application/pdf' })
-      }
-    } catch (error) {
-      const message = await parseErrorMessage(error, '获取文件内容失败，无法进行AI识别')
-      ElMessage.error(message)
-      return
-    }
-  } else {
+  const filePath = String(form.file_path || '').trim()
+  if (!filePath) {
     ElMessage.warning('请先上传或链接合同文件后再进行AI识别')
     return
   }
 
-  if (!/\.pdf$/i.test(fileName)) {
-    ElMessage.warning('当前文件不是PDF，无法进行AI识别')
-    return
+  const payload = {
+    file_path: normalizePath(filePath),
   }
 
   setAiParsing(true)
   ElMessage.info('AI正在解析当前合同，请稍候')
   try {
-    const fd = new FormData()
-    fd.append('file', sourceFile)
-
-    const { data } = await http.post('/contracts/ai-parse', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const { data } = await http.post('/contracts/ai-parse', payload, {
       timeout: 300000,
     })
 
@@ -1833,6 +1925,7 @@ const handleContractDeleted = (contractId) => {
 watch(dialogVisible, (visible) => {
   if (!visible) {
     contractDialogLoading.value = false
+    dialogReadOnly.value = false
     resetPreview('暂无文件')
   }
 })
@@ -1840,6 +1933,12 @@ watch(dialogVisible, (visible) => {
 watch(linkFileDialogVisible, (visible) => {
   if (!visible) {
     cleanupLinkPreview()
+  }
+})
+
+watch(uploadFolderDialogVisible, (visible) => {
+  if (!visible) {
+    uploadFolderSelectedPath.value = normalizePath(uploadTargetFolderPath.value)
   }
 })
 
@@ -2006,13 +2105,126 @@ defineExpose({
   gap: 4px 16px;
 }
 
+.contract-meta-info {
+  margin-top: 8px;
+  padding: 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9ca3af;
+}
+
 .form-item-span-2 {
   grid-column: span 1;
 }
 
 .preview-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+}
+
+.preview-action-group {
+  display: inline-flex;
+  border-radius: 16px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1), 0 2px 4px rgba(15, 23, 42, 0.06);
+}
+
+.preview-action-upload {
+  display: inline-flex;
+}
+
+.upload-folder-dialog-tip {
+  margin-bottom: 8px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.upload-folder-dialog-selected {
+  margin-bottom: 10px;
+  color: #1f2937;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.upload-folder-tree-wrap {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 280px;
+  max-height: 56vh;
+  overflow: auto;
+}
+
+.upload-folder-tree-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.upload-folder-tree-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.upload-folder-tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-action-group :deep(.el-upload) {
+  display: inline-flex;
+}
+
+.preview-action-group :deep(.el-button) {
+  border: none;
+  border-radius: 0;
+  min-height: 30px;
+  color: #1f2937;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.preview-action-group :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.preview-action-group :deep(.el-button + .el-button::before) {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: rgba(15, 23, 42, 0.12);
+  pointer-events: none;
+}
+
+.preview-action-group :deep(.el-button:first-child) {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.preview-action-group :deep(.el-button:last-child) {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.preview-action-group :deep(.el-button:hover),
+.preview-action-group :deep(.el-button:focus-visible) {
+  color: #1d4ed8;
+  background: linear-gradient(180deg, #ffffff 0%, #eaf1ff 100%);
+}
+
+.preview-action-group :deep(.el-button.is-disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f6f8 100%);
 }
 
 .readonly-file-path {

@@ -54,7 +54,7 @@
                 <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>项目设置</span>
               </el-menu-item>
-              <el-menu-item index="/settings/users">
+              <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
                 <Icon :icon="userPermissionIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>用户权限</span>
               </el-menu-item>
@@ -138,7 +138,7 @@
             <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
           </el-menu-item>
-          <el-menu-item index="/settings/users">
+          <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
             <Icon :icon="userPermissionIcon" style="font-size:20px;vertical-align:middle;" />
             <span>用户权限</span>
           </el-menu-item>
@@ -161,18 +161,28 @@ import projectIcon from '@iconify-icons/tabler/tag'
 import userPermissionIcon from '@iconify-icons/tabler/users-group'
 import passwordIcon from '@iconify-icons/tabler/password-user'
 import logoutIcon from '@iconify-icons/tabler/logout'
+import http from '../api/http'
 
 const route = useRoute()
 const router = useRouter()
 const drawer = ref(false)
 const isMobile = ref(false)
 const username = localStorage.getItem('username') || '未登录用户'
+const currentUserPermission = ref('')
 const avatarText = computed(() => {
   const text = username.trim()
   if (!text) {
     return 'U'
   }
   return text.slice(0, 1).toUpperCase()
+})
+
+const canShowUserPermissionMenu = computed(() => {
+  const normalizedUsername = String(username || '').trim().toLowerCase()
+  if (normalizedUsername === 'zhangyan') {
+    return true
+  }
+  return String(currentUserPermission.value || '').trim() === 'super_admin'
 })
 
 const activePath = computed(() => route.path)
@@ -207,9 +217,19 @@ const onUserMenuCommand = (command) => {
   }
 }
 
+const loadCurrentUserPermission = async () => {
+  try {
+    const { data } = await http.get('/settings/users/current-permission')
+    currentUserPermission.value = String(data?.permission || '').trim()
+  } catch (_error) {
+    currentUserPermission.value = ''
+  }
+}
+
 onMounted(() => {
   detectMobile()
   window.addEventListener('resize', detectMobile)
+  loadCurrentUserPermission()
 })
 
 onBeforeUnmount(() => {

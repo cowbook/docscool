@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from flask import current_app, g, jsonify, request, send_file
 from sqlalchemy import String, cast, func, or_
+from werkzeug.datastructures import FileStorage
 
 from .auth import require_auth
 from .contracts import contracts_bp
@@ -50,8 +51,38 @@ from .contracts_routes_contracts_helpers import (
     _store_import_error_report,
     _stringify_excel_value,
 )
+from .files_core_helpers import _load_storage_file_payload
 from .extensions import db
-from .models import Contract
+from .models import Contract, UserPermission
+
+
+PERMISSION_SUPER_ADMIN = 'super_admin'
+PERMISSION_ALL = '全部'
+
+
+def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return True, []
+
+    permission_row = UserPermission.query.filter_by(login_name=username).first()
+    if not permission_row:
+        return True, []
+
+    permission_value = str(permission_row.permission or '').strip()
+    if permission_value == PERMISSION_SUPER_ADMIN:
+        return True, []
+
+    departments = [
+        item.strip()
+        for item in str(permission_row.departments or '').split(',')
+        if item and item.strip()
+    ]
+
+    if PERMISSION_ALL in departments:
+        return True, []
+
+    return False, departments
 
 @contracts_bp.get('/contracts')
 @require_auth
@@ -64,6 +95,12 @@ def list_contracts():
     is_archived = (request.args.get('is_archived') or '').strip()
 
     query = Contract.query
+    unrestricted, allowed_departments = _resolve_current_user_department_scope()
+    if not unrestricted:
+        if not allowed_departments:
+            return jsonify([])
+        query = query.filter(Contract.department.in_(allowed_departments))
+
     if department == '__empty__':
         query = query.filter(Contract.department.is_(None))
     elif department:
@@ -101,6 +138,7 @@ def list_contracts():
             Contract.file_path.ilike(pattern),
             Contract.fullbody.ilike(pattern),
             Contract.created_by.ilike(pattern),
+            Contract.updated_by.ilike(pattern),
             cast(Contract.amount, String).ilike(pattern),
             cast(Contract.copy_count, String).ilike(pattern),
             cast(Contract.handling_date, String).ilike(pattern),
@@ -579,6 +617,8 @@ def update_contract(contract_id):
     if 'status' in body:
         record.status = (body.get('status') or '').strip() or record.status
 
+    record.updated_by = (getattr(g, 'current_user', '') or '').strip() or None
+
     db.session.commit()
     return jsonify(record.to_dict(include_fullbody=True))
 
@@ -712,6 +752,7 @@ def parse_contract_pdf_bak():
 def parse_contract_pdf():
     body = request.get_json(silent=True) or {}
     incoming_fullbody = str(body.get('fullbody') or '').strip()
+    incoming_url = str(body.get('url') or body.get('file_path') or request.form.get('url') or '').strip()
     use_fullbody_directly = len(incoming_fullbody) > 20
 
     if use_fullbody_directly:
@@ -723,10 +764,7 @@ def parse_contract_pdf():
             len(pdf_text),
             request.content_length,
         )
-    else:
-        if 'file' not in request.files:
-            return jsonify({'message': 'file is required（或提供长度超过20的fullbody）'}), 400
-
+    elif 'file' in request.files:
         uploaded = request.files['file']
         if uploaded.filename == '':
             return jsonify({'message': 'empty filename'}), 400
@@ -748,6 +786,48 @@ def parse_contract_pdf():
         except Exception as exc:
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400
+    elif incoming_url:
+        normalized_path = _normalize_relative_path(incoming_url)
+        if not normalized_path:
+            return jsonify({'message': 'url is invalid'}), 400
+        if not normalized_path.lower().endswith('.pdf'):
+            return jsonify({'message': 'url 对应文件必须是PDF'}), 400
+
+        try:
+            content, file_name, _mime = _load_storage_file_payload(normalized_path)
+        except PermissionError as exc:
+            return jsonify({'message': str(exc)}), 401
+        except FileNotFoundError as exc:
+            return jsonify({'message': str(exc)}), 404
+        except ValueError:
+            return jsonify({'message': 'url is invalid'}), 400
+        except Exception as exc:
+            return jsonify({'message': f'读取存储文件失败: {exc}'}), 500
+
+        effective_name = str(file_name or os.path.basename(normalized_path) or 'upload.pdf')
+        if not effective_name.lower().endswith('.pdf'):
+            effective_name = f'{effective_name}.pdf'
+
+        current_app.logger.info(
+            'AI parse: url mode user=%s path=%s bytes=%s',
+            g.current_user,
+            normalized_path,
+            len(content or b''),
+        )
+
+        uploaded = FileStorage(
+            stream=BytesIO(content),
+            filename=effective_name,
+            content_type='application/pdf',
+        )
+
+        try:
+            pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded, source_file_path=normalized_path)
+        except Exception as exc:
+            current_app.logger.exception('AI parse: PDF extraction failed')
+            return jsonify({'message': f'PDF解析失败: {exc}'}), 400
+    else:
+        return jsonify({'message': 'file is required（或提供长度超过20的fullbody，或提供url）'}), 400
 
     if not pdf_text:
         current_app.logger.warning('AI parse: no text extracted, preview_lines=%s', preview_lines)

@@ -5,8 +5,10 @@ import posixpath
 import re
 import json
 import time
+import tempfile
 import getpass
 import mimetypes
+from importlib import import_module
 
 from difflib import SequenceMatcher
 from io import BytesIO
@@ -17,7 +19,6 @@ from datetime import timezone
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-import requests
 from sqlalchemy import String, cast, func, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from .auth import get_cached_user_password, require_auth
@@ -36,6 +37,8 @@ from .ocr_utils import (
 contracts_bp = Blueprint('contracts', __name__, url_prefix='/api')
 EXTERNAL_API_TIMEOUT_SECONDS = 300
 DEFAULT_DEPARTMENT_NAME = '财务部'
+
+_SYNOLOGY_FILESTATION_CLIENTS = {}
 
 
 
@@ -119,6 +122,7 @@ SYNOLOGY_COMMON_ERROR_MESSAGES = {
 
 
 SYNOLOGY_FILESTATION_ERROR_MESSAGES = {
+    1100: '请求参数无效或目录/文件名不符合规则',
     400: '上传参数错误',
     401: '文件路径非法',
     402: '系统繁忙，请稍后再试',
@@ -245,66 +249,293 @@ def _synology_upload_login() -> str:
     return _synology_user_login(username, password, session_name='FileStation')
 
 
-def _synology_user_login(account: str, password: str, session_name: str = 'DocsCoolDownload') -> str:
-    base_url = current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')
+def _synology_sdk_error_payload(exc: Exception) -> dict:
+    code = getattr(exc, 'error_code', None)
+    return {
+        'success': False,
+        'error': {
+            'code': code if code is not None else 'exception',
+            'message': f'{exc.__class__.__name__}: {exc}',
+        },
+        'data': {},
+    }
+
+
+def _synology_sdk_normalize_payload(result) -> dict:
+    if isinstance(result, dict):
+        if 'success' in result:
+            return result
+        return {'success': True, 'data': result}
+
+    if isinstance(result, tuple) and len(result) == 2:
+        status_code, payload = result
+        if isinstance(payload, dict):
+            if 'success' in payload:
+                return payload
+            return {
+                'success': False,
+                'error': {
+                    'code': status_code,
+                    'message': str(payload),
+                },
+                'data': payload,
+            }
+
+    if isinstance(result, str):
+        lowered = result.lower()
+        if 'task id is' in lowered or 'taskid' in lowered:
+            return {'success': True, 'data': {'message': result}}
+        return {
+            'success': False,
+            'error': {
+                'code': 'sdk-error',
+                'message': result,
+            },
+            'data': {},
+        }
+
+    return {
+        'success': False,
+        'error': {
+            'code': 'unknown-sdk-result',
+            'message': str(result),
+        },
+        'data': {},
+    }
+
+
+def _synology_parse_array_text(value):
+    if isinstance(value, list):
+        return [str(item or '').strip() for item in value if str(item or '').strip()]
+
+    text = str(value or '').strip()
+    if not text:
+        return []
+
+    if text.startswith('[') and text.endswith(']'):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item or '').strip() for item in parsed if str(item or '').strip()]
+        except Exception:
+            pass
+
+    cleaned = text.strip('"').strip()
+    return [cleaned] if cleaned else []
+
+
+def _synology_json_array_text(value) -> str:
+    return json.dumps(_synology_parse_array_text(value), ensure_ascii=False)
+
+
+def _synology_bool_text(value, default=False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {'1', 'true', 'yes'}
+
+
+def _coerce_unix_timestamp(value):
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        parsed = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _synology_new_filestation_client(account: str, password: str):
+    base_url = (current_app.config.get('SYNOLOGY_BASE_URL') or '').strip()
     if not base_url or not account or not password:
         raise RuntimeError('Missing Synology login parameters')
 
-    params = {
-        'api': 'SYNO.API.Auth',
-        'version': '7',
-        'method': 'login',
-        'account': account,
-        'passwd': password,
-        'session': session_name,
-        'format': 'sid',
-    }
+    parsed = urlparse(base_url)
+    if not parsed.hostname:
+        raise RuntimeError(f'Invalid SYNOLOGY_BASE_URL: {base_url}')
 
-    response = requests.get(
-        f"{base_url}/webapi/auth.cgi",
-        params=params,
-        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-        verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
+    secure = parsed.scheme.lower() == 'https'
+    port = parsed.port or (5001 if secure else 5000)
+
+    # synology-api 0.8.2 使用 BaseApi.shared_session 全局复用，可能造成跨 application API 列表污染。
+    base_api = import_module('synology_api.base_api')
+    base_api.BaseApi.shared_session = None
+
+    filestation = import_module('synology_api.filestation')
+    return filestation.FileStation(
+        parsed.hostname,
+        str(port),
+        account,
+        password,
+        secure=secure,
+        cert_verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+        dsm_version=int(current_app.config.get('SYNOLOGY_DSM_VERSION', 7)),
+        debug=False,
+        interactive_output=False,
     )
-    response.raise_for_status()
-    payload = response.json()
-    if not payload.get('success'):
-        raise RuntimeError(f"Synology 登录失败: {_synology_error_message(payload, 'auth')}")
-    return payload.get('data', {}).get('sid', '')
+
+
+def _synology_get_filestation_client_by_sid(sid: str):
+    sid_text = str(sid or '').strip()
+    if sid_text and sid_text in _SYNOLOGY_FILESTATION_CLIENTS:
+        return _SYNOLOGY_FILESTATION_CLIENTS[sid_text]
+
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        raise PermissionError('未找到当前登录用户，请重新登录后重试')
+
+    password = get_cached_user_password(username)
+    if not password:
+        raise PermissionError('登录凭据已过期，请重新登录后重试')
+
+    client = _synology_new_filestation_client(username, password)
+    new_sid = str(getattr(client, '_sid', '') or '').strip()
+    if new_sid:
+        _SYNOLOGY_FILESTATION_CLIENTS[new_sid] = client
+    return client
+
+
+def _synology_user_login(account: str, password: str, session_name: str = 'DocsCoolDownload') -> str:
+    _ = session_name
+    client = _synology_new_filestation_client(account, password)
+    sid = str(getattr(client, '_sid', '') or '').strip()
+    if not sid:
+        raise RuntimeError('Synology 登录失败: 未返回有效会话')
+
+    _SYNOLOGY_FILESTATION_CLIENTS[sid] = client
+    return sid
 
 
 def _synology_api_get(sid: str, params: dict) -> dict:
-    base_url = current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')
-    endpoint = f"{base_url}/webapi/entry.cgi"
-    merged = dict(params)
-    merged['_sid'] = sid
+    api_name = str((params or {}).get('api') or '').strip()
+    method_name = str((params or {}).get('method') or '').strip().lower()
 
-    response = requests.get(
-        endpoint,
-        params=merged,
-        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-        verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
-    )
-    response.raise_for_status()
-    return response.json()
+    try:
+        client = _synology_get_filestation_client_by_sid(sid)
+
+        if api_name == 'SYNO.FileStation.List' and method_name == 'list':
+            result = client.get_file_list(
+                folder_path=(params or {}).get('folder_path'),
+                additional=_synology_json_array_text((params or {}).get('additional')),
+            )
+            return _synology_sdk_normalize_payload(result)
+
+        return {
+            'success': False,
+            'error': {
+                'code': 'unsupported-sdk-api',
+                'message': f'Unsupported GET API mapping: {api_name}.{method_name}',
+            },
+            'data': {},
+        }
+    except Exception as exc:
+        return _synology_sdk_error_payload(exc)
 
 
 def _synology_api_post(sid: str, params: dict, data: dict = None, files: dict = None) -> dict:
-    base_url = current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')
-    endpoint = f"{base_url}/webapi/entry.cgi"
-    merged = dict(params)
-    merged['_sid'] = sid
+    api_name = str((params or {}).get('api') or '').strip()
+    method_name = str((params or {}).get('method') or '').strip().lower()
+    body = data or {}
 
-    response = requests.post(
-        endpoint,
-        params=merged,
-        data=data,
-        files=files,
-        timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-        verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
-    )
-    response.raise_for_status()
-    return response.json()
+    try:
+        client = _synology_get_filestation_client_by_sid(sid)
+
+        if api_name == 'SYNO.FileStation.CreateFolder' and method_name == 'create':
+            folder_path_values = _synology_parse_array_text(body.get('folder_path'))
+            name_values = _synology_parse_array_text(body.get('name'))
+            folder_path_param = folder_path_values if len(folder_path_values) != 1 else folder_path_values[0]
+            name_param = name_values if len(name_values) != 1 else name_values[0]
+            result = client.create_folder(
+                folder_path=folder_path_param,
+                name=name_param,
+                force_parent=_synology_bool_text(body.get('force_parent'), default=False),
+            )
+            return _synology_sdk_normalize_payload(result)
+
+        if api_name == 'SYNO.FileStation.Upload' and method_name == 'upload':
+            file_payload = (files or {}).get('file')
+            if not isinstance(file_payload, tuple) or len(file_payload) < 2:
+                return {
+                    'success': False,
+                    'error': {'code': 101, 'message': 'file is required'},
+                    'data': {},
+                }
+
+            upload_name = str(file_payload[0] or 'upload.bin')
+            stream = file_payload[1]
+
+            with tempfile.TemporaryDirectory(prefix='docscool_upload_') as tmp_dir:
+                tmp_path = os.path.join(tmp_dir, upload_name)
+                with open(tmp_path, 'wb') as tmp_file:
+                    content = stream.read() if hasattr(stream, 'read') else b''
+                    if isinstance(content, str):
+                        content = content.encode('utf-8')
+                    tmp_file.write(content or b'')
+
+                if hasattr(stream, 'seek'):
+                    try:
+                        stream.seek(0)
+                    except Exception:
+                        pass
+
+                result = client.upload_file(
+                    dest_path=str(body.get('path') or ''),
+                    file_path=tmp_path,
+                    create_parents=_synology_bool_text(body.get('create_parents'), default=True),
+                    overwrite=_synology_bool_text(body.get('overwrite'), default=False),
+                    verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+                    progress_bar=False,
+                )
+                return _synology_sdk_normalize_payload(result)
+
+        if api_name == 'SYNO.FileStation.Delete' and method_name in {'delete', 'start'}:
+            path_values = _synology_parse_array_text(body.get('path'))
+            path_param = path_values if len(path_values) != 1 else path_values[0]
+            result = client.start_delete_task(
+                path=path_param,
+                recursive=_synology_bool_text(body.get('recursive'), default=False),
+            )
+            return _synology_sdk_normalize_payload(result)
+
+        if api_name == 'SYNO.FileStation.Rename' and method_name == 'rename':
+            path_values = _synology_parse_array_text(body.get('path'))
+            name_values = _synology_parse_array_text(body.get('name'))
+            path_param = path_values if len(path_values) != 1 else path_values[0]
+            name_param = name_values if len(name_values) != 1 else name_values[0]
+            result = client.rename_folder(path=path_param, name=name_param)
+            return _synology_sdk_normalize_payload(result)
+
+        if api_name == 'SYNO.FileStation.CopyMove' and method_name == 'start':
+            path_values = _synology_parse_array_text(body.get('path'))
+            path_param = path_values if len(path_values) != 1 else path_values[0]
+            result = client.start_copy_move(
+                path=path_param,
+                dest_folder_path=str(body.get('dest_folder_path') or ''),
+                remove_src=_synology_bool_text(body.get('remove_src'), default=False),
+                overwrite=_synology_bool_text(body.get('overwrite'), default=False),
+            )
+            return _synology_sdk_normalize_payload(result)
+
+        return {
+            'success': False,
+            'error': {
+                'code': 'unsupported-sdk-api',
+                'message': f'Unsupported POST API mapping: {api_name}.{method_name}',
+            },
+            'data': {},
+        }
+    except Exception as exc:
+        return _synology_sdk_error_payload(exc)
 
 
 def _synology_json_array(*values: str) -> str:
@@ -457,46 +688,32 @@ def _load_contract_file_payload(record: Contract):
             raise PermissionError('登录凭据已过期，请重新登录后下载')
 
         remote_file_path = _build_filestation_path(normalized_file_path)
-        sid = _synology_user_login(g.current_user, password)
-        response = None
-        for path_value in (f'["{remote_file_path}"]', remote_file_path):
-            candidate = requests.get(
-                f"{current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')}/webapi/entry.cgi",
-                params={
-                    'api': 'SYNO.FileStation.Download',
-                    'version': '2',
-                    'method': 'download',
-                    'mode': 'download',
-                    'path': path_value,
-                    '_sid': sid,
-                },
-                timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-                verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
+        client = _synology_new_filestation_client(g.current_user, password)
+        sid = str(getattr(client, '_sid', '') or '').strip()
+        if sid:
+            _SYNOLOGY_FILESTATION_CLIENTS[sid] = client
+
+        try:
+            content_stream = client.get_file(
+                path=remote_file_path,
+                mode='serve',
+                verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
             )
-            if candidate.status_code == 404:
-                continue
-            candidate.raise_for_status()
-            response = candidate
-            break
+        except Exception as exc:
+            payload = _synology_sdk_error_payload(exc)
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在或路径无效')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
 
-        if response is None:
+        if content_stream is None:
             raise FileNotFoundError('文件不存在或路径无效')
+        if isinstance(content_stream, str):
+            raise RuntimeError(content_stream)
 
-        content_type = (response.headers.get('Content-Type') or '').lower()
-        if 'application/json' in content_type:
-            try:
-                payload = response.json()
-                if not payload.get('success'):
-                    raise RuntimeError(_synology_error_message(payload, 'filestation'))
-            except ValueError:
-                pass
-
-        file_name = _filename_from_content_disposition(response.headers.get('Content-Disposition', ''))
-        if not file_name:
-            file_name = os.path.basename(normalized_file_path) or f'contract_{record.id}.bin'
-
-        mime = response.headers.get('Content-Type') or 'application/octet-stream'
-        return response.content, file_name, mime
+        file_name = os.path.basename(normalized_file_path) or f'contract_{record.id}.bin'
+        mime = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return content_stream.read(), file_name, mime
 
     local_file_path = _safe_local_file_path(normalized_file_path)
     if not os.path.isfile(local_file_path):
@@ -633,7 +850,7 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             continue
 
         additional = item.get('additional') or {}
-        mtime = ((additional.get('time') or {}).get('mtime'))
+        mtime = _coerce_unix_timestamp((additional.get('time') or {}).get('mtime'))
         size = additional.get('size')
         owner = additional.get('owner') or {}
         modified_by = (
@@ -646,7 +863,7 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             'name': name,
             'path': entry_rel_path,
             'size': int(size) if isinstance(size, (int, float)) else 0,
-            'mtime': int(mtime) if isinstance(mtime, (int, float)) else None,
+            'mtime': mtime,
             'modified_by': modified_by,
         })
 
@@ -704,7 +921,7 @@ def _collect_storage_pdf_files() -> list:
                     result.append({
                         'name': name,
                         'path': item.get('path') or '',
-                        'mtime': item.get('mtime') or 0,
+                        'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
                         'modified_by': (item.get('modified_by') or '').strip() or '-',
                     })
             for directory in directories:
@@ -746,7 +963,7 @@ def _collect_storage_files() -> list:
                 result.append({
                     'name': item.get('name') or '',
                     'path': item.get('path') or '',
-                    'mtime': item.get('mtime') or 0,
+                    'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
                 })
             for directory in directories:
                 child_path = directory.get('path') or ''
@@ -841,7 +1058,7 @@ def _select_best_pdf_match(row, pdf_files: list):
                     'name': item.get('name') or '', 
                     'path': item.get('path') or '',
                     'similarity': 1.0,
-                    'mtime': item.get('mtime') or 0,
+                    'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
                 }
                 return exact_match, [exact_match]
             
@@ -858,7 +1075,7 @@ def _select_best_pdf_match(row, pdf_files: list):
                         'name': item.get('name') or '', 
                         'path': item.get('path') or '',
                         'similarity': similarity,
-                        'mtime': item.get('mtime') or 0,
+                        'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
                     })
         if matched:
             matched.sort(key=lambda row: (-row['similarity'], -row['mtime'], row['name']))
@@ -879,7 +1096,7 @@ def _select_best_pdf_match(row, pdf_files: list):
                 'name': file_name,
                 'path': item.get('path') or '',
                 'similarity': similarity,
-                'mtime': item.get('mtime') or 0,
+                'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
             })
 
     if not matched:

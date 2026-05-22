@@ -200,7 +200,24 @@ def mineru_auth_headers() -> dict:
         'Authorization': f'Bearer {api_key}',
     }
 
-def mineru_extract_text_from_uploaded_pdf(uploaded_file) -> tuple[str, list[str]]:
+def _build_mineru_extract_dir(ocr_root: str, source_file_path: str, filename: str) -> str:
+    normalized_path = str(source_file_path or '').replace('\\', '/').strip()
+    raw_parts = [part.strip() for part in normalized_path.split('/') if part and part.strip()]
+    safe_parts = []
+    for part in raw_parts[:-1]:
+        if part in {'.', '..'}:
+            continue
+        safe_part = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '_', part).strip(' .')
+        if safe_part:
+            safe_parts.append(safe_part)
+
+    file_stem = os.path.splitext(raw_parts[-1] if raw_parts else filename)[0].strip()
+    safe_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '_', file_stem).strip(' .') or 'document'
+    extract_dir = os.path.join(ocr_root, *safe_parts, safe_stem)
+    os.makedirs(extract_dir, exist_ok=True)
+    return extract_dir
+
+def mineru_extract_text_from_uploaded_pdf(uploaded_file, source_file_path: str = '') -> tuple[str, list[str]]:
     filename = (uploaded_file.filename or '').strip()
     if not filename:
         raise RuntimeError('empty filename')
@@ -283,19 +300,9 @@ def mineru_extract_text_from_uploaded_pdf(uploaded_file) -> tuple[str, list[str]
         raise RuntimeError('MinerU OCR结果为空')
     full_text = ''
     with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
-        import hashlib
         ocr_root = os.path.join(current_app.root_path, '..', 'instance', 'ocr')
         os.makedirs(ocr_root, exist_ok=True)
-        zip_dir_name = ''
-        if full_zip_url:
-            base = os.path.basename(full_zip_url)
-            if base.lower().endswith('.zip'):
-                base = base[:-4]
-            zip_dir_name = base
-        if not zip_dir_name:
-            zip_dir_name = hashlib.md5((full_zip_url or str(time.time())).encode('utf-8')).hexdigest()
-        extract_dir = os.path.join(ocr_root, zip_dir_name)
-        os.makedirs(extract_dir, exist_ok=True)
+        extract_dir = _build_mineru_extract_dir(ocr_root, source_file_path, filename)
         for name in zf.namelist():
             target_path = os.path.join(extract_dir, name)
             if not os.path.abspath(target_path).startswith(os.path.abspath(extract_dir)):

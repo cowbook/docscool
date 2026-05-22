@@ -9,6 +9,19 @@
 
 ## 时间线
 
+### 2026-05-22 本轮更新
+- 前端 `ai-parse` 调用统一：
+	- `ContractView`、`FolderView`、`ContractItem` 均已改为提交 `file_path`。
+	- `ContractItem.runAiRecognitionFromPreview` 已去除前端 `fullbody` 分支，仅提交 `file_path`。
+- `ContractItem` 上传交互改造：
+	- “上传文件”改为先弹树型目录选择框，再选择本地文件。
+	- 目录确认后通过 `/api/folders/upload` 上传，返回 `file_path` 后回填到当前合同。
+	- 编辑态会立即写回合同 `file_path`；新建态会先回填并提示“保存后生效”。
+- 后端 MinerU 结果落盘规则调整：
+	- `mineru_extract_text_from_uploaded_pdf` 支持接收来源 `file_path`。
+	- OCR 结果不再按返回 UUID 落盘，改为 `instance/ocr/<相对目录>/<文件名去扩展名>/`。
+	- 增加目录名清洗与路径安全检查（过滤非法字符、忽略 `.`/`..`）。
+
 ### 2026-05-20 本轮更新
 - Synology SDK 路径验证与落地：
 	- 新增 `backend/scripts/test_synology_admin_group_users_sdk.py`，使用 `synology-api` SDK 实测管理员组成员读取。

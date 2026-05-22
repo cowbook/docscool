@@ -2,8 +2,8 @@ import mimetypes
 import os
 import posixpath
 import re
+import shutil
 
-import requests
 from difflib import SequenceMatcher
 from flask import current_app
 
@@ -23,6 +23,7 @@ from .contracts_core import (
     _synology_api_post,
     _synology_error_code,
     _synology_error_message,
+    _synology_get_filestation_client_by_sid,
     _synology_json_array,
     _synology_upload_login,
 )
@@ -103,6 +104,7 @@ def _build_folder_file_items(relative_folder_path: str):
             'file_path': relative_file_path,
             'size': item.get('size') or 0,
             'mtime': item.get('mtime'),
+            'modified_by': (item.get('modified_by') or '').strip() or '-',
             'matched_contract_id': matched.id if matched else None,
             'contract_name': contract_payload.get('contract_name') if contract_payload else '<无匹配>',
             'contract_number': contract_payload.get('contract_number') if contract_payload else '',
@@ -204,7 +206,7 @@ def _create_storage_folder(parent_path: str, folder_name: str) -> str:
         )
         if not payload.get('success'):
             code = _synology_error_code(payload)
-            if code == 414:
+            if code in {408, 414}:
                 raise FileExistsError('文件夹已存在')
             raise RuntimeError(_synology_error_message(payload, 'filestation'))
         return target_relative_path
@@ -214,18 +216,19 @@ def _create_storage_folder(parent_path: str, folder_name: str) -> str:
     return target_relative_path
 
 
-def _delete_storage_folder(relative_path: str) -> None:
+def _delete_storage_folder(relative_path: str, force: bool = False) -> None:
     normalized = _normalize_relative_path(relative_path)
     if not normalized:
         raise ValueError('不允许删除根目录')
 
     if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
         sid = _synology_upload_login()
-        directories, files = _list_remote_entries(normalized, sid=sid)
-        if files:
-            raise RuntimeError('该文件夹下存在文件，不能删除')
-        if directories:
-            raise RuntimeError('该文件夹下存在子文件夹，不能删除')
+        if not force:
+            directories, files = _list_remote_entries(normalized, sid=sid)
+            if files:
+                raise RuntimeError('该文件夹下存在文件，不能删除')
+            if directories:
+                raise RuntimeError('该文件夹下存在子文件夹，不能删除')
 
         payload = _synology_api_post(
             sid,
@@ -236,7 +239,7 @@ def _delete_storage_folder(relative_path: str) -> None:
             },
             data={
                 'path': f'["{_remote_folder_path(normalized)}"]',
-                'recursive': 'false',
+                'recursive': 'true' if force else 'false',
             },
         )
         if not payload.get('success'):
@@ -249,6 +252,10 @@ def _delete_storage_folder(relative_path: str) -> None:
     folder_path = _safe_local_folder_path(normalized)
     if not os.path.isdir(folder_path):
         raise FileNotFoundError('目录不存在')
+
+    if force:
+        shutil.rmtree(folder_path)
+        return
 
     child_dirs = []
     child_files = []
@@ -272,48 +279,33 @@ def _load_storage_file_payload(relative_file_path: str):
     if not normalized:
         raise ValueError('file_path is required')
 
+
     if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
         sid = _synology_upload_login()
+        client = _synology_get_filestation_client_by_sid(sid)
         remote_file_path = _remote_folder_path(normalized)
-        response = None
-        for path_value in (f'["{remote_file_path}"]', remote_file_path):
-            candidate = requests.get(
-                f"{current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')}/webapi/entry.cgi",
-                params={
-                    'api': 'SYNO.FileStation.Download',
-                    'version': '2',
-                    'method': 'download',
-                    'mode': 'download',
-                    'path': path_value,
-                    '_sid': sid,
-                },
-                timeout=EXTERNAL_API_TIMEOUT_SECONDS,
-                verify=current_app.config.get('SYNOLOGY_VERIFY_SSL', False),
+        try:
+            content_stream = client.get_file(
+                path=remote_file_path,
+                mode='serve',
+                verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
             )
-            if candidate.status_code == 404:
-                continue
-            candidate.raise_for_status()
-            response = candidate
-            break
+        except Exception as exc:
+            from .contracts_core import _synology_sdk_error_payload
+            payload = _synology_sdk_error_payload(exc)
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在或路径无效')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
 
-        if response is None:
+        if content_stream is None:
             raise FileNotFoundError('文件不存在或路径无效')
+        if isinstance(content_stream, str):
+            raise RuntimeError(content_stream)
 
-        content_type = (response.headers.get('Content-Type') or '').lower()
-        if 'application/json' in content_type:
-            try:
-                payload = response.json()
-                if not payload.get('success'):
-                    raise RuntimeError(_synology_error_message(payload, 'filestation'))
-            except ValueError:
-                pass
-
-        file_name = _filename_from_content_disposition(response.headers.get('Content-Disposition', ''))
-        if not file_name:
-            file_name = os.path.basename(normalized) or 'download.bin'
-
-        mime = response.headers.get('Content-Type') or mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
-        return response.content, file_name, mime
+        file_name = os.path.basename(normalized) or 'download.bin'
+        mime = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return content_stream.read(), file_name, mime
 
     local_file_path = _safe_local_file_path(normalized)
     if not os.path.isfile(local_file_path):
@@ -485,6 +477,26 @@ def _clear_contract_file_path_by_relative_path(relative_file_path: str) -> list[
     rows = Contract.query.filter(Contract.file_path.isnot(None)).all()
     for row in rows:
         if _normalize_contract_file_path(row.file_path) != normalized_target:
+            continue
+        row.file_path = None
+        affected_ids.append(row.id)
+
+    return affected_ids
+
+
+def _clear_contract_file_path_by_relative_folder_path(relative_folder_path: str) -> list[int]:
+    normalized_folder = _normalize_relative_path(relative_folder_path)
+    if not normalized_folder:
+        return []
+
+    folder_prefix = f'{normalized_folder}/'
+    affected_ids = []
+    rows = Contract.query.filter(Contract.file_path.isnot(None)).all()
+    for row in rows:
+        normalized_file_path = _normalize_contract_file_path(row.file_path)
+        if not normalized_file_path:
+            continue
+        if not (normalized_file_path == normalized_folder or normalized_file_path.startswith(folder_prefix)):
             continue
         row.file_path = None
         affected_ids.append(row.id)

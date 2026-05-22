@@ -77,6 +77,7 @@
             <div v-if="contextMenuVisible" class="tree-context-menu" :style="contextMenuStyle">
               <button type="button" class="menu-item" @click="handleContextCommand('create')">新建文件夹</button>
               <button
+                v-if="canRenameContextFolder"
                 type="button"
                 class="menu-item"
                 :disabled="!contextTargetPath"
@@ -85,6 +86,7 @@
                 改名
               </button>
               <button
+                v-if="canDeleteContextFolder"
                 type="button"
                 class="menu-item menu-item-danger"
                 :disabled="!contextTargetPath"
@@ -118,13 +120,6 @@
             
             </div>
             <div class="panel-title-actions">
-              <el-button
-                size="small"
-                :loading="batchMatching"
-                @click="openBatchMatchDialog"
-              >
-                批量匹配
-              </el-button>
               <input
                 ref="folderUploadInputRef"
                 type="file"
@@ -132,15 +127,27 @@
                 class="folder-upload-input"
                 @change="handleFolderFilesSelected"
               />
-              <el-button
-                size="small"
-                type="primary"
-                :icon="Upload"
-                :loading="uploadingFolderFiles"
-                @click="triggerFolderUpload"
-              >
-                上传文件
-              </el-button>
+              <el-button-group class="apple-button-group">
+                <el-button
+                  size="small"
+                  :loading="batchMatching"
+                  :disabled="!canOperateOnSelectedFolder"
+                  @click="openBatchMatchDialog"
+                >
+                  <el-icon><Search /></el-icon>
+                  <span>批量匹配</span>
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="uploadingFolderFiles"
+                  :disabled="!canOperateOnSelectedFolder"
+                  @click="triggerFolderUpload"
+                >
+                  <el-icon><Upload /></el-icon>
+                  <span>上传文件</span>
+                </el-button>
+              </el-button-group>
             </div>
           </div>
 
@@ -152,7 +159,9 @@
             @dragover.capture.prevent="onFileTableDragOver"
             @drop.capture.stop.prevent="onFileTableDrop"
           >
+          <div v-if="noPermissionForSelectedFolder" class="file-list-no-permission">您没有权限</div>
           <el-table
+            v-else
             v-loading="loadingFiles"
             :data="filteredFiles"
             border
@@ -193,47 +202,52 @@
               </template>
             </el-table-column>
 
+            <el-table-column prop="modified_by" label="修改人" min-width="110" show-overflow-tooltip />
+
+            <el-table-column label="修改时间" min-width="168">
+              <template #default="scope">
+                <span>{{ formatFileModifiedTime(scope.row?.mtime) }}</span>
+              </template>
+            </el-table-column>
+
          
 
             <el-table-column label="合同名称" min-width="260">
               <template #default="scope">
-                <el-tooltip
-                  v-if="hasRealContractName(scope.row)"
-                  :content="(isArchivedValue(scope.row?.is_archived) ? '已归档' : '未归档') + '-' + scope.row.contract_name"
-                >
-                  <el-link
-                  class="contract-name-link"
-                  type="primary"
-                  @click.stop="openContractEditFromFileRow(scope.row)"
-                >
-                <span
-                  class="archive-status-icon"
-                  :class="isArchivedValue(scope.row?.is_archived) ? 'archive-status-icon-archived' : 'archive-status-icon-unarchived'"
-                >
-                  <Icon :icon="isArchivedValue(scope.row?.is_archived) ? mdiArchive : mdiHelp" />
-                </span>
-
-                  <span class="contract-name-text">{{ scope.row.contract_name }}</span>
-              </el-link>
-
-
-                </el-tooltip>
-                
-
-
-
-                <div v-else class="unmatched-contract-actions">
-                  <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
-                  <el-button size="small" type="primary" link @click.stop="openCreateFromFileRow(scope.row)">新建</el-button>
-                  <el-button
-                    size="small"
-                    type="success"
-                    link
-                    :loading="aiParsingFilePath === scope.row.file_path"
-                    @click.stop="startAiMatchFromFileRow(scope.row)"
+                <div class="contract-name-cell">
+                  <el-tooltip
+                    v-if="hasRealContractName(scope.row)"
+                    :content="(isArchivedValue(scope.row?.is_archived) ? '已归档' : '未归档') + '-' + scope.row.contract_name"
                   >
-                    AI
-                  </el-button>
+                    <el-link
+                      class="contract-name-link"
+                      type="primary"
+                      @click.stop="openContractEditFromFileRow(scope.row)"
+                    >
+                      <span
+                        class="archive-status-icon"
+                        :class="isArchivedValue(scope.row?.is_archived) ? 'archive-status-icon-archived' : 'archive-status-icon-unarchived'"
+                      >
+                        <Icon :icon="isArchivedValue(scope.row?.is_archived) ? mdiArchive : mdiHelp" />
+                      </span>
+
+                      <span class="contract-name-text">{{ scope.row.contract_name }}</span>
+                    </el-link>
+                  </el-tooltip>
+
+                  <div v-else class="unmatched-contract-actions">
+                    <span class="contract-name-text" :title="scope.row.contract_name">{{ scope.row.contract_name }}</span>
+                    <el-button size="small" type="primary" link @click.stop="openCreateFromFileRow(scope.row)">新建</el-button>
+                    <el-button
+                      size="small"
+                      type="success"
+                      link
+                      :loading="aiParsingFilePath === scope.row.file_path"
+                      @click.stop="startAiMatchFromFileRow(scope.row)"
+                    >
+                      AI
+                    </el-button>
+                  </div>
                 </div>
               </template>
             </el-table-column>
@@ -255,7 +269,7 @@
 
           </el-table>
 
-            <div v-if="fileContextMenuVisible" class="file-context-menu" :style="fileContextMenuStyle">
+            <div v-if="fileContextMenuVisible && !isViewPermissionUser" class="file-context-menu" :style="fileContextMenuStyle">
               <button type="button" class="menu-item" :disabled="!fileContextTarget" @click="handleFileContextCommand('move')">移动</button>
               <button type="button" class="menu-item" :disabled="!fileContextTarget" @click="handleFileContextCommand('rename')">改名</button>
               <button type="button" class="menu-item menu-item-danger" :disabled="!fileContextTarget" @click="handleFileContextCommand('delete')">删除</button>
@@ -383,7 +397,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { Search, Upload } from '@element-plus/icons-vue'
 import { Icon } from '@iconify/vue'
 import mdiArchive from '@iconify-icons/mdi/archive-check-outline'
 import mdiHelp from '@iconify-icons/mdi/help-circle-outline'
@@ -462,6 +476,12 @@ const batchMatchLogText = ref('')
 const recursiveFileCount = ref(0)
 const loadingRecursiveCount = ref(false)
 const dragOverNodePath = ref('')
+const userPermission = ref('view')
+const allowedFolderRoots = ref([])
+const noPermissionForSelectedFolder = ref(false)
+const FOLDER_CHILDREN_CACHE_TTL_MS = 15_000
+const folderChildrenCache = new Map()
+const folderChildrenInFlight = new Map()
 let recursiveCountToken = 0
 
 const folderLayoutStyle = computed(() => {
@@ -477,6 +497,145 @@ const treeProps = {
 
 const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
+const isSuperAdminUser = computed(() => userPermission.value === 'super_admin')
+const isViewPermissionUser = computed(() => userPermission.value === 'view')
+const hasAllFolderPermission = computed(() => {
+  if (isSuperAdminUser.value) {
+    return true
+  }
+  return allowedFolderRoots.value.includes('全部')
+})
+const allowedFolderRootSet = computed(() => {
+  const items = allowedFolderRoots.value
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && item !== '全部')
+  return new Set(items)
+})
+
+const getTopLevelFolderName = (path) => {
+  const normalizedPath = normalizePath(path)
+  if (!normalizedPath) {
+    return ''
+  }
+  const [top] = normalizedPath.split('/')
+  return String(top || '').trim()
+}
+
+const isTopLevelFolderPath = (path) => {
+  const normalizedPath = normalizePath(path)
+  if (!normalizedPath) {
+    return false
+  }
+  return !normalizedPath.includes('/')
+}
+
+const hasFolderAccess = (path) => {
+  const normalizedPath = normalizePath(path)
+  if (!normalizedPath) {
+    return hasAllFolderPermission.value
+  }
+  if (hasAllFolderPermission.value) {
+    return true
+  }
+
+  const topLevelFolder = getTopLevelFolderName(normalizedPath)
+  if (!topLevelFolder) {
+    return false
+  }
+  return allowedFolderRootSet.value.has(topLevelFolder)
+}
+
+const canOperateOnSelectedFolder = computed(() => {
+  if (uploadingFolderFiles.value || noPermissionForSelectedFolder.value) {
+    return false
+  }
+  const normalizedPath = normalizePath(selectedFolderPath.value)
+  if (!normalizedPath) {
+    return hasAllFolderPermission.value
+  }
+  return hasFolderAccess(normalizedPath)
+})
+
+const canRenameContextFolder = computed(() => {
+  const targetPath = normalizePath(contextTargetPath.value)
+  if (!targetPath || !hasFolderAccess(targetPath)) {
+    return false
+  }
+  if (!isSuperAdminUser.value && isTopLevelFolderPath(targetPath)) {
+    return false
+  }
+  return true
+})
+
+const canDeleteContextFolder = computed(() => {
+  const targetPath = normalizePath(contextTargetPath.value)
+  if (!targetPath || !hasFolderAccess(targetPath)) {
+    return false
+  }
+  if (!isSuperAdminUser.value && isTopLevelFolderPath(targetPath)) {
+    return false
+  }
+  return true
+})
+
+const parseDateFromUnknown = (value) => {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value <= 0) {
+      return null
+    }
+    const ms = value < 1e12 ? value * 1000 : value
+    const date = new Date(ms)
+    return Number.isFinite(date.getTime()) ? date : null
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const text = value.trim()
+  if (!text) {
+    return null
+  }
+
+  if (/^\d+$/.test(text)) {
+    const numeric = Number(text)
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return null
+    }
+    const ms = numeric < 1e12 ? numeric * 1000 : numeric
+    const date = new Date(ms)
+    return Number.isFinite(date.getTime()) ? date : null
+  }
+
+  const isoLike = text.includes(' ') ? text.replace(' ', 'T') : text
+  let date = new Date(isoLike)
+  if (Number.isFinite(date.getTime())) {
+    return date
+  }
+
+  date = new Date(text.replace(/-/g, '/'))
+  return Number.isFinite(date.getTime()) ? date : null
+}
+
+const formatFileModifiedTime = (value) => {
+  const date = parseDateFromUnknown(value)
+  if (!date) {
+    return '-'
+  }
+
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 const getParentPath = (value) => {
   const path = normalizePath(value)
   if (!path) {
@@ -486,11 +645,43 @@ const getParentPath = (value) => {
   return idx >= 0 ? path.slice(0, idx) : ''
 }
 
+const clearFolderChildrenRequestCache = () => {
+  folderChildrenCache.clear()
+  folderChildrenInFlight.clear()
+}
+
 const fetchFolderChildren = async (parentPath = '') => {
-  const { data } = await http.get('/folders/children', {
-    params: { parent_path: normalizePath(parentPath) },
-  })
-  return Array.isArray(data?.children) ? data.children : []
+  const normalizedParent = normalizePath(parentPath)
+  const now = Date.now()
+
+  const cached = folderChildrenCache.get(normalizedParent)
+  if (cached && now - cached.ts <= FOLDER_CHILDREN_CACHE_TTL_MS) {
+    return cached.children
+  }
+
+  const inFlight = folderChildrenInFlight.get(normalizedParent)
+  if (inFlight) {
+    return inFlight
+  }
+
+  const requestPromise = (async () => {
+    const { data } = await http.get('/folders/children', {
+      params: { parent_path: normalizedParent },
+    })
+    const children = Array.isArray(data?.children) ? data.children : []
+    folderChildrenCache.set(normalizedParent, {
+      ts: Date.now(),
+      children,
+    })
+    return children
+  })()
+
+  folderChildrenInFlight.set(normalizedParent, requestPromise)
+  try {
+    return await requestPromise
+  } finally {
+    folderChildrenInFlight.delete(normalizedParent)
+  }
 }
 
 const loadTreeChildren = async (node, resolve) => {
@@ -537,7 +728,18 @@ const hideAllContextMenus = () => {
 const showContextMenu = (event, path = '') => {
   event.preventDefault()
   hideFileContextMenu()
-  contextTargetPath.value = path || ''
+  const normalizedPath = normalizePath(path)
+
+  if (!normalizedPath && !hasAllFolderPermission.value) {
+    hideContextMenu()
+    return
+  }
+  if (normalizedPath && !hasFolderAccess(normalizedPath)) {
+    hideContextMenu()
+    return
+  }
+
+  contextTargetPath.value = normalizedPath
 
   const container = event.target?.closest?.('.tree-wrap')
   const rect = container?.getBoundingClientRect?.()
@@ -599,6 +801,11 @@ const handleContextCommand = async (command) => {
 }
 
 const onFileCellContextMenu = (event, row) => {
+  if (isViewPermissionUser.value) {
+    hideFileContextMenu()
+    return
+  }
+
   if (!row?.file_path) {
     return
   }
@@ -708,6 +915,10 @@ const applySearch = () => {
 }
 
 const filteredFiles = computed(() => {
+  if (noPermissionForSelectedFolder.value) {
+    return []
+  }
+
   const keyword = activeKeyword.value
   if (!keyword) {
     return files.value
@@ -717,6 +928,8 @@ const filteredFiles = computed(() => {
     const text = [
       row?.name,
       row?.file_path,
+      row?.modified_by,
+      formatFileModifiedTime(row?.mtime),
       row?.contract_name,
       row?.contract_number,
       row?.contract_unit,
@@ -886,7 +1099,7 @@ const openContractEditFromFileRow = async (row) => {
   if (!contractId) {
     return
   }
-  await contractItemRef.value?.openEdit({ id: contractId })
+  await contractItemRef.value?.openEdit({ id: contractId }, { readOnly: isViewPermissionUser.value })
 }
 
 const openCreateFromFileRow = (row) => {
@@ -912,22 +1125,6 @@ const closeAiMatchDialog = () => {
   resetAiMatchState()
 }
 
-const buildFileFromFolderRow = async (row) => {
-  const filePath = String(row?.file_path || '').trim()
-  if (!filePath) {
-    throw new Error('该文件路径为空')
-  }
-
-  const response = await http.get('/folders/file-download', {
-    params: { path: filePath },
-    responseType: 'blob',
-  })
-
-  const blob = response.data instanceof Blob ? response.data : new Blob([response.data])
-  const filename = row?.name || filePath.split('/').pop() || 'contract.pdf'
-  return new File([blob], filename, { type: blob.type || 'application/pdf' })
-}
-
 const startAiMatchFromFileRow = async (row) => {
   const filePath = String(row?.file_path || '').trim()
   if (!filePath) {
@@ -942,12 +1139,9 @@ const startAiMatchFromFileRow = async (row) => {
 
   aiParsingFilePath.value = filePath
   try {
-    const file = await buildFileFromFolderRow(row)
-    const fd = new FormData()
-    fd.append('file', file)
-
-    const { data } = await http.post('/contracts/ai-parse', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const { data } = await http.post('/contracts/ai-parse', {
+      file_path: filePath,
+    }, {
       timeout: 300000,
     })
 
@@ -957,7 +1151,7 @@ const startAiMatchFromFileRow = async (row) => {
       fullbody: parsedFullbody,
     }
 
-    aiParsedUploadFile.value = file
+    aiParsedUploadFile.value = null
     aiParsedFields.value = parsedFields
     aiMatchCandidates.value = Array.isArray(data?.match_candidates) ? data.match_candidates : []
     aiMatchSourceRow.value = row
@@ -1027,6 +1221,18 @@ const loadDepartments = async () => {
   departments.value = (Array.isArray(data) ? data : []).map((item) => item.name)
 }
 
+const loadCurrentUserFolderPermission = async () => {
+  try {
+    const { data } = await http.get('/settings/users/current-permission')
+    userPermission.value = String(data?.permission || 'view').trim() || 'view'
+    const folderList = Array.isArray(data?.folder_list) ? data.folder_list : []
+    allowedFolderRoots.value = folderList.map((item) => String(item || '').trim()).filter(Boolean)
+  } catch (_error) {
+    userPermission.value = 'view'
+    allowedFolderRoots.value = []
+  }
+}
+
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
   options.value = {
@@ -1073,6 +1279,10 @@ const appendBatchMatchLog = (line = '') => {
 }
 
 const openBatchMatchDialog = () => {
+  if (!canOperateOnSelectedFolder.value) {
+    ElMessage.warning('您没有权限')
+    return
+  }
   batchMatchLogText.value = batchMatchInstructionText()
   batchMatchDialogVisible.value = true
 }
@@ -1121,25 +1331,147 @@ const startBatchMatch = async () => {
 }
 
 const triggerFolderUpload = () => {
+  if (!canOperateOnSelectedFolder.value) {
+    ElMessage.warning('您没有权限')
+    return
+  }
+
   if (uploadingFolderFiles.value) {
     return
   }
   folderUploadInputRef.value?.click()
 }
 
+const readAllDirectoryEntries = async (reader) => {
+  const entries = []
+  while (true) {
+    const chunk = await new Promise((resolve, reject) => {
+      reader.readEntries(resolve, reject)
+    })
+    if (!chunk?.length) {
+      break
+    }
+    entries.push(...chunk)
+  }
+  return entries
+}
+
+const collectDroppedEntryFiles = async (entry, parentPath = '') => {
+  if (!entry) {
+    return []
+  }
+
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => {
+      entry.file(resolve, reject)
+    })
+    const relativePath = parentPath ? `${parentPath}/${file.name}` : file.name
+    return [{ file, relativePath }]
+  }
+
+  if (!entry.isDirectory) {
+    return []
+  }
+
+  const currentPath = parentPath ? `${parentPath}/${entry.name}` : entry.name
+  const reader = entry.createReader()
+  const children = await readAllDirectoryEntries(reader)
+  const nested = await Promise.all(children.map((child) => collectDroppedEntryFiles(child, currentPath)))
+  return nested.flat()
+}
+
+const resolveDroppedUploadItems = async (event) => {
+  const transfer = event?.dataTransfer
+  if (!transfer) {
+    return []
+  }
+
+  const items = Array.from(transfer.items || [])
+  if (items.length && items.some((item) => typeof item?.webkitGetAsEntry === 'function')) {
+    const collected = []
+    for (const item of items) {
+      if (item?.kind !== 'file') {
+        continue
+      }
+
+      const entry = item.webkitGetAsEntry?.()
+      if (entry) {
+        const files = await collectDroppedEntryFiles(entry)
+        collected.push(...files)
+        continue
+      }
+
+      const fallbackFile = item.getAsFile?.()
+      if (fallbackFile) {
+        collected.push({ file: fallbackFile, relativePath: fallbackFile.webkitRelativePath || fallbackFile.name })
+      }
+    }
+
+    if (collected.length) {
+      return collected
+    }
+  }
+
+  return Array.from(transfer.files || []).map((file) => ({
+    file,
+    relativePath: file.webkitRelativePath || file.name,
+  }))
+}
+
 const uploadFilesToFolder = async (picked, targetFolderPath = selectedFolderPath.value) => {
-  const filesToUpload = Array.from(picked || []).filter((item) => !!String(item?.name || '').trim())
+  const normalizedTargetPath = normalizePath(targetFolderPath)
+  if (normalizedTargetPath && !hasFolderAccess(normalizedTargetPath)) {
+    ElMessage.warning('您没有权限')
+    return
+  }
+  if (!normalizedTargetPath && !hasAllFolderPermission.value) {
+    ElMessage.warning('您没有权限')
+    return
+  }
+
+  const filesToUpload = Array.from(picked || [])
+    .map((item) => {
+      if (item instanceof File) {
+        return {
+          file: item,
+          relativePath: item.webkitRelativePath || item.name,
+        }
+      }
+
+      const file = item?.file
+      if (!(file instanceof File)) {
+        return null
+      }
+
+      return {
+        file,
+        relativePath: String(item?.relativePath || file.webkitRelativePath || file.name || ''),
+      }
+    })
+    .filter((item) => item && String(item.file?.name || '').trim())
+
   if (!filesToUpload.length) {
     ElMessage.warning('请选择有效文件')
     return
   }
 
+  const isFolderUpload = filesToUpload.some((item) => {
+    const relativePath = String(item?.relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '')
+    const idx = relativePath.lastIndexOf('/')
+    return idx > 0
+  })
+
   uploadingFolderFiles.value = true
   try {
     const fd = new FormData()
-    fd.append('folder_path', normalizePath(targetFolderPath))
-    filesToUpload.forEach((file) => {
-      fd.append('files', file)
+    fd.append('folder_path', normalizedTargetPath)
+    filesToUpload.forEach((item) => {
+      const relativePath = String(item.relativePath || '')
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '')
+
+      fd.append('files', item.file)
+      fd.append('relative_paths', relativePath)
     })
 
     const { data } = await http.post('/folders/upload', fd, {
@@ -1147,7 +1479,11 @@ const uploadFilesToFolder = async (picked, targetFolderPath = selectedFolderPath
       timeout: 300000,
     })
 
-    await loadFolderFiles(selectedFolderPath.value)
+    if (isFolderUpload) {
+      await reloadTree()
+    } else {
+      await loadFolderFiles(selectedFolderPath.value)
+    }
     const uploadedCount = Number(data?.uploaded_count) || filesToUpload.length
     ElMessage.success(`上传成功，共 ${uploadedCount} 个文件`)
   } catch (error) {
@@ -1223,7 +1559,7 @@ const onTreeDragLeave = (event) => {
 
 const onTreeDrop = async (event) => {
   const hoveredPath = getDragHoverNodePath(event)
-  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  const filesFromDrop = await resolveDroppedUploadItems(event)
   dragOverNodePath.value = ''
   if (!filesFromDrop.length) {
     return
@@ -1240,7 +1576,7 @@ const onFileTableDragOver = (event) => {
 }
 
 const onFileTableDrop = async (event) => {
-  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  const filesFromDrop = await resolveDroppedUploadItems(event)
   if (!filesFromDrop.length) {
     return
   }
@@ -1266,7 +1602,7 @@ const onWindowDropCapture = async (event) => {
   event.stopPropagation()
 
   const target = event?.target
-  const filesFromDrop = Array.from(event?.dataTransfer?.files || [])
+  const filesFromDrop = await resolveDroppedUploadItems(event)
   if (!filesFromDrop.length) {
     dragOverNodePath.value = ''
     return
@@ -1290,10 +1626,20 @@ const onWindowDropCapture = async (event) => {
 
 
 const loadFolderFiles = async (folderPath) => {
+  const normalizedPath = normalizePath(folderPath)
+  if (normalizedPath && !hasFolderAccess(normalizedPath)) {
+    selectedFolderPath.value = normalizedPath
+    files.value = []
+    noPermissionForSelectedFolder.value = true
+    loadingFiles.value = false
+    return
+  }
+
+  noPermissionForSelectedFolder.value = false
   loadingFiles.value = true
   try {
     const { data } = await http.get('/folders/files', {
-      params: { folder_path: folderPath || '' },
+      params: { folder_path: normalizedPath || '' },
     })
     selectedFolderPath.value = data?.folder_path || ''
     files.value = Array.isArray(data?.files) ? data.files : []
@@ -1340,12 +1686,19 @@ const loadRecursiveFileCount = async (folderPath) => {
 
 
 watch(selectedFolderPath, (path) => {
+  const normalizedPath = normalizePath(path)
+  if (normalizedPath && !hasFolderAccess(normalizedPath)) {
+    recursiveFileCount.value = 0
+    loadingRecursiveCount.value = false
+    return
+  }
   loadRecursiveFileCount(path)
 }, { immediate: true })
 
 const loadTree = async (keepSelected = true) => {
   loadingTree.value = true
   try {
+    clearFolderChildrenRequestCache()
     const { data } = await http.get('/folders/tree')
     const root = data?.root || { name: '/', path: '' }
     rootName.value = root.name || '/'
@@ -1369,7 +1722,16 @@ const loadTree = async (keepSelected = true) => {
 }
 
 const onTreeNodeClick = async (node) => {
-  await loadFolderFiles(node?.path || '')
+  const nodePath = normalizePath(node?.path || '')
+  if (nodePath && !hasFolderAccess(nodePath)) {
+    selectedFolderPath.value = nodePath
+    files.value = []
+    noPermissionForSelectedFolder.value = true
+    ElMessage.warning('您没有权限')
+    return
+  }
+
+  await loadFolderFiles(nodePath)
 }
 
 const reloadTree = async () => {
@@ -1413,6 +1775,72 @@ const createFolder = async (targetPath = selectedFolderPath.value) => {
   }
 }
 
+const confirmForceDeleteFolder = async (folderPath, fileCount) => {
+  const dialogClass = `force-delete-confirm-dialog-${Date.now()}`
+  let remaining = 10
+
+  const cleanupFns = []
+  const updateDialogCountdown = () => {
+    const root = document.querySelector(`.${dialogClass}`)
+    if (!root) {
+      return
+    }
+
+    const countEl = root.querySelector('.force-delete-countdown-value')
+    if (countEl) {
+      countEl.textContent = String(remaining)
+    }
+
+    const btnTextEl = root.querySelector('.el-message-box__btns .el-button--primary span')
+    if (btnTextEl) {
+      btnTextEl.textContent = `彻底删除 (${remaining}s)`
+    }
+  }
+
+  const intervalId = window.setInterval(() => {
+    remaining = Math.max(0, remaining - 1)
+    updateDialogCountdown()
+  }, 1000)
+  cleanupFns.push(() => window.clearInterval(intervalId))
+
+  const timeoutId = window.setTimeout(() => {
+    ElMessageBox.close()
+  }, 10_000)
+  cleanupFns.push(() => window.clearTimeout(timeoutId))
+
+  await nextTick()
+
+  try {
+    await ElMessageBox.confirm(
+      `文件夹下存在 ${Number(fileCount) || 0} 个文件，是否彻底删除？<br><span class="force-delete-countdown-tip">${remaining} 秒后自动取消</span>`,
+      `彻底删除确认：${folderPath}`,
+      {
+        confirmButtonText: `彻底删除 (${remaining}s)`,
+        cancelButtonText: '取消',
+        type: 'warning',
+        dangerouslyUseHTMLString: true,
+        customClass: dialogClass,
+        distinguishCancelAndClose: true,
+      },
+    )
+  } finally {
+    cleanupFns.forEach((fn) => fn())
+  }
+}
+
+const applyFolderDeletedState = async (folderPath) => {
+  const parentPath = getParentPath(folderPath)
+  selectedFolderPath.value = parentPath
+  await refreshAffectedNodeChildren(parentPath)
+  await loadFolderFiles(parentPath)
+  await nextTick()
+  if (parentPath) {
+    treeRef.value?.setCurrentKey?.(parentPath)
+  } else {
+    treeRef.value?.setCurrentKey?.(null)
+  }
+}
+
 const deleteFolder = async (targetPath = selectedFolderPath.value) => {
   const folderPath = normalizePath(targetPath)
   if (!folderPath) {
@@ -1436,20 +1864,53 @@ const deleteFolder = async (targetPath = selectedFolderPath.value) => {
     })
 
     ElMessage.success('删除成功')
-    const parentPath = getParentPath(folderPath)
-    selectedFolderPath.value = parentPath
-    await refreshAffectedNodeChildren(parentPath)
-    await loadFolderFiles(parentPath)
-    await nextTick()
-    if (parentPath) {
-      treeRef.value?.setCurrentKey?.(parentPath)
-    } else {
-      treeRef.value?.setCurrentKey?.(null)
-    }
+    await applyFolderDeletedState(folderPath)
   } catch (error) {
     if (error === 'cancel' || error === 'close') {
       return
     }
+
+    const status = Number(error?.response?.status || 0)
+    const message = String(error?.response?.data?.message || '')
+    const canForceDelete = status === 409 && (message.includes('该文件夹下存在文件') || message.includes('该文件夹下存在子文件夹'))
+
+    if (canForceDelete) {
+      let totalFiles = 0
+      try {
+        const { data } = await http.get('/folders/file-count', {
+          params: { folder_path: folderPath },
+        })
+        totalFiles = Number(data?.total_files) || 0
+      } catch (_countError) {
+        totalFiles = 0
+      }
+
+      try {
+        await confirmForceDeleteFolder(folderPath, totalFiles)
+      } catch (confirmError) {
+        if (confirmError === 'cancel' || confirmError === 'close') {
+          return
+        }
+        throw confirmError
+      }
+
+      try {
+        const { data } = await http.delete('/folders', {
+          data: {
+            path: folderPath,
+            force: true,
+          },
+        })
+        const affected = Number(data?.affected_contract_count) || 0
+        ElMessage.success(`已彻底删除，清理 ${affected} 条关联合同文件路径`)
+        await applyFolderDeletedState(folderPath)
+        return
+      } catch (forceError) {
+        ElMessage.error(forceError?.response?.data?.message || '彻底删除文件夹失败')
+        return
+      }
+    }
+
     ElMessage.error(error?.response?.data?.message || '删除文件夹失败')
   }
 }
@@ -1683,6 +2144,7 @@ onMounted(async () => {
   window.addEventListener('click', hideAllContextMenus)
   window.addEventListener('dragover', onWindowDragOverCapture, true)
   window.addEventListener('drop', onWindowDropCapture, true)
+  await loadCurrentUserFolderPermission()
   await Promise.all([
     loadDepartments(),
     loadFieldOptions(),
@@ -1797,6 +2259,11 @@ watch(previewDialogVisible, (visible) => {
   line-height: 1;
 }
 
+.tree-wrap :deep(.el-tree-node__content > .el-tree-node__loading-icon ~ .tree-node-content .tree-folder-icon),
+.tree-wrap :deep(.el-tree-node__content > .el-tree-node__expand-icon.is-loading ~ .tree-node-content .tree-folder-icon) {
+  display: none;
+}
+
 .tree-node-label {
   color: #374151;
 }
@@ -1906,6 +2373,61 @@ watch(previewDialogVisible, (visible) => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.apple-button-group {
+  display: inline-flex;
+  border-radius: 19px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+
+.apple-button-group :deep(.el-button) {
+  border: none;
+  border-radius: 0;
+  min-height: 34px;
+  position: relative;
+  color: #1f2937;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fefa 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.apple-button-group :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.apple-button-group :deep(.el-button + .el-button::before) {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: rgba(15, 23, 42, 0.12);
+  pointer-events: none;
+}
+
+.apple-button-group :deep(.el-button:first-child) {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+
+.apple-button-group :deep(.el-button:last-child) {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.apple-button-group :deep(.el-button:hover),
+.apple-button-group :deep(.el-button:focus-visible) {
+  background: linear-gradient(180deg, #ffffff 0%, #e9eef8 100%);
+  color: #1d4ed8;
+}
+
+.apple-button-group :deep(.el-button:active) {
+  transform: translateY(1px);
 }
 
 .folder-upload-input {
@@ -2030,6 +2552,15 @@ watch(previewDialogVisible, (visible) => {
   color: #9ca3af;
 }
 
+.file-list-no-permission {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 14px;
+}
+
 .file-icon {
   flex: 0 0 18px;
   width: 18px;
@@ -2048,24 +2579,44 @@ watch(previewDialogVisible, (visible) => {
 }
 
 .contract-name-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
   max-width: 100%;
-  display: inline-flex;
-  font-size:12px;
+  min-width: 0;
+  font-size: 12px;
+  text-align: left;
 }
 
 .contract-name-text {
-  display: inline-block;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .unmatched-contract-actions {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
+}
+
+.contract-name-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
 }
 
 .archive-status-icon {

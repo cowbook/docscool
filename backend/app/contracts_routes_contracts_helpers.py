@@ -514,6 +514,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 existing_contract.start_date = _parse_date(payload.get('start_date'))
                 existing_contract.end_date = _parse_date(payload.get('end_date'))
                 existing_contract.status = (payload.get('status') or 'active').strip() or 'active'
+                existing_contract.updated_by = created_by
                 return existing_contract, '', 0, True
             else:
                 return None, 'contract_number already exists', 409, False
@@ -555,5 +556,6 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         end_date=_parse_date(payload.get('end_date')),
         status=(payload.get('status') or 'active').strip() or 'active',
         created_by=created_by,
+        updated_by=created_by,
     )
     return record, '', 0, False

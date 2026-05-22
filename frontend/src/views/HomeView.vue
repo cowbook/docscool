@@ -76,7 +76,7 @@
               </section>
             </div>
             <div class="chart-row">
-              <section class="chart-panel chart-placeholder">
+              <section class="chart-placeholder">
                 <div class="chart-title">（预留区域）</div>
               </section>
             </div>
@@ -257,6 +257,7 @@ const activePreviewName = ref('')
 const previewRequestId = ref(0)
 const contractItemRef = ref(null)
 const contractItemAiParsing = ref(false)
+const currentUserPermission = ref('view')
 const contractEditorDepartments = ref([])
 const contractEditorOptions = ref({
   contract_determination_method: [],
@@ -271,6 +272,7 @@ const contractEditorReady = ref(false)
 const contractEditorLoading = ref(false)
 
 const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
+const isViewPermissionUser = computed(() => String(currentUserPermission.value || '').trim() === 'view')
 
 const applyDashboardData = (stat, charts) => {
   if (stat) {
@@ -407,6 +409,9 @@ const parseDateFromUnknown = (value) => {
   if (/^\d+$/.test(text)) {
     const numeric = Number(text)
     if (Number.isFinite(numeric)) {
+      if (numeric <= 0) {
+        return null
+      }
       const ms = numeric < 1e12 ? numeric * 1000 : numeric
       const date = new Date(ms)
       return Number.isFinite(date.getTime()) ? date : null
@@ -528,6 +533,15 @@ const shouldRedirectToLogin = (statusCode, message) => {
 
 const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
+const loadCurrentUserPermission = async () => {
+  try {
+    const { data } = await http.get('/settings/users/current-permission')
+    currentUserPermission.value = String(data?.permission || 'view').trim() || 'view'
+  } catch (_error) {
+    currentUserPermission.value = 'view'
+  }
+}
+
 const ensureContractEditorResources = async () => {
   if (contractEditorReady.value || contractEditorLoading.value) {
     return
@@ -565,7 +579,7 @@ const openBoundContract = async (item) => {
   if (directContractId > 0) {
     try {
       await ensureContractEditorResources()
-      await contractItemRef.value?.openEdit({ id: directContractId })
+      await contractItemRef.value?.openEdit({ id: directContractId }, { readOnly: isViewPermissionUser.value })
       return
     } catch (_error) {
       ElMessage.error('打开合同失败')
@@ -594,7 +608,7 @@ const openBoundContract = async (item) => {
     }
 
     await ensureContractEditorResources()
-    await contractItemRef.value?.openEdit({ id: matched.id })
+    await contractItemRef.value?.openEdit({ id: matched.id }, { readOnly: isViewPermissionUser.value })
   } catch (_error) {
     ElMessage.error('打开合同失败')
   }
@@ -733,6 +747,7 @@ onMounted(() => {
     hasReadyData.value = true
   }
 
+  loadCurrentUserPermission()
   loadStatistics()
   loadLatestFiles()
 })
