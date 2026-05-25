@@ -7,7 +7,7 @@
             <div class="card-title">用户权限</div>
             <div class="card-tip">本系统管理的用户权限对应群晖里的docscool用户组，超管权限拥有全部部门和文件夹的访问权限</div>
           </div>
-          <el-button-group class="apple-button-group">
+          <el-button-group v-if="canManageUserAddDelete" class="apple-button-group">
             <el-button type="primary" :loading="addingUser" @click="addExistingUser">
               <el-icon><User /></el-icon>
               <span>添加用户</span>
@@ -17,6 +17,7 @@
               <span>创建用户</span>
             </el-button>
           </el-button-group>
+          <div v-else class="readonly-hint">当前账号仅可查看和编辑，不可新增或删除用户</div>
         </div>
       </template>
 
@@ -141,10 +142,22 @@
             <el-button type="primary" link :loading="savingRowId === scope.row.id" @click="saveRow(scope.row)">
               保存
             </el-button>
-            <el-button type="warning" link :loading="removingRowId === scope.row.id" @click="removeRow(scope.row)">
+            <el-button
+              v-if="canManageUserAddDelete"
+              type="warning"
+              link
+              :loading="removingRowId === scope.row.id"
+              @click="removeRow(scope.row)"
+            >
               移除
             </el-button>
-            <el-button v-if="scope.row.me_added" type="danger" link :loading="deletingRowId === scope.row.id" @click="deleteRow(scope.row)">
+            <el-button
+              v-if="canManageUserAddDelete && scope.row.me_added"
+              type="danger"
+              link
+              :loading="deletingRowId === scope.row.id"
+              @click="deleteRow(scope.row)"
+            >
               删除
             </el-button>
             <el-button type="warning" link :loading="resettingRowId === scope.row.id" @click="openResetPasswordDialog(scope.row)">
@@ -307,7 +320,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Folder, Medal, OfficeBuilding, Plus, User } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -345,6 +358,14 @@ const createUserForm = ref({
   permission: 'view',
   department_list: [],
   folder_list: [],
+})
+const currentPermission = ref('view')
+const currentLoginName = ref('')
+const canManageUserAddDelete = computed(() => {
+  if (currentPermission.value === 'super_admin') {
+    return true
+  }
+  return currentLoginName.value.toLowerCase() === 'zhangyan'
 })
 
 const normalizeDepartmentList = (value) => {
@@ -390,6 +411,17 @@ const loadUsers = async () => {
   syncWarnings.value = Array.isArray(data?.warnings) ? data.warnings : []
 }
 
+const loadCurrentPermission = async () => {
+  try {
+    const { data } = await http.get('/settings/users/current-permission')
+    currentPermission.value = String(data?.permission || 'view').trim() || 'view'
+    currentLoginName.value = String(data?.login_name || '').trim()
+  } catch (_error) {
+    currentPermission.value = 'view'
+    currentLoginName.value = ''
+  }
+}
+
 const reloadUsersWithTableLoading = async () => {
   initialLoading.value = true
   try {
@@ -426,6 +458,11 @@ const loadFolderOptions = async () => {
 }
 
 const addExistingUser = async () => {
+  if (!canManageUserAddDelete.value) {
+    ElMessage.warning('当前账号无新增/删除用户权限')
+    return
+  }
+
   addingUser.value = true
   try {
     const { value } = await ElMessageBox.prompt('请输入群晖登录名称', '新建用户', {
@@ -479,6 +516,11 @@ const handleCreateUserPermissionChange = (value) => {
 }
 
 const submitCreateUser = async () => {
+  if (!canManageUserAddDelete.value) {
+    ElMessage.warning('当前账号无新增/删除用户权限')
+    return
+  }
+
   const loginName = String(createUserForm.value.login_name || '').trim()
   const displayName = String(createUserForm.value.name || '').trim()
   const password = String(createUserForm.value.password || '').trim()
@@ -576,6 +618,11 @@ const saveRow = async (row) => {
 }
 
 const deleteRow = async (row) => {
+  if (!canManageUserAddDelete.value) {
+    ElMessage.warning('当前账号无新增/删除用户权限')
+    return
+  }
+
   try {
     await ElMessageBox.confirm(
       `确认删除用户 ${row.login_name} 吗？该操作会彻底删除群晖服务器上的用户，并同时删除数据库中的用户权限记录。`,
@@ -604,6 +651,11 @@ const deleteRow = async (row) => {
 }
 
 const removeRow = async (row) => {
+  if (!canManageUserAddDelete.value) {
+    ElMessage.warning('当前账号无新增/删除用户权限')
+    return
+  }
+
   try {
     await ElMessageBox.confirm(
       `确认从 docscool 用户组移除用户 ${row.login_name} 吗？该操作不会删除群晖账号，只会先从用户组移除，再删除数据库中的用户权限记录。`,
@@ -688,7 +740,10 @@ const submitResetPassword = async () => {
 
 onMounted(async () => {
   try {
-    await reloadUsersWithTableLoading()
+    await Promise.all([
+      loadCurrentPermission(),
+      reloadUsersWithTableLoading(),
+    ])
     loadDepartmentOptions()
     loadFolderOptions()
   } catch (_error) {
@@ -745,6 +800,11 @@ onMounted(async () => {
 
 .warning-line {
   line-height: 1.5;
+}
+
+.readonly-hint {
+  color: #6b7280;
+  font-size: 13px;
 }
 
 .apple-button-group {

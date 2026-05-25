@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-05-22
+更新时间：2026-05-25
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -205,6 +205,21 @@
   - 不再根据群晖用户详情回写数据库描述。
   - 不再把群组中数据库不存在的用户移除。
 - `_synology_get_user_info` 仅作为“用户是否存在 + 描述”来源，并保留调试日志用于后续优化调用路径。
+
+## 本轮权限管理调整（2026-05-25）
+- 增删权限规则扩展为：仅 `super_admin` 或登录名 `zhangyan` 可执行“新增/删除”操作。
+- 后端写接口守卫已覆盖：
+  - `POST /api/settings/departments`
+  - `DELETE /api/settings/departments/<id>`
+  - `POST /api/settings/projects`
+  - `DELETE /api/settings/projects/<id>`
+  - `POST /api/settings/users`
+  - `POST /api/settings/users/create-user`
+  - `DELETE /api/settings/users/<id>`
+  - `POST /api/settings/users/<id>/remove`
+- 前端权限页联动：
+  - `DepartmentSettingsView`、`ProjectSettingsView`、`UserPermissionSettingsView` 已按上述规则控制新增/删除按钮显隐。
+  - 非授权用户进入相关页面时保持“可查看”，但新增/删除操作不可用。
 
 ### LoginView 视觉约定（2026-04-27）
 - 登录右侧面板 `.login-panel`：

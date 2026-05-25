@@ -7,7 +7,7 @@
         </div>
       </template>
 
-      <div class="toolbar">
+      <div v-if="canManage" class="toolbar">
         <el-input
           v-model="newProject"
           maxlength="255"
@@ -18,11 +18,12 @@
         />
         <el-button type="primary" :loading="saving" @click="addProject">新增项目</el-button>
       </div>
+      <div v-else class="readonly-hint">当前账号仅有查看权限</div>
 
       <el-table :data="projects" stripe>
         <el-table-column prop="name" label="项目名称" min-width="320" show-overflow-tooltip />
         <el-table-column prop="created_at" label="创建时间" min-width="220" />
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column v-if="canManage" label="操作" width="120" fixed="right">
           <template #default="scope">
             <el-button type="danger" size="small" @click="removeProject(scope.row)">删除</el-button>
           </template>
@@ -33,7 +34,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import http from '../api/http'
@@ -41,13 +42,29 @@ import http from '../api/http'
 const projects = ref([])
 const newProject = ref('')
 const saving = ref(false)
+const userPermission = ref('view')
+const canManage = computed(() => userPermission.value === 'super_admin')
 
 const loadProjects = async () => {
   const { data } = await http.get('/settings/projects')
   projects.value = Array.isArray(data) ? data : []
 }
 
+const loadCurrentPermission = async () => {
+  try {
+    const { data } = await http.get('/settings/users/current-permission')
+    userPermission.value = String(data?.permission || 'view').trim() || 'view'
+  } catch (_error) {
+    userPermission.value = 'view'
+  }
+}
+
 const addProject = async () => {
+  if (!canManage.value) {
+    ElMessage.warning('当前账号仅有查看权限')
+    return
+  }
+
   const name = newProject.value.trim()
   if (!name) {
     ElMessage.warning('请输入项目名称')
@@ -68,6 +85,11 @@ const addProject = async () => {
 }
 
 const removeProject = async (row) => {
+  if (!canManage.value) {
+    ElMessage.warning('当前账号仅有查看权限')
+    return
+  }
+
   try {
     await ElMessageBox.confirm(`确认删除项目：${row.name}？`, '提示', {
       type: 'warning',
@@ -84,7 +106,7 @@ const removeProject = async (row) => {
 
 onMounted(async () => {
   try {
-    await loadProjects()
+    await Promise.all([loadCurrentPermission(), loadProjects()])
   } catch (_error) {
     ElMessage.error('项目列表加载失败')
   }
@@ -112,5 +134,11 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.readonly-hint {
+  margin-bottom: 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

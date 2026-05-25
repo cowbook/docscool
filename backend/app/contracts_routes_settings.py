@@ -25,6 +25,7 @@ PERMISSION_SUPER_ADMIN = 'super_admin'
 PERMISSION_EDIT = 'edit'
 PERMISSION_VIEW = 'view'
 PERMISSION_VALUES = {PERMISSION_SUPER_ADMIN, PERMISSION_EDIT, PERMISSION_VIEW}
+ADD_DELETE_ALLOW_LOGIN_NAMES = {'zhangyan'}
 NEW_USER_LOGIN_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 NEW_USER_PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$')
 
@@ -47,6 +48,26 @@ def _format_department_text(values) -> str:
         normalized.append(value)
 
     return ','.join(normalized)
+
+
+def _current_user_permission_value() -> str:
+    login_name = (getattr(g, 'current_user', '') or '').strip()
+    if not login_name:
+        return PERMISSION_VIEW
+
+    row = UserPermission.query.filter_by(login_name=login_name).first()
+    if not row:
+        return PERMISSION_VIEW
+
+    value = str(row.permission or PERMISSION_VIEW).strip()
+    return value if value in PERMISSION_VALUES else PERMISSION_VIEW
+
+
+def _require_super_admin_write_permission():
+    login_name = (getattr(g, 'current_user', '') or '').strip().lower()
+    if _current_user_permission_value() == PERMISSION_SUPER_ADMIN or login_name in ADD_DELETE_ALLOW_LOGIN_NAMES:
+        return None
+    return jsonify({'message': '仅超管或指定账号允许新增或删除'}), 403
 
 
 def _department_option_values():
@@ -867,6 +888,10 @@ def get_current_user_permission():
 @contracts_bp.post('/settings/users')
 @require_auth
 def create_user_permission():
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     body = request.get_json(silent=True) or {}
     login_name = (body.get('login_name') or '').strip()
     if not login_name:
@@ -912,6 +937,10 @@ def create_user_permission():
 @contracts_bp.post('/settings/users/create-user')
 @require_auth
 def create_new_user_permission():
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     body = request.get_json(silent=True) or {}
 
     try:
@@ -1031,6 +1060,10 @@ def update_user_permission(user_id):
 @contracts_bp.delete('/settings/users/<int:user_id>')
 @require_auth
 def delete_user_permission(user_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     row = UserPermission.query.get_or_404(user_id)
 
     if not bool(row.me_added):
@@ -1069,6 +1102,10 @@ def delete_user_permission(user_id):
 @contracts_bp.post('/settings/users/<int:user_id>/remove')
 @require_auth
 def remove_user_permission_from_group(user_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     row = UserPermission.query.get_or_404(user_id)
 
     sid, auth_error = _settings_login()
@@ -1152,6 +1189,10 @@ def list_project_settings():
 @contracts_bp.post('/settings/projects')
 @require_auth
 def create_project_setting():
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     body = request.get_json(silent=True) or {}
     name = (body.get('name') or '').strip()
 
@@ -1171,6 +1212,10 @@ def create_project_setting():
 @contracts_bp.delete('/settings/projects/<int:project_id>')
 @require_auth
 def delete_project_setting(project_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     row = ProjectOption.query.get_or_404(project_id)
 
     in_use = Contract.query.filter(Contract.project == row.name).first()
@@ -1197,6 +1242,10 @@ def contract_field_options():
 @contracts_bp.post('/settings/departments')
 @require_auth
 def create_department_setting():
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     body = request.get_json(silent=True) or {}
     name = (body.get('name') or '').strip()
 
@@ -1218,6 +1267,10 @@ def create_department_setting():
 @contracts_bp.delete('/settings/departments/<int:department_id>')
 @require_auth
 def delete_department_setting(department_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
     row = Department.query.get_or_404(department_id)
 
     if row.name == DEFAULT_DEPARTMENT_NAME:
