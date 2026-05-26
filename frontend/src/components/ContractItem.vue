@@ -28,7 +28,7 @@
                   >
                     {{ aiParsing ? '识别中...' : 'AI识别' }}
                   </el-button>
-                  <el-button size="small" :icon="Document" @click="textDialogVisible = true">文本</el-button>
+                  <el-button v-if="false" size="small" :icon="Document" @click="textDialogVisible = true">文本</el-button>
 
                   <el-button
                     v-if="props.showFileActions && !dialogReadOnly"
@@ -75,11 +75,15 @@
               >
                 {{ form.file_path || '暂无文件路径' }}
               </el-link>
+
+          
             </div>
           </div>
 
           <div class="form-column">
             <div class="form-grid">
+
+
               <el-form-item label="是否归档" class="form-item-span-2">
                 <el-switch
                   v-model="form.is_archived"
@@ -88,6 +92,17 @@
                   active-value="已归档"
                   inactive-value="未归档"
                 />
+
+                    <el-link
+                class="ocr-md-link"
+                type="primary"
+                :underline="ocrMdLinkEnabled"
+                :disabled="!ocrMdLinkEnabled"
+                      :href="ocrMdLinkEnabled ? ocrPreviewUrl : undefined"
+                target="_blank"
+              >
+                {{ ocrMdChecking ? 'OCR文本检测中...' : '打开OCR文本' }}
+              </el-link>
               </el-form-item>
 
               <el-form-item label="合同名称" class="form-item-span-2">
@@ -171,6 +186,9 @@
               <span>修改人：{{ form.updated_by || '—' }}</span>
               <span>修改时间：{{ formatMetaDateTime(form.updated_at) }}</span>
             </div>
+
+            
+
           </div>
         </div>
       </el-form>
@@ -521,6 +539,9 @@ const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewMessage = ref('暂无文件')
 const previewFileName = ref('')
+const ocrMdAvailable = ref(false)
+const ocrMdChecking = ref(false)
+let ocrMdProbeToken = 0
 const canConfirmUploadFolder = computed(() => !!normalizePath(uploadFolderSelectedPath.value))
 
 const linkTreeProps = {
@@ -576,6 +597,102 @@ const fullPreviewTitle = computed(() => {
   const name = getFileName(currentPreviewRow.value?.file_path || '')
   return name ? `文件预览 - ${name}` : '文件预览'
 })
+
+const apiPrefix = import.meta.env.PROD ? '/docs/api' : '/api'
+const appBasePrefix = import.meta.env.BASE_URL || '/'
+
+const ocrPreviewRelativeDir = computed(() => {
+  const normalizedPath = normalizePath(form.file_path)
+  if (!normalizedPath) {
+    return ''
+  }
+
+  const parts = normalizedPath.split('/').filter(Boolean)
+  if (!parts.length) {
+    return ''
+  }
+
+  const last = String(parts[parts.length - 1] || '').trim()
+  if (!last) {
+    return ''
+  }
+  const dotIndex = last.lastIndexOf('.')
+  parts[parts.length - 1] = dotIndex > 0 ? last.slice(0, dotIndex) : last
+
+  return parts.join('/')
+})
+
+const ocrMdRelativePath = computed(() => {
+  if (!ocrPreviewRelativeDir.value) {
+    return ''
+  }
+  return `${ocrPreviewRelativeDir.value}/full.md`
+})
+
+const ocrMdApiUrl = computed(() => {
+  const relativePath = ocrMdRelativePath.value
+  if (!relativePath) {
+    return ''
+  }
+
+  const encodedPath = relativePath
+    .split('/')
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join('/')
+
+  return `${apiPrefix}/html/${encodedPath}`
+})
+
+const ocrPreviewUrl = computed(() => {
+  const relativeDir = ocrPreviewRelativeDir.value
+  if (!relativeDir) {
+    return ''
+  }
+
+  const encodedPath = relativeDir
+    .split('/')
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join('/')
+
+  return `${appBasePrefix}preview/${encodedPath}/`
+})
+
+const ocrMdLinkEnabled = computed(() => {
+  return !!ocrPreviewUrl.value && ocrMdAvailable.value && !ocrMdChecking.value
+})
+
+const probeOcrMdAvailability = async (url) => {
+  const currentToken = ++ocrMdProbeToken
+  if (!url) {
+    ocrMdAvailable.value = false
+    ocrMdChecking.value = false
+    return
+  }
+
+  ocrMdChecking.value = true
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'same-origin',
+    })
+    if (currentToken !== ocrMdProbeToken) {
+      return
+    }
+    ocrMdAvailable.value = response.ok
+  } catch (_error) {
+    if (currentToken !== ocrMdProbeToken) {
+      return
+    }
+    ocrMdAvailable.value = false
+  } finally {
+    if (currentToken === ocrMdProbeToken) {
+      ocrMdChecking.value = false
+    }
+  }
+}
 
 const resetForm = () => {
   form.file_path = ''
@@ -1924,11 +2041,29 @@ const handleContractDeleted = (contractId) => {
 
 watch(dialogVisible, (visible) => {
   if (!visible) {
+    ocrMdProbeToken += 1
+    ocrMdAvailable.value = false
+    ocrMdChecking.value = false
     contractDialogLoading.value = false
     dialogReadOnly.value = false
     resetPreview('暂无文件')
   }
 })
+
+watch(
+  [ocrMdApiUrl, dialogVisible],
+  ([url, visible]) => {
+    if (!visible || !url) {
+      ocrMdProbeToken += 1
+      ocrMdAvailable.value = false
+      ocrMdChecking.value = false
+      return
+    }
+
+    probeOcrMdAvailability(url)
+  },
+  { immediate: true },
+)
 
 watch(linkFileDialogVisible, (visible) => {
   if (!visible) {
@@ -2109,6 +2244,7 @@ defineExpose({
   margin-top: 8px;
   padding: 0 4px;
   display: flex;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 12px;
@@ -2249,6 +2385,12 @@ defineExpose({
   line-height: 1.4;
   word-break: break-all;
   white-space: normal;
+}
+
+.ocr-md-link {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
 }
 
 .file-cell {

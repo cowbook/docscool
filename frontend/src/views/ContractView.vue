@@ -174,7 +174,7 @@
 
           <el-table-column v-else-if="column.key === 'file_path'" prop="file_path" label="文件" min-width="220">
             <template #default="scope">
-              <el-link class="file-cell" @click.stop="openFilePreview(scope.row)" v-if="scope.row.file_path">
+              <el-link class="file-cell" @click.stop.prevent="openFilePreview(scope.row, $event)" v-if="scope.row.file_path">
                 <el-tooltip :content="scope.row.file_path" placement="top">
                   <Icon
                     v-if="scope.row.file_path"
@@ -421,6 +421,7 @@ import AiMatchDialog from '../components/AiMatchDialog.vue'
 
 const AI_NEW_CONTRACT_VALUE = '__new_contract__'
 const TABLE_COLUMN_STORAGE_KEY = 'docscool.contract-list.columns.v1'
+const appBasePrefix = import.meta.env.BASE_URL || '/'
 
 const DEFAULT_TABLE_COLUMNS = [
   { key: 'contract_number', prop: 'contract_number', label: '合同编号', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: true },
@@ -836,6 +837,29 @@ const loadCurrentUserPermission = async () => {
 }
 
 const normalizeFolderPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const buildOcrPreviewUrlFromFilePath = (filePath) => {
+  const normalizedPath = normalizeFolderPath(filePath)
+  if (!normalizedPath) {
+    return ''
+  }
+
+  const parts = normalizedPath.split('/').filter(Boolean)
+  if (!parts.length) {
+    return ''
+  }
+
+  const last = String(parts[parts.length - 1] || '').trim()
+  const dotIndex = last.lastIndexOf('.')
+  parts[parts.length - 1] = dotIndex > 0 ? last.slice(0, dotIndex) : last
+
+  const encodedPath = parts
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join('/')
+
+  return `${appBasePrefix}preview/${encodedPath}/`
+}
 
 const loadAiFolderTree = async () => {
   aiFolderTreeLoading.value = true
@@ -1283,8 +1307,30 @@ const handleAiPdfSelected = async (event) => {
 
 const openEdit = (row) => openEditWithSupplementalFields(row, null)
 
-const openFilePreview = async (row) => {
-  await contractItemRef.value?.openFilePreview(row)
+const openFilePreview = (row, event) => {
+  event?.preventDefault?.()
+  event?.stopPropagation?.()
+
+  const filePath = String(row?.file_path || '').trim()
+  if (!filePath) {
+    return
+  }
+
+  if (!/\.pdf$/i.test(filePath)) {
+    ElMessage.warning('仅支持PDF预览，请使用下载功能')
+    return
+  }
+
+  const previewUrl = buildOcrPreviewUrlFromFilePath(filePath)
+  if (!previewUrl) {
+    ElMessage.warning('预览地址无效')
+    return
+  }
+
+  const opened = window.open(previewUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    ElMessage.warning('浏览器拦截了新窗口，请允许弹窗后重试')
+  }
 }
 
 const doUpload = async (contractId, file) => {

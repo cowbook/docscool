@@ -2,14 +2,16 @@ import os
 import posixpath
 import hashlib
 import re
+import json
 import html as html_lib
 import textwrap
 from io import BytesIO
+from urllib.parse import quote
 
 import fitz
 from PIL import Image, ImageDraw
 from flask import Blueprint, current_app, g, jsonify, request, send_file, send_from_directory
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from .auth import require_auth
 from .contracts_core import (
@@ -60,8 +62,7 @@ PERMISSION_SUPER_ADMIN = 'super_admin'
 PERMISSION_ALL = '全部'
 
 
-def _markdown_to_html_document(markdown_text: str, title: str) -> str:
-    safe_title = html_lib.escape(title or 'Markdown Preview')
+def _render_markdown_body_html(markdown_text: str) -> str:
     normalized_markdown = textwrap.dedent((markdown_text or '').replace('\r\n', '\n')).lstrip('\ufeff')
 
     # Prefer the standard markdown package for rich rendering.
@@ -86,6 +87,13 @@ def _markdown_to_html_document(markdown_text: str, title: str) -> str:
     except Exception:
         escaped = html_lib.escape(normalized_markdown)
         body_html = f'<pre>{escaped}</pre>'
+
+    return body_html
+
+
+def _markdown_to_html_document(markdown_text: str, title: str) -> str:
+    safe_title = html_lib.escape(title or 'Markdown Preview')
+    body_html = _render_markdown_body_html(markdown_text)
 
     return f"""<!doctype html>
 <html lang=\"zh-CN\">
@@ -208,6 +216,501 @@ def _markdown_to_html_document(markdown_text: str, title: str) -> str:
     </body>
 </html>
 """
+
+
+def _markdown_to_split_preview_document(markdown_text: str, title: str, pdf_preview_url: str = '') -> str:
+    safe_title = html_lib.escape(title or 'Markdown Preview')
+    body_html = _render_markdown_body_html(markdown_text)
+    safe_pdf_preview_url = html_lib.escape(pdf_preview_url or '')
+    has_pdf_preview = bool(pdf_preview_url)
+    markdown_json = json.dumps(markdown_text or '', ensure_ascii=False)
+    preview_html = (
+        f'<iframe class="pdf-frame" src="{safe_pdf_preview_url}" title="PDF预览"></iframe>'
+        if has_pdf_preview else '<div class="pdf-placeholder">暂无可预览PDF</div>'
+    )
+
+    return f"""<!doctype html>
+<html lang=\"zh-CN\">
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>{safe_title}</title>
+        <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/dist/toastui-editor.min.css\" />
+        <style>
+            :root {{
+                color-scheme: light;
+            }}
+            html,
+            body {{
+                margin: 0;
+                width: 100%;
+                height: 100%;
+                background: #f6f8fa;
+                color: #24292f;
+                font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif;
+            }}
+            .split-page {{
+                width: 100%;
+                height: 100vh;
+                display: grid;
+                grid-template-columns: 4fr 6fr;
+                gap: 12px;
+                padding: 12px;
+                box-sizing: border-box;
+            }}
+            .left-pane,
+            .right-pane {{
+                min-width: 0;
+                min-height: 0;
+                border: 1px solid #d0d7de;
+                border-radius: 10px;
+                background: #ffffff;
+                overflow: hidden;
+            }}
+            .left-pane {{
+                display: flex;
+                flex-direction: column;
+            }}
+            .right-pane {{
+                display: flex;
+                flex-direction: column;
+            }}
+            .pane-title {{
+                padding: 10px 12px;
+                border-bottom: 1px solid #e5e7eb;
+                font-size: 13px;
+                font-weight: 600;
+                color: #374151;
+                background: #f8fafc;
+            }}
+            .pdf-frame {{
+                width: 100%;
+                height: 100%;
+                border: none;
+                background: #ffffff;
+                flex: 1;
+            }}
+            .pdf-placeholder {{
+                height: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #6b7280;
+                font-size: 13px;
+                padding: 12px;
+                box-sizing: border-box;
+                flex: 1;
+            }}
+            .right-toolbar {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                padding: 10px 12px;
+                border-bottom: 1px solid #e5e7eb;
+                background: #f8fafc;
+            }}
+            .toolbar-group {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+            }}
+            .toolbar-btn {{
+                border: 1px solid #d1d5db;
+                background: #ffffff;
+                color: #1f2937;
+                font-size: 13px;
+                line-height: 1;
+                border-radius: 8px;
+                padding: 8px 12px;
+                cursor: pointer;
+            }}
+            .toolbar-btn:hover {{
+                border-color: #93c5fd;
+                color: #1d4ed8;
+            }}
+            .toolbar-btn.is-primary {{
+                border-color: #2563eb;
+                color: #ffffff;
+                background: #2563eb;
+            }}
+            .toolbar-btn:disabled {{
+                opacity: 0.55;
+                cursor: not-allowed;
+            }}
+            .toolbar-status {{
+                color: #6b7280;
+                font-size: 12px;
+                white-space: nowrap;
+            }}
+            .markdown-view-wrap,
+            .markdown-editor-wrap {{
+                flex: 1;
+                min-height: 0;
+            }}
+            .markdown-editor-wrap {{
+                display: none;
+                overflow: hidden;
+                background: #ffffff;
+            }}
+            .markdown-editor-wrap.is-active {{
+                display: block;
+            }}
+            .markdown-view-wrap.is-hidden {{
+                display: none;
+            }}
+            .markdown-scroll {{
+                width: 100%;
+                height: 100%;
+                overflow: auto;
+                box-sizing: border-box;
+                padding: 18px;
+            }}
+            #markdown-editor-host {{
+                height: 100%;
+            }}
+            .toastui-editor-defaultUI {{
+                border: none !important;
+            }}
+            .markdown-body {{
+                box-sizing: border-box;
+                line-height: 1.6;
+                word-wrap: break-word;
+            }}
+            .markdown-body h1,
+            .markdown-body h2,
+            .markdown-body h3,
+            .markdown-body h4,
+            .markdown-body h5,
+            .markdown-body h6 {{
+                margin-top: 24px;
+                margin-bottom: 16px;
+                line-height: 1.25;
+                font-weight: 600;
+            }}
+            .markdown-body h1,
+            .markdown-body h2 {{
+                border-bottom: 1px solid #d8dee4;
+                padding-bottom: 0.3em;
+            }}
+            .markdown-body p,
+            .markdown-body ul,
+            .markdown-body ol,
+            .markdown-body blockquote,
+            .markdown-body table,
+            .markdown-body pre {{
+                margin-top: 0;
+                margin-bottom: 16px;
+            }}
+            .markdown-body a {{
+                color: #0969da;
+                text-decoration: none;
+            }}
+            .markdown-body a:hover {{
+                text-decoration: underline;
+            }}
+            .markdown-body code {{
+                font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+                font-size: 85%;
+                background: rgba(175, 184, 193, 0.2);
+                border-radius: 6px;
+                padding: 0.2em 0.4em;
+            }}
+            .markdown-body pre {{
+                background: #f6f8fa;
+                border-radius: 8px;
+                padding: 16px;
+                overflow: auto;
+                line-height: 1.45;
+            }}
+            .markdown-body pre code {{
+                background: transparent;
+                padding: 0;
+            }}
+            .markdown-body blockquote {{
+                margin-left: 0;
+                padding: 0 1em;
+                color: #57606a;
+                border-left: 0.25em solid #d0d7de;
+            }}
+            .markdown-body table {{
+                width: max-content;
+                max-width: 100%;
+                border-collapse: collapse;
+            }}
+            .markdown-body th,
+            .markdown-body td {{
+                border: 1px solid #d0d7de;
+                padding: 6px 13px;
+            }}
+            .markdown-body tr:nth-child(2n) {{
+                background: #f6f8fa;
+            }}
+            .markdown-body hr {{
+                border: 0;
+                height: 0.25em;
+                padding: 0;
+                margin: 24px 0;
+                background: #d0d7de;
+            }}
+            @media (max-width: 1100px) {{
+                .split-page {{
+                    grid-template-columns: 1fr;
+                    grid-template-rows: 48vh auto;
+                }}
+                .right-toolbar {{
+                    flex-wrap: wrap;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <main class=\"split-page\">
+            <section class=\"left-pane\">
+                <div class=\"pane-title\">PDF预览</div>
+                {preview_html}
+            </section>
+            <section class=\"right-pane\">
+                <div class=\"right-toolbar\">
+                    <div class=\"toolbar-group\">
+                        <button id=\"btn-view\" class=\"toolbar-btn is-primary\" type=\"button\">查看</button>
+                        <button id=\"btn-edit\" class=\"toolbar-btn\" type=\"button\">编辑</button>
+                        <button id=\"btn-save\" class=\"toolbar-btn\" type=\"button\" disabled>保存</button>
+                        <button id=\"btn-cancel\" class=\"toolbar-btn\" type=\"button\" disabled>取消</button>
+                    </div>
+                    <div id=\"editor-status\" class=\"toolbar-status\">查看模式</div>
+                </div>
+                <div id=\"markdown-view-wrap\" class=\"markdown-view-wrap\">
+                    <div class=\"markdown-scroll\">
+                        <article class=\"markdown-body\">{body_html}</article>
+                    </div>
+                </div>
+                <div id=\"markdown-editor-wrap\" class=\"markdown-editor-wrap\">
+                    <div id=\"markdown-editor-host\"></div>
+                </div>
+            </section>
+        </main>
+        <script src=\"https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/dist/toastui-editor-all.min.js\"></script>
+        <script>
+            (() => {{
+                const initialMarkdown = {markdown_json};
+                const viewWrap = document.getElementById('markdown-view-wrap');
+                const editorWrap = document.getElementById('markdown-editor-wrap');
+                const statusEl = document.getElementById('editor-status');
+                const btnView = document.getElementById('btn-view');
+                const btnEdit = document.getElementById('btn-edit');
+                const btnSave = document.getElementById('btn-save');
+                const btnCancel = document.getElementById('btn-cancel');
+                const saveUrl = window.location.pathname;
+                const relativePath = window.location.pathname.split('/api/html/')[1] || '';
+                const uploadUrl = `/api/html-upload-image/${{relativePath}}`;
+
+                let editor = null;
+                let editing = false;
+                let currentMarkdown = initialMarkdown;
+
+                const setStatus = (text) => {{
+                    if (statusEl) {{
+                        statusEl.textContent = text;
+                    }}
+                }};
+
+                const toggleButtons = () => {{
+                    btnView.classList.toggle('is-primary', !editing);
+                    btnEdit.classList.toggle('is-primary', editing);
+                    btnSave.disabled = !editing;
+                    btnCancel.disabled = !editing;
+                }};
+
+                const enterEdit = () => {{
+                    if (editing) {{
+                        return;
+                    }}
+                    if (!window.toastui || !window.toastui.Editor) {{
+                        setStatus('编辑器加载失败（CDN不可用）');
+                        return;
+                    }}
+
+                    if (!editor) {{
+                        editor = new window.toastui.Editor({{
+                            el: document.getElementById('markdown-editor-host'),
+                            height: '100%',
+                            initialEditType: 'wysiwyg',
+                            previewStyle: 'vertical',
+                            initialValue: currentMarkdown,
+                            usageStatistics: false,
+                            toolbarItems: [
+                                ['heading', 'bold', 'italic', 'strike'],
+                                ['hr', 'quote'],
+                                ['ul', 'ol', 'task', 'indent', 'outdent'],
+                                ['table', 'image', 'link'],
+                                ['code', 'codeblock'],
+                            ],
+                        }});
+
+                        editor.removeHook('addImageBlobHook');
+                        editor.addHook('addImageBlobHook', async (blob, callback) => {{
+                            try {{
+                                const fd = new FormData();
+                                fd.append('image', blob, blob.name || 'pasted-image.png');
+
+                                const resp = await fetch(uploadUrl, {{
+                                    method: 'POST',
+                                    body: fd,
+                                    credentials: 'same-origin',
+                                }});
+                                const data = await resp.json();
+                                if (!resp.ok || !data?.url) {{
+                                    throw new Error(data?.message || '图片上传失败');
+                                }}
+
+                                callback(data.url, data.alt || 'image');
+                                setStatus('图片已插入');
+                            }} catch (err) {{
+                                setStatus(err?.message || '图片上传失败');
+                            }}
+                        }});
+                    }} else {{
+                        editor.setMarkdown(currentMarkdown || '');
+                    }}
+
+                    editing = true;
+                    viewWrap.classList.add('is-hidden');
+                    editorWrap.classList.add('is-active');
+                    toggleButtons();
+                    setStatus('编辑模式：支持标题、表格、复制粘贴图片');
+                }};
+
+                const exitEdit = () => {{
+                    if (!editing) {{
+                        return;
+                    }}
+                    if (editor) {{
+                        editor.setMarkdown(currentMarkdown || '');
+                    }}
+                    editing = false;
+                    viewWrap.classList.remove('is-hidden');
+                    editorWrap.classList.remove('is-active');
+                    toggleButtons();
+                    setStatus('查看模式');
+                }};
+
+                const saveMarkdown = async () => {{
+                    if (!editing || !editor) {{
+                        return;
+                    }}
+
+                    const nextMarkdown = editor.getMarkdown();
+                    setStatus('保存中...');
+                    try {{
+                        const resp = await fetch(saveUrl, {{
+                            method: 'PUT',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ markdown: nextMarkdown }}),
+                            credentials: 'same-origin',
+                        }});
+                        const data = await resp.json();
+                        if (!resp.ok) {{
+                            throw new Error(data?.message || '保存失败');
+                        }}
+
+                        currentMarkdown = nextMarkdown;
+                        setStatus('保存成功，正在刷新...');
+                        window.location.reload();
+                    }} catch (err) {{
+                        setStatus(err?.message || '保存失败');
+                    }}
+                }};
+
+                btnView?.addEventListener('click', exitEdit);
+                btnEdit?.addEventListener('click', enterEdit);
+                btnSave?.addEventListener('click', saveMarkdown);
+                btnCancel?.addEventListener('click', exitEdit);
+
+                toggleButtons();
+            }})();
+        </script>
+    </body>
+</html>
+"""
+
+
+def _find_origin_pdf_relative_path(ocr_root: str, md_relative_path: str) -> str:
+    normalized = posixpath.normpath(str(md_relative_path or '').replace('\\', '/')).lstrip('/')
+    if not normalized or normalized in {'.', '..'}:
+        return ''
+    if not normalized.lower().endswith('/full.md') and normalized.lower() != 'full.md':
+        return ''
+
+    md_abs_path = os.path.realpath(os.path.join(ocr_root, normalized))
+    if not (md_abs_path == ocr_root or md_abs_path.startswith(ocr_root + os.sep)):
+        return ''
+    folder_abs = os.path.dirname(md_abs_path)
+    if not os.path.isdir(folder_abs):
+        return ''
+
+    try:
+        entries = sorted(os.listdir(folder_abs))
+    except Exception:
+        return ''
+
+    strict_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_origin\.pdf$')
+
+    strict_matches = [
+        name for name in entries
+        if strict_pattern.fullmatch(name) and os.path.isfile(os.path.join(folder_abs, name))
+    ]
+    if strict_matches:
+        selected = strict_matches[0]
+    else:
+        fallback_matches = [
+            name for name in entries
+            if name.lower().endswith('_origin.pdf') and os.path.isfile(os.path.join(folder_abs, name))
+        ]
+        if not fallback_matches:
+            return ''
+        selected = fallback_matches[0]
+
+    relative_folder = posixpath.dirname(normalized)
+    if relative_folder in {'', '.'}:
+        return selected
+    return posixpath.join(relative_folder, selected)
+
+
+def _find_storage_pdf_relative_path_from_md(md_relative_path: str) -> str:
+    normalized = posixpath.normpath(str(md_relative_path or '').replace('\\', '/')).lstrip('/')
+    if not normalized or normalized in {'.', '..'}:
+        return ''
+    if not normalized.lower().endswith('/full.md') and normalized.lower() != 'full.md':
+        return ''
+
+    ocr_doc_dir = posixpath.dirname(normalized)
+    if ocr_doc_dir in {'', '.'}:
+        return ''
+
+    file_stem = posixpath.basename(ocr_doc_dir).strip()
+    parent_dir = posixpath.dirname(ocr_doc_dir)
+    if not file_stem:
+        return ''
+
+    guessed_path = posixpath.join(parent_dir, f'{file_stem}.pdf') if parent_dir not in {'', '.'} else f'{file_stem}.pdf'
+    guessed_path = _normalize_relative_path(guessed_path)
+    if not guessed_path:
+        return ''
+
+    exact_contract = Contract.query.filter_by(file_path=guessed_path).first()
+    if exact_contract and (exact_contract.file_path or '').strip():
+        return _normalize_relative_path(exact_contract.file_path)
+
+    lower_guess = guessed_path.lower()
+    case_insensitive_contract = Contract.query.filter(
+        Contract.file_path.isnot(None),
+        func.lower(Contract.file_path) == lower_guess,
+    ).first()
+    if case_insensitive_contract and (case_insensitive_contract.file_path or '').strip():
+        return _normalize_relative_path(case_insensitive_contract.file_path)
+
+    return guessed_path
 
 
 def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
@@ -1045,7 +1548,7 @@ def get_file_thumbnail():
 
 
 @files_bp.route('/html/', defaults={'relative_path': ''}, methods=['GET'])
-@files_bp.route('/html/<path:relative_path>', methods=['GET'])
+@files_bp.route('/html/<path:relative_path>', methods=['GET', 'PUT'])
 def serve_ocr_html_assets(relative_path):
     ocr_root = os.path.realpath(os.path.join(current_app.instance_path, 'ocr'))
     relative = posixpath.normpath(str(relative_path or '').replace('\\', '/')).lstrip('/')
@@ -1066,6 +1569,23 @@ def serve_ocr_html_assets(relative_path):
     if not (target_abs == ocr_root or target_abs.startswith(ocr_root + os.sep)):
         return jsonify({'message': '非法路径'}), 400
 
+    if request.method == 'PUT':
+        if not relative.lower().endswith('.md'):
+            return jsonify({'message': '仅支持保存 Markdown 文件'}), 400
+
+        body = request.get_json(silent=True) or {}
+        markdown_text = body.get('markdown')
+        if not isinstance(markdown_text, str):
+            return jsonify({'message': 'markdown is required'}), 400
+
+        try:
+            with open(target_abs, 'w', encoding='utf-8') as fp:
+                fp.write(markdown_text)
+        except Exception as exc:
+            return jsonify({'message': f'保存 Markdown 失败: {exc}'}), 500
+
+        return jsonify({'success': True, 'path': relative})
+
     if os.path.isdir(target_abs):
         directory_index_abs = os.path.join(target_abs, 'index.html')
         if not os.path.isfile(directory_index_abs):
@@ -1075,17 +1595,87 @@ def serve_ocr_html_assets(relative_path):
     if not os.path.exists(target_abs):
         return jsonify({'message': '文件不存在'}), 404
 
-    if relative.lower().endswith('.md'):
-        try:
-            with open(target_abs, 'r', encoding='utf-8') as fp:
-                markdown_text = fp.read()
-        except UnicodeDecodeError:
-            with open(target_abs, 'r', encoding='utf-8', errors='replace') as fp:
-                markdown_text = fp.read()
-        except Exception as exc:
-            return jsonify({'message': f'读取 Markdown 失败: {exc}'}), 500
-
-        html_doc = _markdown_to_html_document(markdown_text, os.path.basename(relative))
-        return html_doc, 200, {'Content-Type': 'text/html; charset=utf-8'}
-
     return send_from_directory(ocr_root, relative, as_attachment=False)
+
+
+@files_bp.get('/html-meta/<path:relative_path>')
+def get_ocr_html_meta(relative_path):
+    ocr_root = os.path.realpath(os.path.join(current_app.instance_path, 'ocr'))
+    relative = posixpath.normpath(str(relative_path or '').replace('\\', '/')).lstrip('/')
+
+    if not relative or relative in {'.', '..'}:
+        return jsonify({'message': '非法路径'}), 400
+    if not relative.lower().endswith('.md'):
+        return jsonify({'message': '仅支持 Markdown 路径'}), 400
+
+    md_abs = os.path.realpath(os.path.join(ocr_root, relative))
+    if not (md_abs == ocr_root or md_abs.startswith(ocr_root + os.sep)):
+        return jsonify({'message': '非法路径'}), 400
+    markdown_exists = os.path.exists(md_abs)
+
+    pdf_relative_path = _find_origin_pdf_relative_path(ocr_root, relative) if markdown_exists else ''
+    pdf_preview_url = ''
+    script_root = (request.script_root or '').rstrip('/')
+
+    if pdf_relative_path:
+        encoded_pdf_path = quote(pdf_relative_path, safe='/')
+        pdf_preview_url = f'{script_root}/api/html/{encoded_pdf_path}'
+    else:
+        storage_pdf_path = _find_storage_pdf_relative_path_from_md(relative)
+        if storage_pdf_path:
+            encoded_storage_pdf_path = quote(storage_pdf_path, safe='/')
+            pdf_preview_url = f'{script_root}/api/folders/file-preview?path={encoded_storage_pdf_path}'
+
+    return jsonify({
+        'path': relative,
+        'markdown_exists': bool(markdown_exists),
+        'pdf_preview_url': pdf_preview_url,
+    })
+
+
+@files_bp.post('/html-upload-image/<path:relative_path>')
+def upload_ocr_markdown_image(relative_path):
+    ocr_root = os.path.realpath(os.path.join(current_app.instance_path, 'ocr'))
+    relative = posixpath.normpath(str(relative_path or '').replace('\\', '/')).lstrip('/')
+    if not relative or relative in {'.', '..'}:
+        return jsonify({'message': '非法路径'}), 400
+    if not relative.lower().endswith('.md'):
+        return jsonify({'message': '仅支持 Markdown 路径'}), 400
+
+    md_abs = os.path.realpath(os.path.join(ocr_root, relative))
+    if not (md_abs == ocr_root or md_abs.startswith(ocr_root + os.sep)):
+        return jsonify({'message': '非法路径'}), 400
+    if not os.path.exists(md_abs):
+        return jsonify({'message': 'Markdown 文件不存在'}), 404
+
+    uploaded = request.files.get('image') or request.files.get('file')
+    if not uploaded or not (uploaded.filename or '').strip():
+        return jsonify({'message': 'image is required'}), 400
+
+    image_bytes = uploaded.read()
+    if not image_bytes:
+        return jsonify({'message': '图片内容为空'}), 400
+    if len(image_bytes) > 20 * 1024 * 1024:
+        return jsonify({'message': '图片大小不能超过20MB'}), 400
+
+    source_name = _sanitize_upload_filename(uploaded.filename or 'pasted-image.png')
+    ext = os.path.splitext(source_name)[1].lower()
+    if ext not in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}:
+        ext = '.png'
+
+    digest = hashlib.sha1(image_bytes).hexdigest()[:12]
+    file_name = f'img_{digest}{ext}'
+
+    md_dir_abs = os.path.dirname(md_abs)
+    images_abs = os.path.join(md_dir_abs, 'images')
+    os.makedirs(images_abs, exist_ok=True)
+    target_abs = os.path.join(images_abs, file_name)
+
+    if not os.path.exists(target_abs):
+        with open(target_abs, 'wb') as fp:
+            fp.write(image_bytes)
+
+    relative_dir = posixpath.dirname(relative)
+    image_relative_path = posixpath.join(relative_dir, 'images', file_name) if relative_dir else posixpath.join('images', file_name)
+    image_url = f"/api/html/{quote(image_relative_path, safe='/')}"
+    return jsonify({'url': image_url, 'alt': os.path.splitext(file_name)[0]})

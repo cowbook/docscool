@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import LoginView from './views/LoginView.vue'
+import OcrPreviewView from './views/OcrPreviewView.vue'
 import MainLayout from './views/MainLayout.vue'
 import HomeView from './views/HomeView.vue'
 import ContractView from './views/ContractView.vue'
@@ -13,6 +14,8 @@ import UserPermissionSettingsView from './views/UserPermissionSettingsView.vue'
 
 const routes = [
   { path: '/login', component: LoginView },
+  { path: '/preview/:ocrPath(.+)', component: OcrPreviewView },
+  { path: '/preview', component: OcrPreviewView },
   {
     path: '/',
     component: MainLayout,

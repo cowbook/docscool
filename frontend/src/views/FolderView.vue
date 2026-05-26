@@ -190,7 +190,7 @@
 
                 <el-link
                   class="file-cell"
-                  @click.stop="openFilePreview(scope.row)"
+                  @click.stop.prevent="openFilePreview(scope.row, $event)"
                   @contextmenu.prevent.stop="onFileCellContextMenu($event, scope.row)"
                 >
              
@@ -253,7 +253,13 @@
             </el-table-column>
   
 
-            <el-table-column prop="contract_number" label="合同编号" min-width="140" />
+            <el-table-column
+              prop="contract_number"
+              label="合同编号"
+              min-width="140"
+              show-overflow-tooltip
+              class-name="contract-number-col"
+            />
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
             <el-table-column prop="copy_count" label="份数" min-width="80" />
@@ -496,6 +502,30 @@ const treeProps = {
 }
 
 const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+const appBasePrefix = import.meta.env.BASE_URL || '/'
+
+const buildOcrPreviewUrlFromFilePath = (filePath) => {
+  const normalizedPath = normalizePath(filePath)
+  if (!normalizedPath) {
+    return ''
+  }
+
+  const parts = normalizedPath.split('/').filter(Boolean)
+  if (!parts.length) {
+    return ''
+  }
+
+  const last = String(parts[parts.length - 1] || '').trim()
+  const dotIndex = last.lastIndexOf('.')
+  parts[parts.length - 1] = dotIndex > 0 ? last.slice(0, dotIndex) : last
+
+  const encodedPath = parts
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join('/')
+
+  return `${appBasePrefix}preview/${encodedPath}/`
+}
 
 const isSuperAdminUser = computed(() => userPermission.value === 'super_admin')
 const isViewPermissionUser = computed(() => userPermission.value === 'view')
@@ -1977,7 +2007,10 @@ const downloadFile = async (row) => {
   }
 }
 
-const openFilePreview = async (row) => {
+const openFilePreview = (row, event) => {
+  event?.preventDefault?.()
+  event?.stopPropagation?.()
+
   if (!row?.file_path) {
     return
   }
@@ -1987,18 +2020,15 @@ const openFilePreview = async (row) => {
     return
   }
 
-  try {
-    const response = await http.get('/folders/file-preview', {
-      params: { path: row.file_path },
-      responseType: 'blob',
-    })
+  const previewUrl = buildOcrPreviewUrlFromFilePath(row.file_path)
+  if (!previewUrl) {
+    ElMessage.warning('预览地址无效')
+    return
+  }
 
-    resetPreview()
-    previewRow.value = row
-    previewUrl.value = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
-    previewDialogVisible.value = true
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '预览失败')
+  const opened = window.open(previewUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    ElMessage.warning('浏览器拦截了新窗口，请允许弹窗后重试')
   }
 }
 
@@ -2617,6 +2647,12 @@ watch(previewDialogVisible, (visible) => {
   width: 100%;
   min-width: 0;
   text-align: left;
+}
+
+.file-table :deep(.contract-number-col .cell) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .archive-status-icon {
