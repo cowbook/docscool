@@ -1,6 +1,11 @@
 # 待完善任务清单
 
-更新时间：2026-05-26
+更新时间：2026-06-03
+
+## 已完成（2026-06-03）
+- 全屏文件预览弹窗标题行新增目录面包路径（`/` 分隔）：
+	- `frontend/src/components/ContractItem.vue`
+	- `frontend/src/views/HomeView.vue`
 
 ## 1. 设置页 folder_options 稳定性
 - 处理远程存储场景下 FileStation `119` 会话失效导致 `/api/settings/users` 偶发 500。

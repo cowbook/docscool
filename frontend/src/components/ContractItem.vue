@@ -226,7 +226,10 @@
     >
       <template #header>
         <div class="fullscreen-dialog-header">
-          <span class="fullscreen-dialog-title">{{ fullPreviewTitle }}</span>
+          <div class="fullscreen-dialog-title-wrap">
+            <span class="fullscreen-dialog-title">{{ fullPreviewTitle }}</span>
+            <span class="fullscreen-dialog-breadcrumb" :title="fullPreviewBreadcrumb">目录：{{ fullPreviewBreadcrumb }}</span>
+          </div>
           <el-button
             type="primary"
             :disabled="!currentPreviewRow?.file_path"
@@ -414,7 +417,10 @@
     >
       <template #header>
         <div class="fullscreen-dialog-header">
-          <span class="fullscreen-dialog-title">文件预览 - {{ getFileName(linkSelectedFilePath || '') || '当前文件' }}</span>
+          <div class="fullscreen-dialog-title-wrap">
+            <span class="fullscreen-dialog-title">文件预览 - {{ getFileName(linkSelectedFilePath || '') || '当前文件' }}</span>
+            <span class="fullscreen-dialog-breadcrumb" :title="linkFullPreviewBreadcrumb">目录：{{ linkFullPreviewBreadcrumb }}</span>
+          </div>
         </div>
       </template>
 
@@ -597,6 +603,14 @@ const fullPreviewTitle = computed(() => {
   const name = getFileName(currentPreviewRow.value?.file_path || '')
   return name ? `文件预览 - ${name}` : '文件预览'
 })
+
+const formatStorageBreadcrumb = (value) => {
+  const parentPath = getParentPath(value)
+  return parentPath ? `/${parentPath}` : '/'
+}
+
+const fullPreviewBreadcrumb = computed(() => formatStorageBreadcrumb(currentPreviewRow.value?.file_path || ''))
+const linkFullPreviewBreadcrumb = computed(() => formatStorageBreadcrumb(linkSelectedFilePath.value))
 
 const apiPrefix = import.meta.env.PROD ? '/docs/api' : '/api'
 const appBasePrefix = import.meta.env.BASE_URL || '/'
@@ -2211,11 +2225,27 @@ defineExpose({
   padding-right: 32px;
 }
 
+.fullscreen-dialog-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .fullscreen-dialog-title {
   min-width: 0;
   font-size: 18px;
   font-weight: 600;
   color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fullscreen-dialog-breadcrumb {
+  min-width: 0;
+  color: #6b7280;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

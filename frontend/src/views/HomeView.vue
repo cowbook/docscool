@@ -141,7 +141,10 @@
     >
       <template #header>
         <div class="latest-preview-header">
-          <span class="latest-preview-title" :title="activePreviewName">{{ activePreviewName }}</span>
+          <div class="latest-preview-title-wrap">
+            <span class="latest-preview-title" :title="activePreviewName">{{ activePreviewName }}</span>
+            <span class="latest-preview-breadcrumb" :title="activePreviewBreadcrumb">目录：{{ activePreviewBreadcrumb }}</span>
+          </div>
         </div>
       </template>
 
@@ -254,6 +257,7 @@ const previewVisible = ref(false)
 const previewLoading = ref(false)
 const activePreviewUrl = ref('')
 const activePreviewName = ref('')
+const activePreviewPath = ref('')
 const previewRequestId = ref(0)
 const contractItemRef = ref(null)
 const contractItemAiParsing = ref(false)
@@ -533,6 +537,20 @@ const shouldRedirectToLogin = (statusCode, message) => {
 
 const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
+const getParentPath = (value) => {
+  const path = normalizePath(value)
+  if (!path) {
+    return ''
+  }
+  const idx = path.lastIndexOf('/')
+  return idx >= 0 ? path.slice(0, idx) : ''
+}
+
+const activePreviewBreadcrumb = computed(() => {
+  const parentPath = getParentPath(activePreviewPath.value)
+  return parentPath ? `/${parentPath}` : '/'
+})
+
 const loadCurrentUserPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
@@ -651,6 +669,7 @@ const openLatestPreview = async (item) => {
   previewRequestId.value = requestId
 
   activePreviewName.value = item.name || '文件预览'
+  activePreviewPath.value = item.file_path || ''
   previewVisible.value = true
   previewLoading.value = true
 
@@ -679,6 +698,7 @@ watch(previewVisible, (visible) => {
   if (!visible) {
     previewRequestId.value = 0
     previewLoading.value = false
+    activePreviewPath.value = ''
     releasePreviewUrl()
   }
 })
@@ -988,10 +1008,26 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.latest-preview-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .latest-preview-title {
   font-size: 16px;
   font-weight: 600;
   color: #2d4f87;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.latest-preview-breadcrumb {
+  min-width: 0;
+  color: #6b7280;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
