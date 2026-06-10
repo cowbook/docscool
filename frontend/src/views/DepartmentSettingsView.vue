@@ -42,8 +42,8 @@ import http from '../api/http'
 const departments = ref([])
 const newDepartment = ref('')
 const saving = ref(false)
-const userPermission = ref('view')
-const canManage = computed(() => userPermission.value === 'super_admin')
+const userRole = ref('admin')
+const canManage = computed(() => userRole.value === 'super_admin')
 
 const loadDepartments = async () => {
   const { data } = await http.get('/settings/departments')
@@ -53,9 +53,9 @@ const loadDepartments = async () => {
 const loadCurrentPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
-    userPermission.value = String(data?.permission || 'view').trim() || 'view'
+    userRole.value = String(data?.role || 'admin').trim() || 'admin'
   } catch (_error) {
-    userPermission.value = 'view'
+    userRole.value = 'admin'
   }
 }
 

@@ -54,6 +54,10 @@
                 <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>项目设置</span>
               </el-menu-item>
+              <el-menu-item index="/settings/stamp-tax-rates">
+                <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>印花税率</span>
+              </el-menu-item>
               <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
                 <Icon :icon="userPermissionIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>用户权限</span>
@@ -138,6 +142,10 @@
             <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
             <span>项目设置</span>
           </el-menu-item>
+          <el-menu-item index="/settings/stamp-tax-rates">
+            <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
+            <span>印花税率</span>
+          </el-menu-item>
           <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
             <Icon :icon="userPermissionIcon" style="font-size:20px;vertical-align:middle;" />
             <span>用户权限</span>
@@ -168,7 +176,7 @@ const router = useRouter()
 const drawer = ref(false)
 const isMobile = ref(false)
 const username = localStorage.getItem('username') || '未登录用户'
-const currentUserPermission = ref('')
+const currentUserRole = ref('admin')
 const avatarText = computed(() => {
   const text = username.trim()
   if (!text) {
@@ -182,7 +190,7 @@ const canShowUserPermissionMenu = computed(() => {
   if (normalizedUsername === 'zhangyan') {
     return true
   }
-  return String(currentUserPermission.value || '').trim() === 'super_admin'
+  return String(currentUserRole.value || '').trim() === 'super_admin'
 })
 
 const activePath = computed(() => route.path)
@@ -193,6 +201,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/contracts')) return '合同管理'
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'
+  if (route.path === '/settings/stamp-tax-rates') return '印花税率'
   if (route.path === '/settings/users') return '用户权限'
   if (route.path === '/settings/password') return '密码修改'
   if (route.path.startsWith('/settings')) return '系统设置'
@@ -220,9 +229,9 @@ const onUserMenuCommand = (command) => {
 const loadCurrentUserPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
-    currentUserPermission.value = String(data?.permission || '').trim()
+    currentUserRole.value = String(data?.role || 'admin').trim() || 'admin'
   } catch (_error) {
-    currentUserPermission.value = ''
+    currentUserRole.value = 'admin'
   }
 }
 

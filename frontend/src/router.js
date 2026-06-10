@@ -9,6 +9,7 @@ import FolderView from './views/FolderView.vue'
 import LogoutView from './views/LogoutView.vue'
 import DepartmentSettingsView from './views/DepartmentSettingsView.vue'
 import ProjectSettingsView from './views/ProjectSettingsView.vue'
+import StampTaxRateSettingsView from './views/StampTaxRateSettingsView.vue'
 import PasswordSettingsView from './views/PasswordSettingsView.vue'
 import UserPermissionSettingsView from './views/UserPermissionSettingsView.vue'
 
@@ -26,6 +27,7 @@ const routes = [
       { path: 'contracts/folders', component: FolderView },
       { path: 'settings/departments', component: DepartmentSettingsView },
       { path: 'settings/projects', component: ProjectSettingsView },
+      { path: 'settings/stamp-tax-rates', component: StampTaxRateSettingsView },
       { path: 'settings/users', component: UserPermissionSettingsView },
       { path: 'settings/password', component: PasswordSettingsView },
       { path: 'settings/logout', component: LogoutView },

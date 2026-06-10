@@ -449,7 +449,84 @@ const rewriteMarkdownUrls = (markdownText, mapUrl) => {
   })
 }
 
-const toEditorMarkdown = (markdownText) => rewriteMarkdownUrls(markdownText, (url) => resolveAssetUrl(url))
+const normalizeTableCellText = (value) => String(value || '')
+  .replace(/\r?\n+/g, '<br>')
+  .replace(/\|/g, '\\|')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const htmlTableToMarkdown = (tableHtml) => {
+  if (typeof document === 'undefined') {
+    return tableHtml
+  }
+
+  const wrap = document.createElement('div')
+  wrap.innerHTML = tableHtml
+  const table = wrap.querySelector('table')
+  if (!table) {
+    return tableHtml
+  }
+
+  const rows = Array.from(table.querySelectorAll('tr'))
+    .map((tr) => Array.from(tr.children)
+      .filter((cell) => cell.tagName === 'TH' || cell.tagName === 'TD')
+      .map((cell) => ({
+        isHeader: cell.tagName === 'TH',
+        text: normalizeTableCellText(cell.textContent || ''),
+      })))
+    .filter((cells) => cells.length > 0)
+
+  if (!rows.length) {
+    return tableHtml
+  }
+
+  const headerRowIndex = rows.findIndex((cells) => cells.some((cell) => cell.isHeader))
+  const useHeaderIndex = headerRowIndex >= 0 ? headerRowIndex : 0
+
+  const headerCells = rows[useHeaderIndex].map((cell) => cell.text || ' ')
+  const bodyRows = rows.filter((_row, index) => index !== useHeaderIndex)
+
+  const maxColumns = Math.max(
+    headerCells.length,
+    ...bodyRows.map((row) => row.length),
+    1,
+  )
+
+  const normalizeRowColumns = (cells) => {
+    const next = Array.from({ length: maxColumns }, (_, index) => cells[index] || ' ')
+    return `| ${next.join(' | ')} |`
+  }
+
+  const lines = []
+  lines.push(normalizeRowColumns(headerCells))
+  lines.push(`| ${Array.from({ length: maxColumns }, () => '---').join(' | ')} |`)
+  bodyRows.forEach((row) => {
+    lines.push(normalizeRowColumns(row.map((cell) => cell.text || ' ')))
+  })
+
+  return `\n${lines.join('\n')}\n`
+}
+
+const convertHtmlTablesToMarkdown = (markdownText) => {
+  const text = String(markdownText || '')
+  if (!text || !/<table[\s>]/i.test(text)) {
+    return text
+  }
+
+  // Keep fenced code blocks untouched to avoid mutating literal examples.
+  const segments = text.split(/(```[\s\S]*?```)/g)
+  return segments.map((segment, index) => {
+    if (index % 2 === 1) {
+      return segment
+    }
+    return segment.replace(/<table[\s\S]*?<\/table>/gi, (tableHtml) => htmlTableToMarkdown(tableHtml))
+  }).join('')
+}
+
+const toEditorMarkdown = (markdownText) => {
+  const tableNormalized = convertHtmlTablesToMarkdown(markdownText)
+  return rewriteMarkdownUrls(tableNormalized, (url) => resolveAssetUrl(url))
+}
 
 const fromEditorMarkdown = (markdownText) => rewriteMarkdownUrls(markdownText, (url) => toRelativeFromApiHtmlUrl(url))
 

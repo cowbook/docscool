@@ -58,7 +58,7 @@ files_bp = Blueprint('files', __name__, url_prefix='/api')
 THUMB_WIDTH = 210
 THUMB_HEIGHT = 290
 LATEST_UPLOAD_LIMIT = 12
-PERMISSION_SUPER_ADMIN = 'super_admin'
+ROLE_SUPER_ADMIN = 'super_admin'
 PERMISSION_ALL = '全部'
 
 
@@ -722,13 +722,13 @@ def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
     if not row:
         return False, set()
 
-    permission_value = str(row.permission or '').strip()
-    if permission_value == PERMISSION_SUPER_ADMIN:
+    if str(getattr(row, 'role', '') or '').strip() == ROLE_SUPER_ADMIN:
         return True, set()
 
+    aggregated = row.get_aggregated_permission()
     allowed_folders = {
-        item.strip()
-        for item in str(row.folders or '').split(',')
+        str(item).strip()
+        for item in (aggregated.get('folders') or [])
         if item and item.strip()
     }
     if PERMISSION_ALL in allowed_folders:

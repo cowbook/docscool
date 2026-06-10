@@ -517,6 +517,7 @@ const importDialogVisible = ref(false)
 const currentPage = ref(1)
 const contractItemRef = ref(null)
 const currentUserPermission = ref('view')
+const currentUserRole = ref('admin')
 const currentUserDepartmentList = ref([])
 const sortState = reactive({ prop: '', order: '' })
 const tableColumns = ref(loadStoredTableColumns())
@@ -724,7 +725,7 @@ const totalContracts = computed(() => sortedContracts.value ? sortedContracts.va
 const isViewPermissionUser = computed(() => String(currentUserPermission.value || '').trim() === 'view')
 
 const showDepartmentRestrictedNotice = computed(() => {
-  const isSuperAdmin = String(currentUserPermission.value || '').trim() === 'super_admin'
+  const isSuperAdmin = String(currentUserRole.value || '').trim() === 'super_admin'
   if (isSuperAdmin) {
     return false
   }
@@ -830,6 +831,7 @@ const loadFieldOptions = async () => {
 
 const loadCurrentUserPermission = async () => {
   const { data } = await http.get('/settings/users/current-permission')
+  currentUserRole.value = String(data?.role || 'admin').trim() || 'admin'
   currentUserPermission.value = String(data?.permission || 'view').trim() || 'view'
   currentUserDepartmentList.value = Array.isArray(data?.department_list)
     ? data.department_list.map((item) => String(item || '').trim()).filter(Boolean)

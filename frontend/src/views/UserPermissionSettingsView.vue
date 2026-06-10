@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <div class="card-title">用户权限</div>
-            <div class="card-tip">本系统管理的用户权限对应群晖里的docscool用户组，超管权限拥有全部部门和文件夹的访问权限</div>
+            <div class="card-tip">本系统管理的用户权限对应群晖里的docscool用户组，超管默认拥有全部部门和文件夹的编辑权限，可以进行参数设置，只有金色图标的群晖的管理员可以访问本页面进行用户权限设置</div>
           </div>
           <el-button-group v-if="canManageUserAddDelete" class="apple-button-group">
             <el-button type="primary" :loading="addingUser" @click="addExistingUser">
@@ -46,12 +46,12 @@
           <template #default="scope">
             <div class="login-name-cell">
               <el-tooltip
-                :content="scope.row.me_added ? '本用户由本系统创建' : '本用户不是由本系统创建'"
+                :content="getLoginNameTooltip(scope.row)"
                 placement="top"
               >
                 <span
                   class="login-name-icon"
-                  :class="scope.row.me_added ? 'login-name-icon-self-created' : 'login-name-icon-external'"
+                  :class="getLoginNameIconClass(scope.row)"
                   aria-hidden="true"
                 >
                   <el-icon><User /></el-icon>
@@ -62,85 +62,31 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="描述" min-width="260">
+        <el-table-column label="角色" width="140">
           <template #default="scope">
-            <el-input
-              v-model="scope.row.description"
-              maxlength="255"
-              clearable
-              placeholder="请输入描述"
-            />
+            <el-tag :type="scope.row.role === 'super_admin' ? 'danger' : 'warning'">
+              {{ scope.row.role === 'super_admin' ? '超管' : '管理员' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="权限" min-width="250">
+        <el-table-column label="描述" min-width="260" prop="description" />
+        <el-table-column label="权限配置列表" min-width="760">
           <template #default="scope">
-            <el-radio-group v-model="scope.row.permission">
-              <el-radio value="super_admin">超管</el-radio>
-              <el-radio value="edit">编辑</el-radio>
-              <el-radio value="view">查看</el-radio>
-            </el-radio-group>
-          </template>
-        </el-table-column>
-        <el-table-column label="部门" min-width="320">
-          <template #default="scope">
-            <el-select
-              v-model="scope.row.department_list"
-              multiple
-              filterable
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              :loading="departmentOptionsLoading"
-              loading-text="部门选项加载中..."
-              placeholder="请选择部门"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="item in departmentOptions"
-                :key="item"
-                :label="item"
-                :value="item"
+            <div class="permission-text-list">
+              <div
+                v-for="(item, index) in scope.row.permission_list"
+                :key="`${scope.row.id}-${index}`"
+                class="permission-text-item"
               >
-                <span class="option-with-icon">
-                  <el-icon><OfficeBuilding /></el-icon>
-                  <span>{{ item }}</span>
-                </span>
-              </el-option>
-            </el-select>
-          </template>
-        </el-table-column>
-        <el-table-column label="文件夹" min-width="360">
-          <template #default="scope">
-            <el-select
-              v-model="scope.row.folder_list"
-              multiple
-              filterable
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              :loading="folderOptionsLoading"
-              loading-text="文件夹选项加载中..."
-              placeholder="请选择文件夹"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="item in folderOptions"
-                :key="item"
-                :label="item"
-                :value="item"
-              >
-                <span class="option-with-icon">
-                  <el-icon><Folder /></el-icon>
-                  <span>{{ item }}</span>
-                </span>
-              </el-option>
-            </el-select>
+                {{ index + 1 }}. {{ formatPermissionText(item) }}
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right">
           <template #default="scope">
-            <el-button type="primary" link :loading="savingRowId === scope.row.id" @click="saveRow(scope.row)">
-              保存
+            <el-button type="primary" link @click="openPermissionEditDialog(scope.row)">
+              编辑
             </el-button>
             <el-button
               v-if="canManageUserAddDelete"
@@ -205,11 +151,14 @@
 
       <el-dialog
         v-model="createUserDialogVisible"
-        title="创建用户"
-        width="540px"
+        :title="isEditingUserDialog ? '编辑用户' : '创建用户'"
+        width="810px"
+        class="create-user-dialog"
         destroy-on-close
       >
-        <div class="reset-password-tip">系统会先在群晖服务器创建用户，再加入 docscool 用户组，最后写入数据库</div>
+        <div class="reset-password-tip">
+          {{ isEditingUserDialog ? '当前为编辑模式，登录名不可修改' : '系统会先在群晖服务器创建用户，再加入 docscool 用户组，最后写入数据库' }}
+        </div>
         <el-form label-width="96px" class="reset-password-form">
           <el-form-item label="登录名" required>
             <el-input
@@ -217,6 +166,7 @@
               maxlength="128"
               autocomplete="off"
               placeholder="仅允许小写字母、数字、下划线"
+              :disabled="isEditingUserDialog"
             />
           </el-form-item>
           <el-form-item label="姓名">
@@ -227,7 +177,7 @@
               placeholder="可为空"
             />
           </el-form-item>
-          <el-form-item label="密码" required>
+          <el-form-item v-if="!isEditingUserDialog" label="密码" required>
             <el-input
               v-model="createUserForm.password"
               type="password"
@@ -236,7 +186,7 @@
               placeholder="8位以上，包含大小写字母、数字和特殊字符"
             />
           </el-form-item>
-          <el-form-item label="密码验证">
+          <el-form-item v-if="!isEditingUserDialog" label="密码验证">
             <el-input
               v-model="createUserForm.passwordConfirm"
               type="password"
@@ -245,73 +195,104 @@
               placeholder="请再次输入密码"
             />
           </el-form-item>
-          <el-form-item label="权限" required>
-            <el-radio-group v-model="createUserForm.permission" @change="handleCreateUserPermissionChange">
+          <el-form-item label="角色" required>
+            <el-radio-group v-model="createUserForm.role" @change="handleCreateUserRoleChange">
               <el-radio value="super_admin">超管</el-radio>
-              <el-radio value="edit">编辑</el-radio>
-              <el-radio value="view">查看</el-radio>
+              <el-radio value="admin">管理员</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="部门" required>
-            <el-select
-              v-model="createUserForm.department_list"
-              multiple
-              filterable
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              :disabled="createUserForm.permission === 'super_admin'"
-              :loading="departmentOptionsLoading"
-              loading-text="部门选项加载中..."
-              placeholder="请选择部门"
-              style="width: 100%"
+          <div class="permission-edit-header create-permission-header">
+            <el-button
+              type="primary"
+              link
+              @click="createUserForm.permission_list = addPermissionBinding(createUserForm.permission_list)"
             >
-              <el-option
-                v-for="item in departmentOptions"
-                :key="`create-department-${item}`"
-                :label="item"
-                :value="item"
-              >
-                <span class="option-with-icon">
-                  <el-icon><OfficeBuilding /></el-icon>
-                  <span>{{ item }}</span>
-                </span>
-              </el-option>
-            </el-select>
-          </el-form-item>
-          <el-form-item label="文件夹" required>
-            <el-select
-              v-model="createUserForm.folder_list"
-              multiple
-              filterable
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              :disabled="createUserForm.permission === 'super_admin'"
-              :loading="folderOptionsLoading"
-              loading-text="文件夹选项加载中..."
-              placeholder="请选择文件夹"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="item in folderOptions"
-                :key="`create-folder-${item}`"
-                :label="item"
-                :value="item"
-              >
-                <span class="option-with-icon">
-                  <el-icon><Folder /></el-icon>
-                  <span>{{ item }}</span>
-                </span>
-              </el-option>
-            </el-select>
-          </el-form-item>
+              <el-icon><Plus /></el-icon>
+              <span>新增权限</span>
+            </el-button>
+          </div>
+          <el-table
+            :data="createUserForm.permission_list"
+            size="small"
+            border
+            class="permission-nested-table"
+          >
+            <el-table-column label="权限" width="180">
+              <template #default="permissionScope">
+                  <el-select
+                    v-model="permissionScope.row.permission"
+                    placeholder="请选择权限"
+                    style="width: 100%"
+                  >
+                    <el-option label="编辑" value="edit" />
+                    <el-option label="查看" value="view" />
+                  </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="部门" min-width="260">
+              <template #default="permissionScope">
+                <el-select
+                  v-model="permissionScope.row.departments"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  clearable
+                  :loading="departmentOptionsLoading"
+                  placeholder="请选择部门"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="item in departmentOptions"
+                    :key="`create-department-${item}`"
+                    :label="item"
+                    :value="item"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="文件夹" min-width="280">
+              <template #default="permissionScope">
+                <el-select
+                  v-model="permissionScope.row.folders"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  clearable
+                  :loading="folderOptionsLoading"
+                  placeholder="请选择文件夹"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="item in folderOptions"
+                    :key="`create-folder-${item}`"
+                    :label="item"
+                    :value="item"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="90">
+              <template #default="permissionScope">
+                <el-button
+                  type="danger"
+                  link
+                  @click="createUserForm.permission_list = removePermissionBinding(createUserForm.permission_list, permissionScope.$index)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </el-form>
 
         <template #footer>
           <div class="dialog-footer">
             <el-button @click="closeCreateUserDialog">取消</el-button>
-            <el-button type="primary" :loading="createUserSubmitting" @click="submitCreateUser">确定</el-button>
+            <el-button type="primary" :loading="createUserSubmitting" @click="submitCreateUser">
+              {{ isEditingUserDialog ? '保存' : '确定' }}
+            </el-button>
           </div>
         </template>
       </el-dialog>
@@ -335,7 +316,6 @@ const folderOptions = ref([])
 const syncWarnings = ref([])
 const initialLoading = ref(true)
 const addingUser = ref(false)
-const savingRowId = ref(0)
 const removingRowId = ref(0)
 const deletingRowId = ref(0)
 const resettingRowId = ref(0)
@@ -350,23 +330,32 @@ const resetPasswordForm = ref({
 })
 const createUserDialogVisible = ref(false)
 const createUserSubmitting = ref(false)
+const userDialogMode = ref('create')
+const editingUserId = ref(0)
 const createUserForm = ref({
   login_name: '',
   name: '',
   password: '',
   passwordConfirm: '',
-  permission: 'view',
-  department_list: [],
-  folder_list: [],
+  role: 'admin',
+  permission_list: [
+    {
+      permission: 'view',
+      departments: [],
+      folders: [],
+    },
+  ],
 })
 const currentPermission = ref('view')
+const currentRole = ref('admin')
 const currentLoginName = ref('')
 const canManageUserAddDelete = computed(() => {
-  if (currentPermission.value === 'super_admin') {
+  if (currentRole.value === 'super_admin') {
     return true
   }
   return currentLoginName.value.toLowerCase() === 'zhangyan'
 })
+const isEditingUserDialog = computed(() => userDialogMode.value === 'edit')
 
 const normalizeDepartmentList = (value) => {
   if (!Array.isArray(value)) {
@@ -400,13 +389,74 @@ const normalizeDepartmentOptions = (value) => {
   return ['全部', ...normalized]
 }
 
+const normalizePermissionList = (value) => {
+  const source = Array.isArray(value) ? value : []
+  const normalized = source
+    .map((item) => {
+      const permission = String(item?.permission || '').trim()
+      if (!['edit', 'view'].includes(permission)) {
+        return null
+      }
+      const departments = normalizeDepartmentList(item?.departments)
+      const folders = normalizeDepartmentList(item?.folders)
+      return {
+        permission,
+        departments,
+        folders,
+      }
+    })
+    .filter(Boolean)
+
+  if (normalized.length) {
+    return normalized
+  }
+
+  return [{
+    permission: 'view',
+    departments: [],
+    folders: [],
+  }]
+}
+
+const formatPermissionLabel = (permission) => {
+  if (permission === 'edit') {
+    return '编辑'
+  }
+  return '查看'
+}
+
+const formatPermissionText = (item) => {
+  const permission = formatPermissionLabel(String(item?.permission || '').trim())
+  const departments = normalizeDepartmentList(item?.departments)
+  const folders = normalizeDepartmentList(item?.folders)
+  const departmentText = departments.length ? departments.join('、') : '无'
+  const folderText = folders.length ? folders.join('、') : '无'
+  return `${permission} | 部门: ${departmentText} | 文件夹: ${folderText}`
+}
+
+const getLoginNameIconClass = (row) => {
+  if (row?.is_synology_admin) {
+    return 'login-name-icon-synology-admin'
+  }
+  return row?.me_added ? 'login-name-icon-self-created' : 'login-name-icon-external'
+}
+
+const getLoginNameTooltip = (row) => {
+  const baseText = row?.me_added ? '本用户由本系统创建' : '本用户不是由本系统创建'
+  return row?.is_synology_admin ? `${baseText}（群晖管理员）` : baseText
+}
+
 const loadUsers = async () => {
   const { data } = await http.get('/settings/users')
   const list = Array.isArray(data?.users) ? data.users : []
   rows.value = list.map((item) => ({
     ...item,
+    role: ['super_admin', 'admin'].includes(String(item?.role || '').trim())
+      ? String(item.role).trim()
+      : 'admin',
     department_list: normalizeDepartmentList(item.department_list),
     folder_list: normalizeDepartmentList(item.folder_list),
+    permission_list: normalizePermissionList(item.permission_list),
   }))
   syncWarnings.value = Array.isArray(data?.warnings) ? data.warnings : []
 }
@@ -415,9 +465,11 @@ const loadCurrentPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
     currentPermission.value = String(data?.permission || 'view').trim() || 'view'
+    currentRole.value = String(data?.role || 'admin').trim() || 'admin'
     currentLoginName.value = String(data?.login_name || '').trim()
   } catch (_error) {
     currentPermission.value = 'view'
+    currentRole.value = 'admin'
     currentLoginName.value = ''
   }
 }
@@ -490,14 +542,21 @@ const addExistingUser = async () => {
 }
 
 const openCreateUserDialog = () => {
+  userDialogMode.value = 'create'
+  editingUserId.value = 0
   createUserForm.value = {
     login_name: '',
     name: '',
     password: '',
     passwordConfirm: '',
-    permission: 'view',
-    department_list: [],
-    folder_list: [],
+    role: 'admin',
+    permission_list: [
+      {
+        permission: 'view',
+        departments: [],
+        folders: [],
+      },
+    ],
   }
   createUserDialogVisible.value = true
 }
@@ -505,18 +564,32 @@ const openCreateUserDialog = () => {
 const closeCreateUserDialog = () => {
   createUserDialogVisible.value = false
   createUserSubmitting.value = false
+  userDialogMode.value = 'create'
+  editingUserId.value = 0
 }
 
-const handleCreateUserPermissionChange = (value) => {
+const handleCreateUserRoleChange = (value) => {
   if (String(value || '').trim() !== 'super_admin') {
     return
   }
-  createUserForm.value.department_list = ['全部']
-  createUserForm.value.folder_list = ['全部']
+  const current = normalizePermissionList(createUserForm.value.permission_list)
+  if (!current.length) {
+    createUserForm.value.permission_list = [{
+      permission: 'view',
+      departments: ['全部'],
+      folders: ['全部'],
+    }]
+    return
+  }
+  createUserForm.value.permission_list = current.map((item) => ({
+    ...item,
+    departments: item.departments.length ? item.departments : ['全部'],
+    folders: item.folders.length ? item.folders : ['全部'],
+  }))
 }
 
 const submitCreateUser = async () => {
-  if (!canManageUserAddDelete.value) {
+  if (!isEditingUserDialog.value && !canManageUserAddDelete.value) {
     ElMessage.warning('当前账号无新增/删除用户权限')
     return
   }
@@ -525,96 +598,120 @@ const submitCreateUser = async () => {
   const displayName = String(createUserForm.value.name || '').trim()
   const password = String(createUserForm.value.password || '').trim()
   const passwordConfirm = String(createUserForm.value.passwordConfirm || '').trim()
-  const permission = String(createUserForm.value.permission || '').trim()
+  const role = String(createUserForm.value.role || '').trim()
 
-  if (!/^[a-z0-9_]+$/.test(loginName)) {
-    ElMessage.warning('登录名仅允许连续的小写英文字母、数字和下划线')
+  if (!isEditingUserDialog.value) {
+    if (!/^[a-z0-9_]+$/.test(loginName)) {
+      ElMessage.warning('登录名仅允许连续的小写英文字母、数字和下划线')
+      return
+    }
+    if (!password) {
+      ElMessage.warning('请输入密码')
+      return
+    }
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$/.test(password)) {
+      ElMessage.warning('密码必须为8位以上且包含大小写字母、数字和特殊字符')
+      return
+    }
+    if (!passwordConfirm) {
+      ElMessage.warning('请输入密码验证')
+      return
+    }
+    if (password !== passwordConfirm) {
+      ElMessage.warning('两次输入的密码不一致')
+      return
+    }
+  }
+  if (!['super_admin', 'admin'].includes(role)) {
+    ElMessage.warning('请选择角色')
     return
   }
-  if (!password) {
-    ElMessage.warning('请输入密码')
+  const permissionList = normalizePermissionList(createUserForm.value.permission_list)
+  if (!permissionList.length) {
+    ElMessage.warning('请至少添加一条权限绑定')
     return
   }
-  if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$/.test(password)) {
-    ElMessage.warning('密码必须为8位以上且包含大小写字母、数字和特殊字符')
-    return
-  }
-  if (!passwordConfirm) {
-    ElMessage.warning('请输入密码验证')
-    return
-  }
-  if (password !== passwordConfirm) {
-    ElMessage.warning('两次输入的密码不一致')
-    return
-  }
-  if (!['super_admin', 'edit', 'view'].includes(permission)) {
-    ElMessage.warning('请选择权限')
-    return
-  }
-  if (!Array.isArray(createUserForm.value.department_list) || createUserForm.value.department_list.length === 0) {
-    ElMessage.warning('请选择部门')
-    return
-  }
-  if (!Array.isArray(createUserForm.value.folder_list) || createUserForm.value.folder_list.length === 0) {
-    ElMessage.warning('请选择文件夹')
-    return
-  }
-  const lowerPassword = password.toLowerCase()
-  const loginNameText = loginName.toLowerCase().replace(/\s+/g, '')
-  const displayNameText = displayName.toLowerCase().replace(/\s+/g, '')
-  if (loginNameText && lowerPassword.replace(/\s+/g, '').includes(loginNameText)) {
-    ElMessage.warning('密码不能包含登录名')
-    return
-  }
-  if (displayNameText && lowerPassword.replace(/\s+/g, '').includes(displayNameText)) {
-    ElMessage.warning('密码不能包含姓名描述')
-    return
+  if (!isEditingUserDialog.value) {
+    const lowerPassword = password.toLowerCase()
+    const loginNameText = loginName.toLowerCase().replace(/\s+/g, '')
+    const displayNameText = displayName.toLowerCase().replace(/\s+/g, '')
+    if (loginNameText && lowerPassword.replace(/\s+/g, '').includes(loginNameText)) {
+      ElMessage.warning('密码不能包含登录名')
+      return
+    }
+    if (displayNameText && lowerPassword.replace(/\s+/g, '').includes(displayNameText)) {
+      ElMessage.warning('密码不能包含姓名描述')
+      return
+    }
   }
 
   createUserSubmitting.value = true
   try {
-    const normalizedDepartments = permission === 'super_admin'
-      ? ['全部']
-      : normalizeDepartmentList(createUserForm.value.department_list)
-    const normalizedFolders = permission === 'super_admin'
-      ? ['全部']
-      : normalizeDepartmentList(createUserForm.value.folder_list)
-
-    await http.post('/settings/users/create-user', {
-      login_name: loginName,
-      name: displayName,
-      password,
-      password_confirm: passwordConfirm,
-      permission,
-      departments: normalizedDepartments,
-      folders: normalizedFolders,
-    })
-    ElMessage.success('创建成功')
+    if (isEditingUserDialog.value) {
+      if (!editingUserId.value) {
+        ElMessage.warning('未选择目标用户')
+        return
+      }
+      await http.put(`/settings/users/${editingUserId.value}`, {
+        description: displayName,
+        role,
+        permission_list: permissionList,
+      })
+      ElMessage.success('权限更新成功')
+    } else {
+      await http.post('/settings/users/create-user', {
+        login_name: loginName,
+        name: displayName,
+        password,
+        password_confirm: passwordConfirm,
+        role,
+        permission_list: permissionList,
+      })
+      ElMessage.success('创建成功')
+    }
     closeCreateUserDialog()
     await reloadUsersWithTableLoading()
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '创建失败')
+    ElMessage.error(error?.response?.data?.message || (isEditingUserDialog.value ? '权限更新失败' : '创建失败'))
   } finally {
     createUserSubmitting.value = false
   }
 }
 
-const saveRow = async (row) => {
-  savingRowId.value = row.id
-  try {
-    await http.put(`/settings/users/${row.id}`, {
-      permission: row.permission,
-      description: String(row.description || '').trim(),
-      departments: normalizeDepartmentList(row.department_list),
-      folders: normalizeDepartmentList(row.folder_list),
-    })
-    await reloadUsersWithTableLoading()
-    ElMessage.success('保存成功')
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.message || '保存失败')
-  } finally {
-    savingRowId.value = 0
+const openPermissionEditDialog = (row) => {
+  userDialogMode.value = 'edit'
+  editingUserId.value = Number(row?.id || 0)
+  createUserForm.value = {
+    login_name: String(row?.login_name || '').trim(),
+    name: String(row?.description || '').trim(),
+    password: '',
+    passwordConfirm: '',
+    role: ['super_admin', 'admin'].includes(String(row?.role || '').trim())
+      ? String(row.role).trim()
+      : 'admin',
+    permission_list: normalizePermissionList(row?.permission_list),
   }
+  createUserDialogVisible.value = true
+}
+
+const addPermissionBinding = (permissionList) => {
+  const current = normalizePermissionList(permissionList)
+  current.push({
+    permission: 'view',
+    departments: [],
+    folders: [],
+  })
+  return current
+}
+
+const removePermissionBinding = (permissionList, index) => {
+  const current = normalizePermissionList(permissionList)
+  if (current.length <= 1) {
+    ElMessage.warning('至少保留一条权限绑定')
+    return current
+  }
+  current.splice(index, 1)
+  return current
 }
 
 const deleteRow = async (row) => {
@@ -870,6 +967,48 @@ onMounted(async () => {
   gap: 6px;
 }
 
+.permission-text-list {
+  display: grid;
+  gap: 6px;
+}
+
+.permission-text-item {
+  line-height: 1.55;
+  color: #374151;
+}
+
+.permission-nested-table {
+  width: 100%;
+}
+
+.permission-edit-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.permission-edit-header :deep(.el-button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+:deep(.create-user-dialog .el-dialog) {
+  min-height: 90vh;
+  margin-top: 5vh;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.create-user-dialog .el-dialog__body) {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.permission-role-form {
+  margin-top: 10px;
+}
+
 .login-name-cell {
   display: inline-flex;
   align-items: center;
@@ -896,6 +1035,10 @@ onMounted(async () => {
   color: #9ca3af;
 }
 
+.login-name-icon-synology-admin {
+  color: #d4af37;
+}
+
 .login-name-icon-badge {
   position: absolute;
   right: -4px;
@@ -904,6 +1047,10 @@ onMounted(async () => {
   color: #2563eb;
   background: #ffffff;
   border-radius: 999px;
+}
+
+.login-name-icon-synology-admin .login-name-icon-badge {
+  color: #d4af37;
 }
 
 .login-name-text {

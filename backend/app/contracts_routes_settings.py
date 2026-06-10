@@ -10,21 +10,25 @@ from .contracts import contracts_bp
 from .contracts_core import (
     CSV_OPTION_DEFAULTS,
     DEFAULT_DEPARTMENT_NAME,
-    STAMP_TAX_RATE_BY_CONTRACT_TYPE,
+    _get_contract_type_options,
+    _get_stamp_tax_rate_mapping,
     _department_dir,
     _get_department_names,
     _get_project_names,
     _list_storage_entries,
 )
 from .extensions import db
-from .models import Contract, Department, ProjectOption, UserPermission
+from .models import Contract, Department, ProjectOption, StampTaxRateOption, UserPermission
 
 
 DOCSCOOL_GROUP_NAME = 'docscool'
-PERMISSION_SUPER_ADMIN = 'super_admin'
 PERMISSION_EDIT = 'edit'
 PERMISSION_VIEW = 'view'
-PERMISSION_VALUES = {PERMISSION_SUPER_ADMIN, PERMISSION_EDIT, PERMISSION_VIEW}
+ROLE_SUPER_ADMIN = 'super_admin'
+ROLE_ADMIN = 'admin'
+PERMISSION_ALL = '全部'
+PERMISSION_VALUES = {PERMISSION_EDIT, PERMISSION_VIEW}
+ROLE_VALUES = {ROLE_SUPER_ADMIN, ROLE_ADMIN}
 ADD_DELETE_ALLOW_LOGIN_NAMES = {'zhangyan'}
 NEW_USER_LOGIN_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 NEW_USER_PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$')
@@ -50,22 +54,59 @@ def _format_department_text(values) -> str:
     return ','.join(normalized)
 
 
-def _current_user_permission_value() -> str:
+def _normalize_permission_items(items):
+    normalized = []
+    if not isinstance(items, list):
+        return normalized
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        permission = str(item.get('permission') or '').strip()
+        if permission not in PERMISSION_VALUES:
+            continue
+
+        departments = _format_department_text(item.get('departments') or '').split(',') if item.get('departments') else []
+        folders = _format_department_text(item.get('folders') or '').split(',') if item.get('folders') else []
+
+        if isinstance(item.get('departments'), list):
+            departments = _format_department_text(item.get('departments')).split(',') if item.get('departments') else []
+        if isinstance(item.get('folders'), list):
+            folders = _format_department_text(item.get('folders')).split(',') if item.get('folders') else []
+
+        normalized.append({
+            'permission': permission,
+            'departments': [d for d in departments if d],
+            'folders': [f for f in folders if f],
+        })
+
+    return normalized
+
+
+def _extract_permission_items_from_body(body: dict):
+    return _normalize_permission_items(body.get('permission_list'))
+
+
+def _normalize_role_value(value: str) -> str:
+    role = str(value or ROLE_ADMIN).strip()
+    return role if role in ROLE_VALUES else ROLE_ADMIN
+
+
+def _current_user_role_value() -> str:
     login_name = (getattr(g, 'current_user', '') or '').strip()
     if not login_name:
-        return PERMISSION_VIEW
+        return ROLE_ADMIN
 
     row = UserPermission.query.filter_by(login_name=login_name).first()
     if not row:
-        return PERMISSION_VIEW
+        return ROLE_ADMIN
 
-    value = str(row.permission or PERMISSION_VIEW).strip()
-    return value if value in PERMISSION_VALUES else PERMISSION_VIEW
+    return _normalize_role_value(getattr(row, 'role', ROLE_ADMIN))
 
 
 def _require_super_admin_write_permission():
     login_name = (getattr(g, 'current_user', '') or '').strip().lower()
-    if _current_user_permission_value() == PERMISSION_SUPER_ADMIN or login_name in ADD_DELETE_ALLOW_LOGIN_NAMES:
+    if _current_user_role_value() == ROLE_SUPER_ADMIN or login_name in ADD_DELETE_ALLOW_LOGIN_NAMES:
         return None
     return jsonify({'message': '仅超管或指定账号允许新增或删除'}), 403
 
@@ -841,9 +882,22 @@ def list_user_permissions():
         return jsonify({'message': auth_error}), 401
     _sync_docscool_membership(sid, warnings)
 
+    admin_members, admin_payload = _synology_get_group_member_users(sid, 'administrators')
+    if not admin_payload.get('success'):
+        code = _synology_error_code(admin_payload)
+        if code not in {119}:
+            warnings.append(f'群晖 administrators 组成员读取失败(错误码: {code if code is not None else "unknown"})')
+    admin_set = {name.strip() for name in admin_members if (name or '').strip()}
+
     rows = UserPermission.query.order_by(UserPermission.login_name.asc()).all()
     return jsonify({
-        'users': [row.to_dict() for row in rows],
+        'users': [
+            {
+                **row.to_dict(),
+                'is_synology_admin': (row.login_name or '').strip() in admin_set,
+            }
+            for row in rows
+        ],
         'warnings': warnings,
     })
 
@@ -875,11 +929,13 @@ def get_current_user_permission():
     if not row:
         return jsonify({
             'login_name': login_name,
+            'role': ROLE_ADMIN,
             'permission': PERMISSION_VIEW,
             'departments': '',
             'department_list': [],
             'folders': '',
             'folder_list': [],
+            'permission_list': [],
         })
 
     return jsonify(row.to_dict())
@@ -923,10 +979,13 @@ def create_user_permission():
         login_name=login_name,
         me_added=False,
         description=info.get('description', ''),
-        permission=PERMISSION_VIEW,
-        departments='',
-        folders='',
+        role=ROLE_ADMIN,
     )
+    row.set_permission_items([{
+        'permission': PERMISSION_VIEW,
+        'departments': [],
+        'folders': [],
+    }])
     db.session.add(row)
     db.session.commit()
 
@@ -946,11 +1005,9 @@ def create_new_user_permission():
     try:
         login_name = _validate_new_user_login_name(body.get('login_name'))
         display_name = (body.get('name') or body.get('description') or '').strip()
-        permission = str(body.get('permission') or PERMISSION_VIEW).strip()
+        role = _normalize_role_value(body.get('role'))
         if len(display_name) > 255:
             return jsonify({'message': '姓名最多255个字符'}), 400
-        if permission not in PERMISSION_VALUES:
-            return jsonify({'message': 'permission is invalid'}), 400
         password = _validate_new_user_password(body.get('password'))
         password_confirm = str(body.get('password_confirm') or body.get('confirm_password') or '').strip()
         if not password_confirm:
@@ -960,6 +1017,10 @@ def create_new_user_permission():
         _ensure_password_not_contains_user_info(password, login_name, display_name)
     except ValueError as exc:
         return jsonify({'message': str(exc)}), 400
+
+    permission_items = _extract_permission_items_from_body(body)
+    if not permission_items:
+        return jsonify({'message': 'permission_list is invalid'}), 400
 
     existing = UserPermission.query.filter_by(login_name=login_name).first()
     if existing:
@@ -984,10 +1045,9 @@ def create_new_user_permission():
         login_name=login_name,
         me_added=True,
         description=display_name,
-        permission=permission,
-        departments='全部' if permission == PERMISSION_SUPER_ADMIN else _format_department_text(body.get('departments') or body.get('department_list') or ''),
-        folders='全部' if permission == PERMISSION_SUPER_ADMIN else _format_department_text(body.get('folders') or body.get('folder_list') or ''),
+        role=role,
     )
+    row.set_permission_items(permission_items)
     try:
         db.session.add(row)
         db.session.commit()
@@ -1013,20 +1073,14 @@ def update_user_permission(user_id):
     row = UserPermission.query.get_or_404(user_id)
     body = request.get_json(silent=True) or {}
 
-    permission = (body.get('permission') or '').strip()
-    if permission not in PERMISSION_VALUES:
-        return jsonify({'message': 'permission is invalid'}), 400
-
     description = str(body.get('description') or '').strip()
+    role = _normalize_role_value(body.get('role') if body.get('role') is not None else row.role)
     if len(description) > 255:
         return jsonify({'message': '描述最多255个字符'}), 400
 
-    if permission == PERMISSION_SUPER_ADMIN:
-        departments = '全部'
-        folders = '全部'
-    else:
-        departments = _format_department_text(body.get('departments') or body.get('department_list') or '')
-        folders = _format_department_text(body.get('folders') or body.get('folder_list') or '')
+    permission_items = _extract_permission_items_from_body(body)
+    if not permission_items:
+        return jsonify({'message': 'permission_list is invalid'}), 400
 
     sid, auth_error = _settings_login()
     if auth_error:
@@ -1040,10 +1094,9 @@ def update_user_permission(user_id):
     except Exception as exc:
         return jsonify({'message': f'同步群晖用户描述失败: {exc}'}), 400
 
-    row.permission = permission
     row.description = description
-    row.departments = departments
-    row.folders = folders
+    row.role = role
+    row.set_permission_items(permission_items)
     try:
         db.session.commit()
     except Exception as exc:
@@ -1186,6 +1239,90 @@ def list_project_settings():
     return jsonify([row.to_dict() for row in rows])
 
 
+@contracts_bp.get('/settings/stamp-tax-rates')
+@require_auth
+def list_stamp_tax_rate_settings():
+    rows = StampTaxRateOption.query.order_by(StampTaxRateOption.id.asc()).all()
+    return jsonify([row.to_dict() for row in rows])
+
+
+@contracts_bp.post('/settings/stamp-tax-rates')
+@require_auth
+def create_stamp_tax_rate_setting():
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
+    body = request.get_json(silent=True) or {}
+    contract_type = (body.get('contract_type') or '').strip()
+    tax_rate = (body.get('tax_rate') or '').strip()
+
+    if not contract_type:
+        return jsonify({'message': 'contract_type is required'}), 400
+    if len(contract_type) > 64:
+        return jsonify({'message': '合同类型最多64个字符'}), 400
+    if len(tax_rate) > 32:
+        return jsonify({'message': '税率最多32个字符'}), 400
+    if StampTaxRateOption.query.filter_by(contract_type=contract_type).first():
+        return jsonify({'message': '该合同类型已存在'}), 409
+
+    row = StampTaxRateOption(contract_type=contract_type, tax_rate=tax_rate)
+    db.session.add(row)
+    db.session.commit()
+    return jsonify(row.to_dict()), 201
+
+
+@contracts_bp.put('/settings/stamp-tax-rates/<int:option_id>')
+@require_auth
+def update_stamp_tax_rate_setting(option_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
+    row = StampTaxRateOption.query.get_or_404(option_id)
+    body = request.get_json(silent=True) or {}
+
+    contract_type = (body.get('contract_type') or '').strip()
+    tax_rate = (body.get('tax_rate') or '').strip()
+
+    if not contract_type:
+        return jsonify({'message': 'contract_type is required'}), 400
+    if len(contract_type) > 64:
+        return jsonify({'message': '合同类型最多64个字符'}), 400
+    if len(tax_rate) > 32:
+        return jsonify({'message': '税率最多32个字符'}), 400
+
+    duplicate = StampTaxRateOption.query.filter(
+        StampTaxRateOption.contract_type == contract_type,
+        StampTaxRateOption.id != option_id,
+    ).first()
+    if duplicate:
+        return jsonify({'message': '该合同类型已存在'}), 409
+
+    row.contract_type = contract_type
+    row.tax_rate = tax_rate
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
+@contracts_bp.delete('/settings/stamp-tax-rates/<int:option_id>')
+@require_auth
+def delete_stamp_tax_rate_setting(option_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
+    row = StampTaxRateOption.query.get_or_404(option_id)
+
+    in_use = Contract.query.filter(Contract.contract_type == row.contract_type).first()
+    if in_use:
+        return jsonify({'message': '该合同类型已被合同使用，无法删除'}), 409
+
+    db.session.delete(row)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
 @contracts_bp.post('/settings/projects')
 @require_auth
 def create_project_setting():
@@ -1234,8 +1371,9 @@ def contract_field_options():
         key: list(CSV_OPTION_DEFAULTS.get(key, []))
         for key in CSV_OPTION_DEFAULTS.keys()
     }
+    payload['contract_type'] = _get_contract_type_options()
     payload['project'] = _get_project_names()
-    payload['stamp_tax_rate_by_contract_type'] = STAMP_TAX_RATE_BY_CONTRACT_TYPE
+    payload['stamp_tax_rate_by_contract_type'] = _get_stamp_tax_rate_mapping()
     return jsonify(payload)
 
 

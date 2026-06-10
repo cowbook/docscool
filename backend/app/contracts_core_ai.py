@@ -15,6 +15,7 @@ from .contracts_core import (
     EXTERNAL_API_TIMEOUT_SECONDS,
     OPTION_FIELD_DEFAULTS,
     _format_decimal_plain,
+    _get_contract_type_options,
     _get_department_names,
     _get_project_names,
     _merge_options,
@@ -344,6 +345,7 @@ def _get_contract_option_sets() -> dict:
         key: list(CSV_OPTION_DEFAULTS.get(key, []))
         for key in CSV_OPTION_DEFAULTS.keys()
     }
+    option_sets['contract_type'] = _get_contract_type_options()
     option_sets['handling_department'] = _get_department_names()
     option_sets['project'] = _merge_options(_get_project_names(), [OPTION_FIELD_DEFAULTS['project']])
     return option_sets

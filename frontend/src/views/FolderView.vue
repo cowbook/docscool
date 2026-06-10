@@ -482,6 +482,7 @@ const batchMatchLogText = ref('')
 const recursiveFileCount = ref(0)
 const loadingRecursiveCount = ref(false)
 const dragOverNodePath = ref('')
+const userRole = ref('admin')
 const userPermission = ref('view')
 const allowedFolderRoots = ref([])
 const noPermissionForSelectedFolder = ref(false)
@@ -527,7 +528,7 @@ const buildOcrPreviewUrlFromFilePath = (filePath) => {
   return `${appBasePrefix}preview/${encodedPath}/`
 }
 
-const isSuperAdminUser = computed(() => userPermission.value === 'super_admin')
+const isSuperAdminUser = computed(() => userRole.value === 'super_admin')
 const isViewPermissionUser = computed(() => userPermission.value === 'view')
 const hasAllFolderPermission = computed(() => {
   if (isSuperAdminUser.value) {
@@ -1254,10 +1255,12 @@ const loadDepartments = async () => {
 const loadCurrentUserFolderPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
+    userRole.value = String(data?.role || 'admin').trim() || 'admin'
     userPermission.value = String(data?.permission || 'view').trim() || 'view'
     const folderList = Array.isArray(data?.folder_list) ? data.folder_list : []
     allowedFolderRoots.value = folderList.map((item) => String(item || '').trim()).filter(Boolean)
   } catch (_error) {
+    userRole.value = 'admin'
     userPermission.value = 'view'
     allowedFolderRoots.value = []
   }

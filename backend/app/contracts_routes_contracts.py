@@ -13,7 +13,6 @@ from .ocr_utils import extract_pdf_text, mineru_extract_text_from_uploaded_pdf
 from .contracts_core import (
     CONTRACT_FIELD_KEYS,
     EXCEL_ALLOWED_EXTENSIONS,
-    STAMP_TAX_RATE_BY_CONTRACT_TYPE,
     _department_dir,
     _build_filestation_path,
     _build_synology_file_path,
@@ -36,6 +35,7 @@ from .contracts_core import (
     _parse_date,
     _preview_lines,
     _safe_decimal,
+    _get_stamp_tax_rate_by_contract_type,
     _sanitize_upload_filename,
     _select_best_pdf_match,
     _synology_upload_file,
@@ -56,7 +56,7 @@ from .extensions import db
 from .models import Contract, UserPermission
 
 
-PERMISSION_SUPER_ADMIN = 'super_admin'
+ROLE_SUPER_ADMIN = 'super_admin'
 PERMISSION_ALL = '全部'
 
 
@@ -69,14 +69,14 @@ def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
     if not permission_row:
         return True, []
 
-    permission_value = str(permission_row.permission or '').strip()
-    if permission_value == PERMISSION_SUPER_ADMIN:
+    if str(getattr(permission_row, 'role', '') or '').strip() == ROLE_SUPER_ADMIN:
         return True, []
 
+    aggregated = permission_row.get_aggregated_permission()
     departments = [
         item.strip()
-        for item in str(permission_row.departments or '').split(',')
-        if item and item.strip()
+        for item in (aggregated.get('departments') or [])
+        if item and str(item).strip()
     ]
 
     if PERMISSION_ALL in departments:
@@ -576,7 +576,7 @@ def update_contract(contract_id):
     if 'contract_type' in body:
         record.contract_type = _normalize_contract_type_value(body.get('contract_type')) or None
         if 'stamp_tax_rate' not in body:
-            record.stamp_tax_rate = STAMP_TAX_RATE_BY_CONTRACT_TYPE.get(record.contract_type or '', '') or None
+            record.stamp_tax_rate = _get_stamp_tax_rate_by_contract_type(record.contract_type) or None
     if 'purchase_type' in body:
         record.purchase_type = (body.get('purchase_type') or '').strip() or None
     if 'stamp_tax_rate' in body:

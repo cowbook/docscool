@@ -10,10 +10,10 @@ from flask import current_app
 from .contracts_core import (
     CONTRACT_FIELD_KEYS,
     EXCEL_ALLOWED_EXTENSIONS,
-    STAMP_TAX_RATE_BY_CONTRACT_TYPE,
     _department_dir,
     _format_decimal_plain,
     _get_department_names,
+    _get_stamp_tax_rate_by_contract_type,
     _get_project_names,
     _match_option_value,
     _normalize_contract_file_path,
@@ -440,7 +440,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     raw_file_path = payload.get('file_path', payload.get('path'))
     normalized_file_path = _normalize_contract_file_path(raw_file_path) if has_file_path_input else None
     normalized_contract_type = _normalize_contract_type_value(payload.get('contract_type'))
-    normalized_stamp_tax_rate = (payload.get('stamp_tax_rate') or '').strip() or STAMP_TAX_RATE_BY_CONTRACT_TYPE.get(normalized_contract_type, '')
+    normalized_stamp_tax_rate = (payload.get('stamp_tax_rate') or '').strip() or _get_stamp_tax_rate_by_contract_type(normalized_contract_type)
 
     required = ['contract_name', 'handling_department']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]

@@ -23,7 +23,7 @@ from sqlalchemy import String, cast, func, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from .auth import get_cached_user_password, require_auth
 from .extensions import db
-from .models import Contract, Department, ProjectOption
+from .models import Contract, Department, ProjectOption, StampTaxRateOption
 from .ocr_utils import (
     extract_ai_content_from_pdf,
     extract_pdf_text,
@@ -372,17 +372,23 @@ def _synology_new_filestation_client(account: str, password: str):
     base_api.BaseApi.shared_session = None
 
     filestation = import_module('synology_api.filestation')
-    return filestation.FileStation(
-        parsed.hostname,
-        str(port),
-        account,
-        password,
-        secure=secure,
-        cert_verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
-        dsm_version=int(current_app.config.get('SYNOLOGY_DSM_VERSION', 7)),
-        debug=False,
-        interactive_output=False,
-    )
+    try:
+        return filestation.FileStation(
+            parsed.hostname,
+            str(port),
+            account,
+            password,
+            secure=secure,
+            cert_verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+            dsm_version=int(current_app.config.get('SYNOLOGY_DSM_VERSION', 7)),
+            debug=False,
+            interactive_output=False,
+        )
+    except Exception as exc:
+        payload = _synology_sdk_error_payload(exc)
+        code = _synology_error_code(payload)
+        scope = 'auth' if exc.__class__.__name__ == 'LoginError' or code in {400, 401, 402, 403, 404, 407} else 'filestation'
+        raise RuntimeError(_synology_error_message(payload, scope))
 
 
 def _synology_get_filestation_client_by_sid(sid: str):
@@ -1114,6 +1120,36 @@ def _get_department_names():
 def _get_project_names():
     rows = ProjectOption.query.order_by(ProjectOption.name.asc()).all()
     return [row.name for row in rows]
+
+
+def _get_stamp_tax_rate_mapping():
+    rows = StampTaxRateOption.query.order_by(StampTaxRateOption.id.asc()).all()
+    if not rows:
+        return dict(STAMP_TAX_RATE_BY_CONTRACT_TYPE)
+
+    mapping = {}
+    for row in rows:
+        key = (row.contract_type or '').strip()
+        if not key:
+            continue
+        mapping[key] = (row.tax_rate or '').strip()
+    return mapping
+
+
+def _get_contract_type_options():
+    mapping = _get_stamp_tax_rate_mapping()
+    options = [key for key in mapping.keys() if key]
+    if options:
+        return options
+    return list(CSV_OPTION_DEFAULTS.get('contract_type', []))
+
+
+def _get_stamp_tax_rate_by_contract_type(contract_type: str) -> str:
+    key = (contract_type or '').strip()
+    if not key:
+        return ''
+    mapping = _get_stamp_tax_rate_mapping()
+    return (mapping.get(key) or '').strip()
 
 
 def _merge_options(default_values, db_values):

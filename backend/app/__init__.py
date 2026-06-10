@@ -2,6 +2,7 @@ import os
 import posixpath
 import logging
 import warnings
+import json
 
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -12,7 +13,7 @@ from .config import Config
 from .contracts import contracts_bp
 from .files import files_bp
 from .extensions import db
-from .models import Contract, Department, ProjectOption, UserPermission
+from .models import Contract, Department, ProjectOption, StampTaxRateOption, UserPermission
 
 
 DEFAULT_PROJECT_OPTIONS = [
@@ -29,6 +30,21 @@ DEFAULT_PROJECT_OPTIONS = [
 ]
 
 DEFAULT_DEPARTMENT_NAME = '财务部'
+
+DEFAULT_STAMP_TAX_RATE_OPTIONS = {
+    '买卖合同': '0.03%',
+    '借款合同': '0.005%',
+    '租赁合同': '0.1%',
+    '承揽合同': '0.03%',
+    '建设工程合同': '0.03%',
+    '运输合同': '0.03%',
+    '技术合同': '0.03%',
+    '保管合同': '0.1%',
+    '仓储合同': '0.1%',
+    '财产保险合同': '0.1%',
+    '人力资源': '',
+    '其它': '',
+}
 
 
 warnings.filterwarnings('ignore', category=InsecureRequestWarning)
@@ -177,9 +193,29 @@ def _seed_departments():
     db.session.commit()
 
 
+def _seed_stamp_tax_rate_options():
+    existing = {
+        (row.contract_type or '').strip()
+        for row in StampTaxRateOption.query.all()
+    }
+
+    missing = [
+        (contract_type, tax_rate)
+        for contract_type, tax_rate in DEFAULT_STAMP_TAX_RATE_OPTIONS.items()
+        if contract_type not in existing
+    ]
+    if not missing:
+        return
+
+    for contract_type, tax_rate in missing:
+        db.session.add(StampTaxRateOption(contract_type=contract_type, tax_rate=tax_rate))
+    db.session.commit()
+
+
 def _ensure_user_permission_columns():
     required_columns = {
-        'folders': 'ALTER TABLE users ADD COLUMN folders TEXT',
+        'permission_list': 'ALTER TABLE users ADD COLUMN permission_list TEXT',
+        'role': "ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'admin'",
         'me_added': 'ALTER TABLE users ADD COLUMN me_added BOOLEAN NOT NULL DEFAULT 0',
     }
 
@@ -188,6 +224,183 @@ def _ensure_user_permission_columns():
     for column, ddl in required_columns.items():
         if column not in existing:
             db.session.execute(db.text(ddl))
+    db.session.commit()
+
+
+def _normalize_permission_item_list(items):
+    normalized = []
+    contains_super_admin = False
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        permission = str(item.get('permission') or '').strip()
+        if permission not in {'super_admin', 'edit', 'view'}:
+            continue
+
+        item_is_super_admin = permission == 'super_admin'
+        if item_is_super_admin:
+            contains_super_admin = True
+            permission = 'edit'
+
+        departments = []
+        department_seen = set()
+        for value in item.get('departments') if isinstance(item.get('departments'), list) else []:
+            text = str(value or '').strip()
+            if not text or text in department_seen:
+                continue
+            department_seen.add(text)
+            departments.append(text)
+
+        folders = []
+        folder_seen = set()
+        for value in item.get('folders') if isinstance(item.get('folders'), list) else []:
+            text = str(value or '').strip()
+            if not text or text in folder_seen:
+                continue
+            folder_seen.add(text)
+            folders.append(text)
+
+        if item_is_super_admin:
+            departments = ['全部']
+            folders = ['全部']
+
+        normalized.append({
+            'permission': permission,
+            'departments': departments,
+            'folders': folders,
+        })
+    return normalized, contains_super_admin
+
+
+def _build_permission_list_json_for_legacy_row(row_mapping, has_permission_column, has_departments_column, has_folders_column):
+    role = str(row_mapping.get('role') or '').strip()
+    if role not in {'super_admin', 'admin'}:
+        role = 'admin'
+
+    parsed = []
+    raw_permission_list = row_mapping.get('permission_list')
+    if raw_permission_list:
+        try:
+            parsed = json.loads(raw_permission_list)
+        except Exception:
+            parsed = []
+
+    normalized, contains_super_admin = _normalize_permission_item_list(parsed)
+    if contains_super_admin:
+        role = 'super_admin'
+    if normalized:
+        return role, json.dumps(normalized, ensure_ascii=False)
+
+    legacy_permission = 'view'
+    if has_permission_column:
+        value = str(row_mapping.get('permission') or '').strip()
+        if value in {'super_admin', 'edit', 'view'}:
+            legacy_permission = value
+
+    legacy_departments = []
+    if has_departments_column:
+        legacy_departments = [
+            part.strip()
+            for part in str(row_mapping.get('departments') or '').split(',')
+            if part.strip()
+        ]
+
+    legacy_folders = []
+    if has_folders_column:
+        legacy_folders = [
+            part.strip()
+            for part in str(row_mapping.get('folders') or '').split(',')
+            if part.strip()
+        ]
+
+    if legacy_permission == 'super_admin':
+        role = 'super_admin'
+        legacy_permission = 'edit'
+        legacy_departments = ['全部']
+        legacy_folders = ['全部']
+
+    return role, json.dumps([{
+        'permission': legacy_permission if legacy_permission in {'edit', 'view'} else 'view',
+        'departments': list(dict.fromkeys(legacy_departments)),
+        'folders': list(dict.fromkeys(legacy_folders)),
+    }], ensure_ascii=False)
+
+
+def _drop_legacy_user_permission_columns():
+    expected_columns = {
+        'id',
+        'login_name',
+        'me_added',
+        'description',
+        'role',
+        'permission_list',
+        'created_at',
+        'updated_at',
+    }
+    table_info = db.session.execute(db.text('PRAGMA table_info(users)')).fetchall()
+    existing = {row[1] for row in table_info}
+    if existing == expected_columns:
+        return
+
+    has_permission_column = 'permission' in existing
+    has_departments_column = 'departments' in existing
+    has_folders_column = 'folders' in existing
+    old_rows = db.session.execute(db.text('SELECT * FROM users')).mappings().all()
+
+    migrated_rows = []
+    for row in old_rows:
+        role_value, permission_list_value = _build_permission_list_json_for_legacy_row(
+            row,
+            has_permission_column,
+            has_departments_column,
+            has_folders_column,
+        )
+        migrated_rows.append({
+            'id': row.get('id'),
+            'login_name': row.get('login_name'),
+            'me_added': 1 if bool(row.get('me_added')) else 0,
+            'description': row.get('description') or '',
+            'role': role_value,
+            'permission_list': permission_list_value,
+            'created_at': row.get('created_at'),
+            'updated_at': row.get('updated_at'),
+        })
+
+    db.session.execute(db.text('BEGIN IMMEDIATE'))
+    db.session.execute(db.text('ALTER TABLE users RENAME TO users_legacy_drop_fields'))
+    db.session.execute(db.text(
+        '''
+        CREATE TABLE users (
+            id INTEGER NOT NULL,
+            login_name VARCHAR(128) NOT NULL,
+            me_added BOOLEAN NOT NULL DEFAULT 0,
+            description VARCHAR(255),
+            role VARCHAR(32) NOT NULL DEFAULT 'admin',
+            permission_list TEXT,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id)
+        )
+        '''
+    ))
+    if migrated_rows:
+        db.session.execute(
+            db.text(
+                '''
+                INSERT INTO users (
+                    id, login_name, me_added, description, role,
+                    permission_list, created_at, updated_at
+                )
+                VALUES (
+                    :id, :login_name, :me_added, :description, :role,
+                    :permission_list, :created_at, :updated_at
+                )
+                '''
+            ),
+            migrated_rows,
+        )
+    db.session.execute(db.text('DROP TABLE users_legacy_drop_fields'))
+    db.session.execute(db.text('CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login_name ON users (login_name)'))
     db.session.commit()
 
 
@@ -252,8 +465,10 @@ def create_app() -> Flask:
         _ensure_contract_columns()
         _ensure_user_permission_columns()
         _drop_legacy_contract_columns()
+        _drop_legacy_user_permission_columns()
         _seed_departments()
         _seed_project_options()
+        _seed_stamp_tax_rate_options()
         _migrate_legacy_file_paths(app)
 
     app.register_blueprint(auth_bp)

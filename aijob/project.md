@@ -1,6 +1,6 @@
 # 项目固定信息
 
-更新时间：2026-06-03
+更新时间：2026-06-10
 
 ## 项目定位
 - 项目名称：DocsCool Contract Manager
@@ -113,6 +113,19 @@
 - `POST /api/settings/users`：新增用户权限记录（登录名需存在于群晖）
 - `PUT /api/settings/users/<id>`：更新用户权限级别、部门范围、文件夹范围
 - `DELETE /api/settings/users/<id>`：删除用户权限记录；删除后触发 `docscool` 组补齐型同步
+
+## 本轮用户权限弹窗与标识更新（2026-06-10）
+- 用户权限页创建/编辑弹窗统一：
+  - “编辑”改为复用“创建用户”弹窗代码。
+  - 编辑模式标题为“编辑用户”，登录名禁用不可编辑（灰色）。
+  - 编辑模式不显示密码与确认密码输入框。
+- 权限绑定交互：
+  - “新增权限绑定”文案统一为“新增权限”，并附加线型 `Plus` 图标。
+  - 创建弹窗权限列使用下拉单选（`edit/view`）。
+  - 创建弹窗尺寸：`width=810px`，最小高度 `90vh`，正文区域可滚动。
+- 群晖管理员可视化：
+  - `GET /api/settings/users` 结果补充 `is_synology_admin`。
+  - 前端登录名图标对 `is_synology_admin=true` 显示金色，tooltip 增加“（群晖管理员）”。
 
 ## 本轮权限管理补充（2026-05-20）
 - 设置页群晖调用已迁移为 `synology-api` SDK（`contracts_routes_settings.py`）。

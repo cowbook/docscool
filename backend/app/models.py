@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+import json
 
 from .extensions import db
 
@@ -111,6 +112,25 @@ class ProjectOption(db.Model):
         }
 
 
+class StampTaxRateOption(db.Model):
+    __tablename__ = 'stamp_tax_rate_options'
+
+    id = db.Column(db.Integer, primary_key=True)
+    contract_type = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    tax_rate = db.Column(db.String(32), nullable=False, default='')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'contract_type': self.contract_type,
+            'tax_rate': self.tax_rate,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+        }
+
+
 class UserPermission(db.Model):
     __tablename__ = 'users'
 
@@ -118,29 +138,131 @@ class UserPermission(db.Model):
     login_name = db.Column(db.String(128), unique=True, nullable=False, index=True)
     me_added = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))
     description = db.Column(db.String(255), nullable=True)
-    permission = db.Column(db.String(32), nullable=False, default='view')
-    departments = db.Column(db.Text, nullable=True)
-    folders = db.Column(db.Text, nullable=True)
+    role = db.Column(db.String(32), nullable=False, default='admin', server_default='admin')
+    permission_list = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    @staticmethod
+    def _normalize_text_list(value):
+        source = value if isinstance(value, list) else []
+        normalized = []
+        seen = set()
+        for item in source:
+            text = str(item or '').strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+    def get_permission_items(self):
+        try:
+            parsed = json.loads(self.permission_list) if self.permission_list else []
+        except Exception:
+            parsed = []
+
+        normalized = []
+        for item in parsed if isinstance(parsed, list) else []:
+            if not isinstance(item, dict):
+                continue
+            permission = str(item.get('permission') or '').strip()
+            if permission not in {'edit', 'view'}:
+                continue
+
+            departments = self._normalize_text_list(item.get('departments'))
+            folders = self._normalize_text_list(item.get('folders'))
+
+            normalized.append({
+                'permission': permission,
+                'departments': departments,
+                'folders': folders,
+            })
+
+        if normalized:
+            return normalized
+
+        return [{
+            'permission': 'view',
+            'departments': [],
+            'folders': [],
+        }]
+
+    def get_aggregated_permission(self):
+        items = self.get_permission_items()
+        permission = 'view'
+        departments = []
+        folders = []
+
+        dep_seen = set()
+        folder_seen = set()
+        for item in items:
+            value = str(item.get('permission') or '').strip()
+            if value == 'edit':
+                permission = 'edit'
+
+            for dep in self._normalize_text_list(item.get('departments')):
+                if dep not in dep_seen:
+                    dep_seen.add(dep)
+                    departments.append(dep)
+
+            for folder in self._normalize_text_list(item.get('folders')):
+                if folder not in folder_seen:
+                    folder_seen.add(folder)
+                    folders.append(folder)
+
+        return {
+            'permission': permission,
+            'departments': departments,
+            'folders': folders,
+        }
+
+    def get_role(self):
+        value = str(self.role or 'admin').strip()
+        return value if value in {'super_admin', 'admin'} else 'admin'
+
+    def set_permission_items(self, items):
+        normalized = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            permission = str(item.get('permission') or '').strip()
+            if permission not in {'edit', 'view'}:
+                continue
+
+            departments = self._normalize_text_list(item.get('departments'))
+            folders = self._normalize_text_list(item.get('folders'))
+
+            normalized.append({
+                'permission': permission,
+                'departments': departments,
+                'folders': folders,
+            })
+
+        if not normalized:
+            normalized = [{
+                'permission': 'view',
+                'departments': [],
+                'folders': [],
+            }]
+
+        self.permission_list = json.dumps(normalized, ensure_ascii=False)
+
     def to_dict(self):
-        department_list = [
-            item.strip() for item in str(self.departments or '').split(',') if item and item.strip()
-        ]
-        folder_list = [
-            item.strip() for item in str(self.folders or '').split(',') if item and item.strip()
-        ]
+        aggregated = self.get_aggregated_permission()
+        permission_items = self.get_permission_items()
         return {
             'id': self.id,
             'login_name': self.login_name,
             'me_added': bool(self.me_added),
             'description': self.description or '',
-            'permission': self.permission,
-            'departments': self.departments or '',
-            'department_list': department_list,
-            'folders': self.folders or '',
-            'folder_list': folder_list,
+            'role': self.get_role(),
+            'permission': aggregated['permission'],
+            'departments': ','.join(aggregated['departments']),
+            'department_list': aggregated['departments'],
+            'folders': ','.join(aggregated['folders']),
+            'folder_list': aggregated['folders'],
+            'permission_list': permission_items,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }
