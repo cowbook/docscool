@@ -9,6 +9,19 @@
 
 ## 时间线
 
+### 2026-07-14 本轮更新
+- 扫描目录工作台落地：
+	- 新增 `frontend/src/views/ContractScanView.vue` 与路由 `/contracts/scan`。
+	- 页面左侧展示扫描目录 PDF 首页缩略图，右侧展示所选 PDF 预览。
+	- 点击“导入合同”时，不再上传本地文件，而是先把扫描目录中的 PDF 复制到合同存储目录，再复用现有 `/api/contracts/ai-parse` 与候选匹配弹窗链路。
+- 首页新增“扫描仪”区域：
+	- `HomeView` 右侧新增独立区块，展示扫描目录中最新 PDF 文件。
+	- 区域样式复用“最新上传”视觉，但布局为单行横向滚动。
+	- 点击缩略图后跳转到 `ContractScanView`，并通过路由参数自动选中文件。
+- 存储权限模型调整：
+	- 远程模式下，`SYNOLOGY_FILESTATION_ROOT` 与 `SYNOLOGY_FILESTATION_SCAN` 的 FileStation 读写统一改用 `SYNOLOGY_USER` / `SYNOLOGY_PASSWORD`。
+	- DSM 用户登录、JWT、用户/群组管理相关 Synology Core API 仍保留为真实登录用户链路。
+
 ### 2026-06-10 本轮更新
 - 用户权限页（UserPermissionSettingsView）交互重构：
 	- “创建用户”与“编辑用户”已合并为同一弹窗代码，编辑模式复用同一表单。

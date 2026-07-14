@@ -105,7 +105,7 @@ const loginName = ref('')
 
 const canManage = computed(() => {
   const normalized = String(loginName.value || '').trim().toLowerCase()
-  return normalized === 'zhangyan' || String(userRole.value || '').trim() === 'super_admin'
+  return normalized === 'zhangyan' || ['super_admin', 'synology_super_admin'].includes(String(userRole.value || '').trim())
 })
 
 const loadCurrentPermission = async () => {

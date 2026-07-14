@@ -368,6 +368,7 @@
 
       <div class="ai-folder-tree-wrap" v-loading="aiFolderTreeLoading">
         <el-tree
+          :key="aiFolderTreeRenderKey"
           :data="aiFolderTreeData"
           node-key="path"
           :props="aiFolderTreeProps"
@@ -499,6 +500,7 @@ const aiUploadedFilePath = ref('')
 const aiFolderDialogVisible = ref(false)
 const aiFolderTreeLoading = ref(false)
 const aiFolderTreeData = ref([])
+const aiFolderTreeRenderKey = ref(0)
 const aiFolderSelectedPath = ref('')
 const aiUploadTargetFolderPath = ref('')
 const fieldSortDialogVisible = ref(false)
@@ -519,6 +521,7 @@ const contractItemRef = ref(null)
 const currentUserPermission = ref('view')
 const currentUserRole = ref('admin')
 const currentUserDepartmentList = ref([])
+const currentUserPermissionList = ref([])
 const sortState = reactive({ prop: '', order: '' })
 const tableColumns = ref(loadStoredTableColumns())
 const linkTreeSnapshot = reactive({
@@ -722,10 +725,52 @@ const options = reactive({
 })
 
 const totalContracts = computed(() => sortedContracts.value ? sortedContracts.value.length : 0)
-const isViewPermissionUser = computed(() => String(currentUserPermission.value || '').trim() === 'view')
+const SUPER_ROLE_SET = new Set(['super_admin', 'synology_super_admin'])
+
+const normalizeTextList = (value) => {
+  const source = Array.isArray(value)
+    ? value
+    : (String(value || '').trim() ? [String(value || '').trim()] : [])
+  const normalized = []
+  const seen = new Set()
+  source.forEach((item) => {
+    const text = String(item || '').trim()
+    if (!text || seen.has(text)) {
+      return
+    }
+    seen.add(text)
+    normalized.push(text)
+  })
+  return normalized
+}
+
+const normalizeCurrentPermissionList = (value) => {
+  const source = Array.isArray(value) ? value : []
+  return source
+    .map((item) => {
+      const permission = String(item?.permission || '').trim()
+      if (!['edit', 'view'].includes(permission)) {
+        return null
+      }
+      return {
+        permission,
+        departments: normalizeTextList(item?.departments),
+        folders: normalizeTextList(item?.folders),
+      }
+    })
+    .filter(Boolean)
+}
+
+const isViewPermissionUser = computed(() => {
+  const role = String(currentUserRole.value || '').trim()
+  if (SUPER_ROLE_SET.has(role)) {
+    return false
+  }
+  return String(currentUserPermission.value || '').trim() === 'view'
+})
 
 const showDepartmentRestrictedNotice = computed(() => {
-  const isSuperAdmin = String(currentUserRole.value || '').trim() === 'super_admin'
+  const isSuperAdmin = SUPER_ROLE_SET.has(String(currentUserRole.value || '').trim())
   if (isSuperAdmin) {
     return false
   }
@@ -836,9 +881,36 @@ const loadCurrentUserPermission = async () => {
   currentUserDepartmentList.value = Array.isArray(data?.department_list)
     ? data.department_list.map((item) => String(item || '').trim()).filter(Boolean)
     : []
+  currentUserPermissionList.value = normalizeCurrentPermissionList(data?.permission_list)
 }
 
 const normalizeFolderPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+
+const dedupeFolderNodes = (nodes) => {
+  const list = Array.isArray(nodes) ? nodes : []
+  const seen = new Set()
+  const result = []
+
+  list.forEach((item) => {
+    const name = String(item?.name || '').trim()
+    const path = normalizeFolderPath(item?.path || '')
+    if (!name && !path) {
+      return
+    }
+    const key = `${path}::${name}`
+    if (seen.has(key)) {
+      return
+    }
+    seen.add(key)
+    result.push({
+      ...item,
+      name,
+      path,
+    })
+  })
+
+  return result
+}
 
 const buildOcrPreviewUrlFromFilePath = (filePath) => {
   const normalizedPath = normalizeFolderPath(filePath)
@@ -863,35 +935,23 @@ const buildOcrPreviewUrlFromFilePath = (filePath) => {
   return `${appBasePrefix}preview/${encodedPath}/`
 }
 
-const loadAiFolderTree = async () => {
-  aiFolderTreeLoading.value = true
-  try {
-    const [{ data: childrenData }] = await Promise.all([
-      http.get('/folders/children', { params: { parent_path: '' } }),
-    ])
-
-    const rootChildren = Array.isArray(childrenData?.children) ? childrenData.children : []
-
-    // Show only root children in the picker tree; the storage root itself should stay hidden.
-    aiFolderTreeData.value = rootChildren
-  } catch (error) {
-    aiFolderTreeData.value = []
-    ElMessage.error(error?.response?.data?.message || '加载文件夹树失败')
-  } finally {
-    aiFolderTreeLoading.value = false
-  }
-}
-
 const loadAiFolderChildren = async (node, resolve) => {
+  if (node?.level === 0) {
+    aiFolderTreeLoading.value = true
+  }
   const parentPath = node?.level === 0 ? '' : normalizeFolderPath(node?.data?.path || '')
   try {
     const { data } = await http.get('/folders/children', {
       params: { parent_path: parentPath },
     })
-    resolve(Array.isArray(data?.children) ? data.children : [])
+    resolve(dedupeFolderNodes(data?.children))
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '读取子目录失败')
     resolve([])
+  } finally {
+    if (node?.level === 0) {
+      aiFolderTreeLoading.value = false
+    }
   }
 }
 
@@ -899,10 +959,12 @@ const onAiFolderNodeClick = (node) => {
   aiFolderSelectedPath.value = normalizeFolderPath(node?.path || '')
 }
 
-const openAiFolderDialog = async () => {
+const openAiFolderDialog = () => {
   aiFolderSelectedPath.value = normalizeFolderPath(aiUploadTargetFolderPath.value)
+  aiFolderTreeData.value = []
+  aiFolderTreeRenderKey.value += 1
+  aiFolderTreeLoading.value = false
   aiFolderDialogVisible.value = true
-  await loadAiFolderTree()
 }
 
 const confirmAiFolderSelection = () => {
@@ -1076,9 +1138,34 @@ const openCreateFromAi = (file, fields) => {
   contractItemRef.value?.openCreateFromAi(file, fields)
 }
 
+const hasDepartmentEditPermissionForContract = (row) => {
+  const role = String(currentUserRole.value || '').trim()
+  if (SUPER_ROLE_SET.has(role)) {
+    return true
+  }
+  if (String(currentUserPermission.value || '').trim() === 'view') {
+    return false
+  }
+
+  const department = String(row?.handling_department || row?.department || '').trim()
+  return currentUserPermissionList.value.some((item) => {
+    if (String(item?.permission || '').trim() !== 'edit') {
+      return false
+    }
+    const departments = normalizeTextList(item?.departments)
+    if (departments.includes('全部')) {
+      return true
+    }
+    if (!department) {
+      return false
+    }
+    return departments.includes(department)
+  })
+}
+
 const openEditWithSupplementalFields = async (row, fields) => {
   await contractItemRef.value?.openEditWithSupplementalFields(row, fields, {
-    readOnly: isViewPermissionUser.value,
+    readOnly: !hasDepartmentEditPermissionForContract(row),
   })
 }
 

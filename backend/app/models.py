@@ -219,7 +219,7 @@ class UserPermission(db.Model):
 
     def get_role(self):
         value = str(self.role or 'admin').strip()
-        return value if value in {'super_admin', 'admin'} else 'admin'
+        return value if value in {'super_admin', 'admin', 'synology_super_admin'} else 'admin'
 
     def set_permission_items(self, items):
         normalized = []

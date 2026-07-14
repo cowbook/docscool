@@ -43,7 +43,7 @@ const projects = ref([])
 const newProject = ref('')
 const saving = ref(false)
 const userRole = ref('admin')
-const canManage = computed(() => userRole.value === 'super_admin')
+const canManage = computed(() => ['super_admin', 'synology_super_admin'].includes(userRole.value))
 
 const loadProjects = async () => {
   const { data } = await http.get('/settings/projects')

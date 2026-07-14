@@ -3,6 +3,7 @@ import posixpath
 import hashlib
 import re
 import json
+import mimetypes
 import html as html_lib
 import textwrap
 from io import BytesIO
@@ -13,23 +14,25 @@ from PIL import Image, ImageDraw
 from flask import Blueprint, current_app, g, jsonify, request, send_file, send_from_directory
 from sqlalchemy import func, or_
 
-from .auth import require_auth
+from .auth import require_auth, decode_token
 from .contracts_core import (
     _collect_storage_pdf_files,
     _build_synology_file_path,
     _coerce_unix_timestamp,
     _list_storage_entries,
     _normalize_relative_path,
+    _next_available_filename,
     _remote_folder_path,
     _safe_local_folder_path,
     _sanitize_upload_filename,
     _storage_root_name,
+    _synology_api_get,
     _synology_api_post,
     _synology_error_code,
     _synology_error_message,
+    _synology_get_filestation_client_by_sid,
     _synology_json_array,
     _synology_upload_file,
-    _next_available_filename,
 )
 from .files_core_helpers import (
     _build_contract_file_index,
@@ -59,7 +62,17 @@ THUMB_WIDTH = 210
 THUMB_HEIGHT = 290
 LATEST_UPLOAD_LIMIT = 12
 ROLE_SUPER_ADMIN = 'super_admin'
+ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
 PERMISSION_ALL = '全部'
+THUMB_KEY_PATTERN = re.compile(r'^[0-9a-f]{2}/[0-9a-f]{40}\.jpg$')
+STORAGE_SOURCE_DEFAULT = 'storage'
+STORAGE_SOURCE_SCAN = 'scan'
+
+
+class _InMemoryUpload:
+    def __init__(self, content: bytes, mimetype: str):
+        self.stream = BytesIO(content)
+        self.mimetype = mimetype or 'application/octet-stream'
 
 
 def _render_markdown_body_html(markdown_text: str) -> str:
@@ -722,7 +735,7 @@ def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
     if not row:
         return False, set()
 
-    if str(getattr(row, 'role', '') or '').strip() == ROLE_SUPER_ADMIN:
+    if str(getattr(row, 'role', '') or '').strip() in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}:
         return True, set()
 
     aggregated = row.get_aggregated_permission()
@@ -744,10 +757,302 @@ def _thumbs_root_dir() -> str:
     return thumbs_root
 
 
-def _build_thumb_rel_path(relative_file_path: str, mtime: int) -> str:
+def _resolve_thumb_abs_path_from_key(raw_key: str) -> str:
+    normalized = posixpath.normpath(str(raw_key or '').replace('\\', '/')).lstrip('/')
+    if not normalized or normalized in {'.', '..'}:
+        raise ValueError('thumbnail_key is required')
+    if not THUMB_KEY_PATTERN.fullmatch(normalized):
+        raise ValueError('thumbnail_key is invalid')
+
+    abs_path = os.path.realpath(os.path.join(_thumbs_root_dir(), normalized))
+    thumbs_root = os.path.realpath(_thumbs_root_dir())
+    if not (abs_path == thumbs_root or abs_path.startswith(thumbs_root + os.sep)):
+        raise ValueError('thumbnail_key is invalid')
+    return abs_path
+
+
+def _has_valid_request_auth() -> bool:
+    token = ''
+
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header.replace('Bearer ', '', 1).strip()
+
+    if not token:
+        token = (request.args.get('token') or '').strip()
+
+    if not token:
+        return False
+
+    try:
+        payload = decode_token(token)
+    except Exception:
+        return False
+
+    username = (payload or {}).get('sub')
+    if username:
+        g.current_user = username
+        return True
+
+    return False
+
+
+def _normalize_storage_source(source: str) -> str:
+    normalized = str(source or '').strip().lower()
+    if normalized == STORAGE_SOURCE_SCAN:
+        return STORAGE_SOURCE_SCAN
+    return STORAGE_SOURCE_DEFAULT
+
+
+def _scan_remote_root() -> str:
+    root = (current_app.config.get('SYNOLOGY_FILESTATION_SCAN') or '').replace('\\', '/').rstrip('/')
+    if not root:
+        raise ValueError('未配置 SYNOLOGY_FILESTATION_SCAN')
+    return root
+
+
+def _scan_local_root() -> str:
+    root = os.path.abspath((current_app.config.get('SYNOLOGY_FILESTATION_SCAN') or '').strip())
+    if not root:
+        raise ValueError('未配置 SYNOLOGY_FILESTATION_SCAN')
+    return root
+
+
+def _source_root_name(source: str) -> str:
+    normalized_source = _normalize_storage_source(source)
+    if normalized_source == STORAGE_SOURCE_SCAN:
+        if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+            root = _scan_remote_root()
+        else:
+            root = _scan_local_root().replace('\\', '/').rstrip('/')
+        return os.path.basename(root) or root or '/'
+    return _storage_root_name()
+
+
+def _build_source_remote_path(source: str, *parts: str) -> str:
+    normalized_source = _normalize_storage_source(source)
+    if normalized_source == STORAGE_SOURCE_SCAN:
+        root = _scan_remote_root()
+        clean_parts = [str(part).strip('/').replace('\\', '/') for part in parts if str(part).strip('/')]
+        if clean_parts:
+            return f'{root}/{posixpath.join(*clean_parts)}'
+        return root
+    return _remote_folder_path(posixpath.join(*[str(part).strip('/').replace('\\', '/') for part in parts if str(part).strip('/')]))
+
+
+def _safe_local_file_path_for_source(source: str, relative_path: str) -> str:
+    normalized_source = _normalize_storage_source(source)
+    if normalized_source != STORAGE_SOURCE_SCAN:
+        raise ValueError('unsupported source')
+
+    root = _scan_local_root()
+    normalized = _normalize_relative_path(relative_path)
+    resolved = os.path.abspath(os.path.join(root, normalized.replace('/', os.sep)))
+    if os.path.commonpath([root, resolved]) != root:
+        raise ValueError('invalid path')
+    return resolved
+
+
+def _list_remote_entries_for_source(source: str, relative_path: str, sid: str = ''):
+    normalized_source = _normalize_storage_source(source)
+    if normalized_source != STORAGE_SOURCE_SCAN:
+        return _list_storage_entries(relative_path)
+
+    resolved_sid = sid or _synology_upload_login()
+    folder_path = _build_source_remote_path(normalized_source, relative_path)
+    payload = _synology_api_get(
+        resolved_sid,
+        {
+            'api': 'SYNO.FileStation.List',
+            'version': '2',
+            'method': 'list',
+            'folder_path': folder_path,
+            'additional': '["size","time","owner"]',
+        },
+    )
+    if not payload.get('success'):
+        code = _synology_error_code(payload)
+        if code in {404, 415}:
+            raise FileNotFoundError('目录不存在')
+        raise RuntimeError(_synology_error_message(payload, 'filestation'))
+
+    directories = []
+    files = []
+    for item in payload.get('data', {}).get('files', []):
+        name = (item.get('name') or '').strip()
+        if not name:
+            continue
+
+        entry_rel_path = _build_synology_file_path(relative_path, name)
+        if item.get('isdir'):
+            directories.append({
+                'name': name,
+                'path': entry_rel_path,
+            })
+            continue
+
+        additional = item.get('additional') or {}
+        time_info = additional.get('time') or {}
+        mtime = _coerce_unix_timestamp(time_info.get('mtime'))
+        uploaded_at = (
+            _coerce_unix_timestamp(time_info.get('crtime'))
+            or _coerce_unix_timestamp(time_info.get('ctime'))
+            or mtime
+        )
+        size = additional.get('size')
+        owner = additional.get('owner') or {}
+        modified_by = (
+            (owner.get('user') or '').strip()
+            or (owner.get('group') or '').strip()
+            or (owner.get('uid') or '').strip()
+            or '-'
+        )
+        files.append({
+            'name': name,
+            'path': entry_rel_path,
+            'size': int(size) if isinstance(size, (int, float)) else 0,
+            'mtime': mtime,
+            'uploaded_at': uploaded_at,
+            'modified_by': modified_by,
+        })
+
+    directories.sort(key=lambda entry: entry['name'].lower())
+    files.sort(key=lambda entry: entry['name'].lower())
+    return directories, files
+
+
+def _load_file_payload_for_source(source: str, relative_file_path: str):
+    normalized_source = _normalize_storage_source(source)
     normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    if normalized_source != STORAGE_SOURCE_SCAN:
+        return _load_storage_file_payload(normalized)
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        client = _synology_get_filestation_client_by_sid(sid)
+        remote_file_path = _build_source_remote_path(normalized_source, normalized)
+        try:
+            content_stream = client.get_file(
+                path=remote_file_path,
+                mode='serve',
+                verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+            )
+        except Exception as exc:
+            from .contracts_core import _synology_sdk_error_payload
+            payload = _synology_sdk_error_payload(exc)
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在或路径无效')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+
+        if content_stream is None:
+            raise FileNotFoundError('文件不存在或路径无效')
+        if isinstance(content_stream, str):
+            raise RuntimeError(content_stream)
+
+        file_name = os.path.basename(normalized) or 'download.bin'
+        mime = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return content_stream.read(), file_name, mime
+
+    local_file_path = _safe_local_file_path_for_source(normalized_source, normalized)
+    if not os.path.isfile(local_file_path):
+        raise FileNotFoundError('文件不存在或已被移动')
+
+    file_name = os.path.basename(local_file_path)
+    mime = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+    with open(local_file_path, 'rb') as f:
+        return f.read(), file_name, mime
+
+
+def _collect_pdf_files_for_source(source: str) -> list:
+    normalized_source = _normalize_storage_source(source)
+    if normalized_source != STORAGE_SOURCE_SCAN:
+        return _collect_storage_pdf_files()
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        sid = _synology_upload_login()
+        stack = ['']
+        result = []
+        while stack:
+            current_path = stack.pop()
+            directories, files = _list_remote_entries_for_source(normalized_source, current_path, sid=sid)
+            for item in files:
+                name = item.get('name') or ''
+                if name.lower().endswith('.pdf'):
+                    result.append({
+                        'name': name,
+                        'path': item.get('path') or '',
+                        'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
+                        'uploaded_at': _coerce_unix_timestamp(item.get('uploaded_at')) or _coerce_unix_timestamp(item.get('mtime')) or 0,
+                        'modified_by': (item.get('modified_by') or '').strip() or '-',
+                    })
+            for directory in directories:
+                child_path = directory.get('path') or ''
+                if child_path:
+                    stack.append(child_path)
+        return result
+
+    root = _scan_local_root()
+    result = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.lower().endswith('.pdf'):
+                continue
+            full_path = os.path.join(dirpath, filename)
+            relative_path = os.path.relpath(full_path, root).replace('\\', '/')
+            try:
+                mtime = int(os.path.getmtime(full_path))
+            except OSError:
+                mtime = 0
+            try:
+                uploaded_at = int(os.path.getctime(full_path))
+            except OSError:
+                uploaded_at = mtime
+            result.append({
+                'name': filename,
+                'path': relative_path,
+                'mtime': mtime,
+                'uploaded_at': uploaded_at,
+                'modified_by': '-',
+            })
+    return result
+
+
+def _import_scan_file_to_contract_storage(relative_file_path: str, target_folder_path: str) -> tuple[str, str]:
+    normalized_source_path = _normalize_relative_path(relative_file_path)
+    normalized_target_folder = _normalize_relative_path(target_folder_path)
+    if not normalized_source_path:
+        raise ValueError('file_path is required')
+    if not normalized_target_folder:
+        raise ValueError('target_folder_path is required')
+
+    content, file_name, mime = _load_file_payload_for_source(STORAGE_SOURCE_SCAN, normalized_source_path)
+    safe_name = _sanitize_upload_filename(file_name)
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        remote_folder = _remote_folder_path(normalized_target_folder)
+        upload = _InMemoryUpload(content, mime)
+        resolved_name = _synology_upload_file(remote_folder, safe_name, upload)
+        return _build_synology_file_path(normalized_target_folder, resolved_name), resolved_name
+
+    target_dir = _safe_local_folder_path(normalized_target_folder)
+    os.makedirs(target_dir, exist_ok=True)
+    existing_names = [entry for entry in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, entry))]
+    resolved_name = _next_available_filename(existing_names, safe_name)
+    target_abs_path = os.path.join(target_dir, resolved_name)
+    with open(target_abs_path, 'wb') as f:
+        f.write(content)
+    return _build_synology_file_path(normalized_target_folder, resolved_name), resolved_name
+
+
+def _build_thumb_rel_path(relative_file_path: str, mtime: int, source: str = STORAGE_SOURCE_DEFAULT) -> str:
+    normalized = _normalize_relative_path(relative_file_path)
+    normalized_source = _normalize_storage_source(source)
     key = hashlib.sha1(
-        f'{normalized}|{int(mtime or 0)}|{THUMB_WIDTH}x{THUMB_HEIGHT}'.encode('utf-8')
+        f'{normalized_source}|{normalized}|{int(mtime or 0)}|{THUMB_WIDTH}x{THUMB_HEIGHT}'.encode('utf-8')
     ).hexdigest()
     return os.path.join(key[:2], f'{key}.jpg')
 
@@ -791,12 +1096,12 @@ def _render_fallback_thumbnail(file_name: str) -> Image.Image:
     return image
 
 
-def _ensure_thumbnail_file(relative_file_path: str, mtime: int) -> tuple[str, str]:
+def _ensure_thumbnail_file(relative_file_path: str, mtime: int, source: str = STORAGE_SOURCE_DEFAULT) -> tuple[str, str]:
     normalized = _normalize_relative_path(relative_file_path)
     if not normalized:
         raise ValueError('file_path is required')
 
-    thumb_rel_path = _build_thumb_rel_path(normalized, mtime)
+    thumb_rel_path = _build_thumb_rel_path(normalized, mtime, source=source)
     thumb_abs_path = os.path.join(_thumbs_root_dir(), thumb_rel_path)
 
     if os.path.isfile(thumb_abs_path):
@@ -804,7 +1109,7 @@ def _ensure_thumbnail_file(relative_file_path: str, mtime: int) -> tuple[str, st
 
     os.makedirs(os.path.dirname(thumb_abs_path), exist_ok=True)
 
-    content, file_name, _mime = _load_storage_file_payload(normalized)
+    content, file_name, _mime = _load_file_payload_for_source(source, normalized)
     if normalized.lower().endswith('.pdf'):
         thumbnail = _render_pdf_thumbnail(content)
     else:
@@ -1435,13 +1740,14 @@ def download_storage_file():
 @files_bp.get('/folders/file-preview')
 @require_auth
 def preview_storage_file():
+    source = _normalize_storage_source(request.args.get('source'))
     file_path = request.args.get('path') or request.args.get('file_path') or ''
     normalized = _normalize_relative_path(file_path)
     if not normalized.lower().endswith('.pdf'):
         return jsonify({'message': '仅支持PDF预览'}), 400
 
     try:
-        content, file_name, _mime = _load_storage_file_payload(normalized)
+        content, file_name, _mime = _load_file_payload_for_source(source, normalized)
     except PermissionError as exc:
         return jsonify({'message': str(exc)}), 401
     except ValueError as exc:
@@ -1489,12 +1795,13 @@ def latest_uploaded_files():
                 'name': item.get('name') or '',
                 'path': _normalize_relative_path(item.get('path') or ''),
                 'mtime': _coerce_unix_timestamp(item.get('mtime')),
+                'uploaded_at': _coerce_unix_timestamp(item.get('uploaded_at')) or _coerce_unix_timestamp(item.get('mtime')),
                 'modified_by': (item.get('modified_by') or '').strip() or '-',
             }
             for item in all_files
             if (item.get('path') or '').strip() and _is_allowed_file_path(item.get('path') or '')
         ],
-        key=lambda row: (row['mtime'] or 0, row['name']),
+        key=lambda row: (row['uploaded_at'] or 0, row['name']),
         reverse=True,
     )
 
@@ -1507,7 +1814,7 @@ def latest_uploaded_files():
         matched_contract = contract_file_index.get(normalized_path)
 
         try:
-            thumb_rel_path, _thumb_abs = _ensure_thumbnail_file(normalized_path, item['mtime'])
+            thumb_rel_path, _thumb_abs = _ensure_thumbnail_file(normalized_path, item['mtime'], source=STORAGE_SOURCE_DEFAULT)
         except Exception:
             thumb_rel_path = ''
 
@@ -1515,6 +1822,7 @@ def latest_uploaded_files():
             'name': item['name'],
             'file_path': normalized_path,
             'mtime': item['mtime'],
+            'uploaded_at': item['uploaded_at'],
             'modified_by': item['modified_by'],
             'thumbnail_key': thumb_rel_path,
             'has_contract_binding': bool(matched_contract),
@@ -1525,14 +1833,113 @@ def latest_uploaded_files():
     return jsonify({'files': payload, 'total': len(payload)})
 
 
-@files_bp.get('/folders/file-thumbnail')
+@files_bp.get('/folders/scan-files')
 @require_auth
+def scan_files():
+    raw_limit = request.args.get('limit')
+    limit = None if raw_limit in {None, ''} else _safe_limit(raw_limit)
+
+    try:
+        all_files = _collect_pdf_files_for_source(STORAGE_SOURCE_SCAN)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'message': f'读取扫描文件失败: {exc}'}), 500
+
+    sorted_files = sorted(
+        [
+            {
+                'name': item.get('name') or '',
+                'path': _normalize_relative_path(item.get('path') or ''),
+                'mtime': _coerce_unix_timestamp(item.get('mtime')),
+                'uploaded_at': _coerce_unix_timestamp(item.get('uploaded_at')) or _coerce_unix_timestamp(item.get('mtime')),
+                'modified_by': (item.get('modified_by') or '').strip() or '-',
+            }
+            for item in all_files
+            if (item.get('path') or '').strip()
+        ],
+        key=lambda row: (row['uploaded_at'] or 0, row['name']),
+        reverse=True,
+    )
+
+    rows = sorted_files if limit is None else sorted_files[:limit]
+    payload = []
+    for item in rows:
+        try:
+            thumb_rel_path, _thumb_abs = _ensure_thumbnail_file(item['path'], item['mtime'], source=STORAGE_SOURCE_SCAN)
+        except Exception:
+            thumb_rel_path = ''
+
+        payload.append({
+            'name': item['name'],
+            'file_path': item['path'],
+            'mtime': item['mtime'],
+            'uploaded_at': item['uploaded_at'],
+            'modified_by': item['modified_by'],
+            'thumbnail_key': thumb_rel_path,
+            'source': STORAGE_SOURCE_SCAN,
+        })
+
+    return jsonify({
+        'files': payload,
+        'total': len(payload),
+        'root_name': _source_root_name(STORAGE_SOURCE_SCAN),
+    })
+
+
+@files_bp.post('/folders/scan-import')
+@require_auth
+def import_scan_file():
+    body = request.get_json(silent=True) or {}
+    file_path = body.get('file_path') or body.get('path') or ''
+    target_folder_path = body.get('target_folder_path') or body.get('folder_path') or ''
+
+    try:
+        imported_path, imported_name = _import_scan_file_to_contract_storage(file_path, target_folder_path)
+    except PermissionError as exc:
+        return jsonify({'message': str(exc)}), 401
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'message': f'导入扫描文件失败: {exc}'}), 500
+
+    return jsonify({
+        'file_path': imported_path,
+        'name': imported_name,
+    })
+
+
+@files_bp.get('/folders/file-thumbnail')
 def get_file_thumbnail():
+    source = _normalize_storage_source(request.args.get('source'))
+    thumb_key = request.args.get('key') or request.args.get('thumbnail_key') or ''
+    if thumb_key:
+        try:
+            thumb_abs_path = _resolve_thumb_abs_path_from_key(thumb_key)
+            if not os.path.isfile(thumb_abs_path):
+                return jsonify({'message': '缩略图不存在'}), 404
+        except ValueError as exc:
+            return jsonify({'message': str(exc)}), 400
+
+        response = send_file(
+            thumb_abs_path,
+            mimetype='image/jpeg',
+            as_attachment=False,
+            max_age=31536000,
+        )
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return response
+
+    if not _has_valid_request_auth():
+        return jsonify({'message': 'Missing token'}), 401
+
     file_path = request.args.get('path') or request.args.get('file_path') or ''
     mtime = _safe_limit(request.args.get('mtime'), default=0, minimum=0, maximum=2_147_483_647)
 
     try:
-        _thumb_rel_path, thumb_abs_path = _ensure_thumbnail_file(file_path, mtime)
+        _thumb_rel_path, thumb_abs_path = _ensure_thumbnail_file(file_path, mtime, source=source)
     except ValueError as exc:
         return jsonify({'message': str(exc)}), 400
     except FileNotFoundError as exc:
@@ -1540,11 +1947,14 @@ def get_file_thumbnail():
     except Exception as exc:
         return jsonify({'message': f'缩略图生成失败: {exc}'}), 500
 
-    return send_file(
+    response = send_file(
         thumb_abs_path,
         mimetype='image/jpeg',
         as_attachment=False,
+        max_age=31536000,
     )
+    response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
 
 
 @files_bp.route('/html/', defaults={'relative_path': ''}, methods=['GET'])

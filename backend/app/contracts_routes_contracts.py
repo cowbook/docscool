@@ -1,10 +1,14 @@
 import os
 import re
+from collections import deque
 from io import BytesIO
 from decimal import Decimal
+from typing import Any
 
+import requests
 from flask import current_app, g, jsonify, request, send_file
 from sqlalchemy import String, cast, func, or_
+from requests.exceptions import RequestException
 from werkzeug.datastructures import FileStorage
 
 from .auth import require_auth
@@ -57,7 +61,98 @@ from .models import Contract, UserPermission
 
 
 ROLE_SUPER_ADMIN = 'super_admin'
+ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
 PERMISSION_ALL = '全部'
+
+HT_DETAIL_PAYMENT_FIELDS = [
+    'FPYZ_NAM',
+    'VEN_NO',
+    'FKSP_STA',
+    'FKLX_NO',
+    'YSM_ID',
+    'FPYZ_AMT',
+    'BCZF_AMT',
+    'YHYZF_AMT',
+    'CWFK_ID',
+    'JSFS_TYP',
+    'FPYZ_NO',
+    'YWLX_TYP',
+    'CN_QTY',
+    'JBUSR_ID',
+    'JBRQ_DTM',
+    'JHFK_DTM',
+]
+
+HT_DETAIL_QUERY_HISTORY = deque(maxlen=200)
+
+
+def _normalize_external_payment_items(payload: Any) -> list[dict[str, str]]:
+    if not isinstance(payload, list):
+        return []
+
+    normalized = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        normalized_row = {
+            field: str(row.get(field) or '').strip()
+            for field in HT_DETAIL_PAYMENT_FIELDS
+        }
+        normalized.append(normalized_row)
+    return normalized
+
+
+def _request_external_contract_detail(htno: str) -> dict[str, Any]:
+    api_url = (current_app.config.get('HT_DETAIL_API_URL') or '').strip()
+    api_username = (current_app.config.get('HT_DETAIL_API_USERNAME') or '').strip()
+    api_password = (current_app.config.get('HT_DETAIL_API_PASSWORD') or '').strip()
+    timeout_seconds = int(current_app.config.get('HT_DETAIL_API_TIMEOUT_SECONDS') or 15)
+
+    if not api_url:
+        raise RuntimeError('未配置 HT_DETAIL_API_URL')
+    if not api_username or not api_password:
+        raise RuntimeError('未配置合同详情接口认证信息，请设置 HT_DETAIL_API_USERNAME/HT_DETAIL_API_PASSWORD')
+
+    try:
+        response = requests.get(
+            api_url,
+            params={'htno': htno},
+            auth=(api_username, api_password),
+            timeout=max(timeout_seconds, 5),
+        )
+        response.raise_for_status()
+    except RequestException as exc:
+        raise RuntimeError(f'调用 GetHtDetail 接口失败: {exc}') from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError('GetHtDetail 接口返回的不是合法 JSON') from exc
+
+    if not isinstance(data, dict):
+        raise RuntimeError('GetHtDetail 接口返回格式异常')
+    return data
+
+
+def _record_payment_flow_query(
+    *,
+    contract_id: int,
+    contract_number: str,
+    queried_by: str,
+    status: str,
+    message: str,
+    payment_count: int,
+) -> dict[str, Any]:
+    row = {
+        'contract_id': int(contract_id),
+        'contract_number': str(contract_number or '').strip(),
+        'queried_by': str(queried_by or '').strip() or '-',
+        'status': str(status or '').strip() or 'unknown',
+        'message': str(message or '').strip(),
+        'payment_count': int(payment_count or 0),
+    }
+    HT_DETAIL_QUERY_HISTORY.appendleft(row)
+    return row
 
 
 def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
@@ -69,7 +164,7 @@ def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
     if not permission_row:
         return True, []
 
-    if str(getattr(permission_row, 'role', '') or '').strip() == ROLE_SUPER_ADMIN:
+    if str(getattr(permission_row, 'role', '') or '').strip() in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}:
         return True, []
 
     aggregated = permission_row.get_aggregated_permission()
@@ -231,6 +326,79 @@ def get_dashboard_charts():
 def get_contract(contract_id):
     row = Contract.query.get_or_404(contract_id)
     return jsonify(row.to_dict(include_fullbody=True))
+
+
+@contracts_bp.get('/contracts/<int:contract_id>/payment-flows')
+@require_auth
+def get_contract_payment_flows(contract_id):
+    row = Contract.query.get_or_404(contract_id)
+    current_user = (getattr(g, 'current_user', '') or '').strip()
+    contract_number = (row.contract_number or '').strip()
+    if not contract_number:
+        history_item = _record_payment_flow_query(
+            contract_id=row.id,
+            contract_number='',
+            queried_by=current_user,
+            status='skipped',
+            message='当前合同没有合同编号，无法查询支付流水',
+            payment_count=0,
+        )
+        return jsonify({
+            'contract_id': row.id,
+            'contract_number': '',
+            'payments': [],
+            'message': '当前合同没有合同编号，无法查询支付流水',
+            'query_history': [history_item],
+        })
+
+    try:
+        detail_payload = _request_external_contract_detail(contract_number)
+    except RuntimeError as exc:
+        history_item = _record_payment_flow_query(
+            contract_id=row.id,
+            contract_number=contract_number,
+            queried_by=current_user,
+            status='failed',
+            message=str(exc),
+            payment_count=0,
+        )
+        current_app.logger.warning(
+            'payment-flow query failed contract_id=%s contract_number=%s user=%s message=%s',
+            row.id,
+            contract_number,
+            current_user or '-',
+            str(exc),
+        )
+        return jsonify({'message': str(exc)}), 502
+
+    payments = _normalize_external_payment_items(detail_payload.get('payment'))
+    history_item = _record_payment_flow_query(
+        contract_id=row.id,
+        contract_number=contract_number,
+        queried_by=current_user,
+        status='success',
+        message='查询成功',
+        payment_count=len(payments),
+    )
+    current_app.logger.info(
+        'payment-flow query success contract_id=%s contract_number=%s user=%s payment_count=%s payments=%s',
+        row.id,
+        contract_number,
+        current_user or '-',
+        len(payments),
+        payments,
+    )
+    related_history = [
+        item
+        for item in HT_DETAIL_QUERY_HISTORY
+        if item.get('contract_id') == row.id
+    ][:20]
+    return jsonify({
+        'contract_id': row.id,
+        'contract_number': contract_number,
+        'payments': payments,
+        'query_history': related_history or [history_item],
+    })
 
 
 @contracts_bp.post('/contracts/quick-match-files')

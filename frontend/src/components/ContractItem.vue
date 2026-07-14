@@ -187,6 +187,67 @@
               <span>修改时间：{{ formatMetaDateTime(form.updated_at) }}</span>
             </div>
 
+            <div class="payment-flow-section">
+              <div class="payment-flow-header">
+                <div class="payment-flow-title">支付流水</div>
+                <div class="payment-flow-count" v-if="paymentFlowRows.length">{{ paymentFlowRows.length }} 条</div>
+              </div>
+
+              <el-alert
+                v-if="paymentFlowError"
+                type="warning"
+                :closable="false"
+                show-icon
+                :title="paymentFlowError"
+                class="payment-flow-alert"
+              />
+
+              <div v-loading="paymentFlowLoading" class="payment-flow-table-wrap">
+                <el-table
+                  v-if="paymentFlowRows.length"
+                  :data="paymentFlowRows"
+                  size="small"
+                  border
+                  stripe
+                  max-height="280"
+                >
+                  <el-table-column prop="FPYZ_NAM" label="付款描述" min-width="180" show-overflow-tooltip />
+                  <el-table-column prop="VEN_NO" label="供应商" min-width="160" show-overflow-tooltip />
+                  <el-table-column prop="FKSP_STA" label="审批状态" min-width="110" />
+                  <el-table-column prop="FKLX_NO" label="付款类型" min-width="110" />
+                  <el-table-column prop="BCZF_AMT" label="本次支付金额" min-width="130" />
+                  <el-table-column prop="YHYZF_AMT" label="已支付金额" min-width="120" />
+                  <el-table-column prop="JHFK_DTM" label="计划付款日期" min-width="140" />
+                  <el-table-column prop="JBUSR_ID" label="承办人" min-width="100" />
+                  <el-table-column prop="JBRQ_DTM" label="承办日期" min-width="160" />
+                  <el-table-column prop="CWFK_ID" label="付款审批编号" min-width="160" show-overflow-tooltip />
+                </el-table>
+
+                <el-empty v-else :description="paymentFlowLoading ? '正在加载支付流水...' : paymentFlowEmptyText" :image-size="64" />
+              </div>
+
+              <div class="payment-query-history-section">
+                <div class="payment-query-history-title">查询历史记录</div>
+                <el-table
+                  v-if="paymentFlowQueryHistory.length"
+                  :data="paymentFlowQueryHistory"
+                  size="small"
+                  border
+                  stripe
+                  max-height="220"
+                >
+                  <el-table-column prop="status" label="状态" min-width="90" />
+                  <el-table-column prop="payment_count" label="流水条数" min-width="90" />
+                  <el-table-column prop="queried_by" label="查询人" min-width="100" />
+                  <el-table-column prop="contract_number" label="合同编号" min-width="120" />
+                  <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
+                </el-table>
+                <el-empty v-else description="暂无查询历史" :image-size="52" />
+              </div>
+            </div>
+
+            
+
             
 
           </div>
@@ -534,6 +595,10 @@ const uploadFolderDialogVisible = ref(false)
 const uploadFolderSelectedPath = ref('')
 const uploadTargetFolderPath = ref('')
 const uploadFileInputRef = ref(null)
+const paymentFlowRows = ref([])
+const paymentFlowLoading = ref(false)
+const paymentFlowError = ref('')
+const paymentFlowQueryHistory = ref([])
 
 const saving = ref(false)
 const contractDialogLoading = ref(false)
@@ -549,6 +614,15 @@ const ocrMdAvailable = ref(false)
 const ocrMdChecking = ref(false)
 let ocrMdProbeToken = 0
 const canConfirmUploadFolder = computed(() => !!normalizePath(uploadFolderSelectedPath.value))
+const paymentFlowEmptyText = computed(() => {
+  if (!editing.value?.id) {
+    return '请先保存合同后查看支付流水'
+  }
+  if (!String(form.contract_number || '').trim()) {
+    return '当前合同没有合同编号，无法查询支付流水'
+  }
+  return '暂无支付流水'
+})
 
 const linkTreeProps = {
   label: 'name',
@@ -733,6 +807,29 @@ const resetForm = () => {
   form.updated_at = ''
 }
 
+const resetPaymentFlows = () => {
+  paymentFlowRows.value = []
+  paymentFlowError.value = ''
+  paymentFlowLoading.value = false
+  paymentFlowQueryHistory.value = []
+}
+
+const loadPaymentFlows = async (contractId) => {
+  paymentFlowLoading.value = true
+  paymentFlowError.value = ''
+  try {
+    const { data } = await http.get(`/contracts/${contractId}/payment-flows`)
+    paymentFlowRows.value = Array.isArray(data?.payments) ? data.payments : []
+    paymentFlowQueryHistory.value = Array.isArray(data?.query_history) ? data.query_history : []
+  } catch (error) {
+    paymentFlowRows.value = []
+    paymentFlowQueryHistory.value = []
+    paymentFlowError.value = error?.response?.data?.message || '支付流水加载失败'
+  } finally {
+    paymentFlowLoading.value = false
+  }
+}
+
 const setAiParsing = (value) => {
   emit('update:aiParsing', value)
 }
@@ -750,6 +847,7 @@ const openCreate = () => {
   currentPreviewRow.value = null
   previewFileName.value = ''
   resetForm()
+  resetPaymentFlows()
   resetPreview('暂无文件')
   dialogVisible.value = true
 }
@@ -852,6 +950,7 @@ const openCreateFromAi = (file, fields) => {
   currentPreviewRow.value = null
   previewFileName.value = file?.name || ''
   resetForm()
+  resetPaymentFlows()
   form.file_path = file?.name || ''
   applyParsedFields(fields || {})
   setPreviewFromFile(file)
@@ -866,6 +965,7 @@ const openCreateWithFilePath = async (filePath, fields) => {
   currentPreviewRow.value = null
   previewFileName.value = getFileName(filePath || '')
   resetForm()
+  resetPaymentFlows()
   applyParsedFields(fields || {})
   form.file_path = String(filePath || '').trim()
   dialogVisible.value = true
@@ -885,6 +985,7 @@ const openEditWithSupplementalFields = async (row, fields, options = {}) => {
   previewFileName.value = ''
   pendingAiUploadFile.value = null
   resetForm()
+  resetPaymentFlows()
   resetPreview('暂无文件')
   dialogVisible.value = true
 
@@ -894,7 +995,10 @@ const openEditWithSupplementalFields = async (row, fields, options = {}) => {
     currentPreviewRow.value = detail
     populateFormFromContract(detail)
     applyAiSupplementalFields(fields || {}, detail)
-    await loadPdfPreviewForRow(detail)
+    await Promise.all([
+      loadPdfPreviewForRow(detail),
+      loadPaymentFlows(detail.id),
+    ])
   } catch (error) {
     dialogVisible.value = false
     ElMessage.error(error?.response?.data?.message || '合同详情加载失败')
@@ -2060,6 +2164,7 @@ watch(dialogVisible, (visible) => {
     ocrMdChecking.value = false
     contractDialogLoading.value = false
     dialogReadOnly.value = false
+    resetPaymentFlows()
     resetPreview('暂无文件')
   }
 })
@@ -2280,6 +2385,50 @@ defineExpose({
   font-size: 12px;
   line-height: 1.4;
   color: #9ca3af;
+}
+
+.payment-flow-section {
+  margin-top: 14px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.payment-flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.payment-flow-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.payment-flow-count {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.payment-flow-alert {
+  margin-bottom: 8px;
+}
+
+.payment-flow-table-wrap {
+  min-height: 86px;
+}
+
+.payment-query-history-section {
+  margin-top: 10px;
+}
+
+.payment-query-history-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #4b5563;
 }
 
 .form-item-span-2 {

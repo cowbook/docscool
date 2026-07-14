@@ -274,7 +274,7 @@ def _normalize_permission_item_list(items):
 
 def _build_permission_list_json_for_legacy_row(row_mapping, has_permission_column, has_departments_column, has_folders_column):
     role = str(row_mapping.get('role') or '').strip()
-    if role not in {'super_admin', 'admin'}:
+    if role not in {'super_admin', 'admin', 'synology_super_admin'}:
         role = 'admin'
 
     parsed = []

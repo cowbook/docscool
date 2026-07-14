@@ -10,6 +10,23 @@ from flask import Blueprint, current_app, g, jsonify, request
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 _USER_PASSWORD_CACHE = {}
+_QUERY_TOKEN_ALLOWED_ENDPOINTS = {
+    'files.get_file_thumbnail',
+}
+
+
+def _extract_request_token() -> str:
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        return auth_header.replace('Bearer ', '', 1).strip()
+
+    # Limited fallback for browser-native asset requests (img/iframe) that cannot set headers.
+    if request.method == 'GET' and request.endpoint in _QUERY_TOKEN_ALLOWED_ENDPOINTS:
+        token = (request.args.get('token') or '').strip()
+        if token:
+            return token
+
+    return ''
 
 
 def _synology_error_message(code: int) -> str:
@@ -220,11 +237,9 @@ def decode_token(token: str):
 def require_auth(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        token = _extract_request_token()
+        if not token:
             return jsonify({'message': 'Missing token'}), 401
-
-        token = auth_header.replace('Bearer ', '', 1).strip()
         try:
             payload = decode_token(token)
         except jwt.PyJWTError:

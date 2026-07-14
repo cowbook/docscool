@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from sqlalchemy import String, cast, func, or_
 from flask import Blueprint, current_app, g, jsonify, request, send_file
-from .auth import get_cached_user_password, require_auth
+from .auth import require_auth
 from .extensions import db
 from .models import Contract, Department, ProjectOption, StampTaxRateOption
 from .ocr_utils import (
@@ -236,17 +236,19 @@ def _next_available_filename(existing_names, incoming_name: str) -> str:
 
 def _synology_upload_login() -> str:
     base_url = current_app.config.get('SYNOLOGY_BASE_URL', '').rstrip('/')
-    username = (getattr(g, 'current_user', '') or '').strip()
+    username, password = _get_storage_service_credentials()
     if not base_url:
         raise RuntimeError('Missing SYNOLOGY_BASE_URL in .env')
-    if not username:
-        raise PermissionError('未找到当前登录用户，请重新登录后重试')
-
-    password = get_cached_user_password(username)
-    if not password:
-        raise PermissionError('登录凭据已过期，请重新登录后重试')
 
     return _synology_user_login(username, password, session_name='FileStation')
+
+
+def _get_storage_service_credentials() -> tuple[str, str]:
+    username = (current_app.config.get('SYNOLOGY_USER') or '').strip()
+    password = (current_app.config.get('SYNOLOGY_PASSWORD') or '').strip()
+    if not username or not password:
+        raise RuntimeError('Missing SYNOLOGY_USER or SYNOLOGY_PASSWORD in .env')
+    return username, password
 
 
 def _synology_sdk_error_payload(exc: Exception) -> dict:
@@ -396,13 +398,7 @@ def _synology_get_filestation_client_by_sid(sid: str):
     if sid_text and sid_text in _SYNOLOGY_FILESTATION_CLIENTS:
         return _SYNOLOGY_FILESTATION_CLIENTS[sid_text]
 
-    username = (getattr(g, 'current_user', '') or '').strip()
-    if not username:
-        raise PermissionError('未找到当前登录用户，请重新登录后重试')
-
-    password = get_cached_user_password(username)
-    if not password:
-        raise PermissionError('登录凭据已过期，请重新登录后重试')
+    username, password = _get_storage_service_credentials()
 
     client = _synology_new_filestation_client(username, password)
     new_sid = str(getattr(client, '_sid', '') or '').strip()
@@ -689,12 +685,10 @@ def _load_contract_file_payload(record: Contract):
         raise FileNotFoundError('该合同未上传文件')
 
     if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
-        password = get_cached_user_password(g.current_user)
-        if not password:
-            raise PermissionError('登录凭据已过期，请重新登录后下载')
+        username, password = _get_storage_service_credentials()
 
         remote_file_path = _build_filestation_path(normalized_file_path)
-        client = _synology_new_filestation_client(g.current_user, password)
+        client = _synology_new_filestation_client(username, password)
         sid = str(getattr(client, '_sid', '') or '').strip()
         if sid:
             _SYNOLOGY_FILESTATION_CLIENTS[sid] = client
@@ -803,11 +797,14 @@ def _list_local_entries(relative_path: str):
             elif entry.is_file(follow_symlinks=False):
                 stat_result = entry.stat(follow_symlinks=False)
                 modified_by = getpass.getuser() or '-'
+                # On Windows, st_ctime is creation time and better matches upload time semantics.
+                uploaded_at = int(getattr(stat_result, 'st_ctime', 0) or 0)
                 files.append({
                     'name': entry.name,
                     'path': entry_rel_path,
                     'size': int(stat_result.st_size),
                     'mtime': int(stat_result.st_mtime),
+                    'uploaded_at': uploaded_at or int(stat_result.st_mtime),
                     'modified_by': modified_by,
                 })
 
@@ -856,7 +853,13 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             continue
 
         additional = item.get('additional') or {}
-        mtime = _coerce_unix_timestamp((additional.get('time') or {}).get('mtime'))
+        time_info = additional.get('time') or {}
+        mtime = _coerce_unix_timestamp(time_info.get('mtime'))
+        uploaded_at = (
+            _coerce_unix_timestamp(time_info.get('crtime'))
+            or _coerce_unix_timestamp(time_info.get('ctime'))
+            or mtime
+        )
         size = additional.get('size')
         owner = additional.get('owner') or {}
         modified_by = (
@@ -870,6 +873,7 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             'path': entry_rel_path,
             'size': int(size) if isinstance(size, (int, float)) else 0,
             'mtime': mtime,
+            'uploaded_at': uploaded_at,
             'modified_by': modified_by,
         })
 
@@ -928,6 +932,7 @@ def _collect_storage_pdf_files() -> list:
                         'name': name,
                         'path': item.get('path') or '',
                         'mtime': _coerce_unix_timestamp(item.get('mtime')) or 0,
+                        'uploaded_at': _coerce_unix_timestamp(item.get('uploaded_at')) or _coerce_unix_timestamp(item.get('mtime')) or 0,
                         'modified_by': (item.get('modified_by') or '').strip() or '-',
                     })
             for directory in directories:
@@ -948,10 +953,15 @@ def _collect_storage_pdf_files() -> list:
                 mtime = int(os.path.getmtime(full_path))
             except OSError:
                 mtime = 0
+            try:
+                uploaded_at = int(os.path.getctime(full_path))
+            except OSError:
+                uploaded_at = mtime
             result.append({
                 'name': filename,
                 'path': relative_path,
                 'mtime': mtime,
+                'uploaded_at': uploaded_at,
                 'modified_by': getpass.getuser() or '-',
             })
     return result

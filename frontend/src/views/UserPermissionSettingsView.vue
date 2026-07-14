@@ -5,7 +5,11 @@
         <div class="card-header">
           <div>
             <div class="card-title">用户权限</div>
-            <div class="card-tip">本系统管理的用户权限对应群晖里的docscool用户组，超管默认拥有全部部门和文件夹的编辑权限，可以进行参数设置，只有金色图标的群晖的管理员可以访问本页面进行用户权限设置</div>
+            <div class="card-tip">如下列表的所有用户，将被加到群晖的docscool用户组，<b>超管</b> 默认拥有群晖合同管理部门、文件夹、参数设置，设置权限；
+              金色图标是<b>群晖超管</b>，在群晖系统里拥有管理员权限，可对本用户权限页面进行设置。
+              带胸章图标是本系统创建的用户。
+            </div>
+
           </div>
           <el-button-group v-if="canManageUserAddDelete" class="apple-button-group">
             <el-button type="primary" :loading="addingUser" @click="addExistingUser">
@@ -64,8 +68,8 @@
         </el-table-column>
         <el-table-column label="角色" width="140">
           <template #default="scope">
-            <el-tag :type="scope.row.role === 'super_admin' ? 'danger' : 'warning'">
-              {{ scope.row.role === 'super_admin' ? '超管' : '管理员' }}
+            <el-tag :type="getRoleTagType(scope.row.role)">
+              {{ getRoleText(scope.row.role) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -197,6 +201,7 @@
           </el-form-item>
           <el-form-item label="角色" required>
             <el-radio-group v-model="createUserForm.role" @change="handleCreateUserRoleChange">
+              <el-radio value="synology_super_admin">群晖超管</el-radio>
               <el-radio value="super_admin">超管</el-radio>
               <el-radio value="admin">管理员</el-radio>
             </el-radio-group>
@@ -232,11 +237,9 @@
             <el-table-column label="部门" min-width="260">
               <template #default="permissionScope">
                 <el-select
-                  v-model="permissionScope.row.departments"
-                  multiple
+                  :model-value="getPermissionBindingSingleValue(permissionScope.row.departments)"
+                  @update:model-value="(value) => setPermissionBindingSingleValue(permissionScope.row, 'departments', value)"
                   filterable
-                  collapse-tags
-                  collapse-tags-tooltip
                   clearable
                   :loading="departmentOptionsLoading"
                   placeholder="请选择部门"
@@ -254,11 +257,9 @@
             <el-table-column label="文件夹" min-width="280">
               <template #default="permissionScope">
                 <el-select
-                  v-model="permissionScope.row.folders"
-                  multiple
+                  :model-value="getPermissionBindingSingleValue(permissionScope.row.folders)"
+                  @update:model-value="(value) => setPermissionBindingSingleValue(permissionScope.row, 'folders', value)"
                   filterable
-                  collapse-tags
-                  collapse-tags-tooltip
                   clearable
                   :loading="folderOptionsLoading"
                   placeholder="请选择文件夹"
@@ -310,6 +311,11 @@ import http from '../api/http'
 
 const router = useRouter()
 
+const ROLE_SUPER_ADMIN = 'super_admin'
+const ROLE_ADMIN = 'admin'
+const ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
+const SUPER_ROLE_SET = new Set([ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN])
+
 const rows = ref([])
 const departmentOptions = ref([])
 const folderOptions = ref([])
@@ -350,7 +356,7 @@ const currentPermission = ref('view')
 const currentRole = ref('admin')
 const currentLoginName = ref('')
 const canManageUserAddDelete = computed(() => {
-  if (currentRole.value === 'super_admin') {
+  if (SUPER_ROLE_SET.has(currentRole.value)) {
     return true
   }
   return currentLoginName.value.toLowerCase() === 'zhangyan'
@@ -358,12 +364,12 @@ const canManageUserAddDelete = computed(() => {
 const isEditingUserDialog = computed(() => userDialogMode.value === 'edit')
 
 const normalizeDepartmentList = (value) => {
-  if (!Array.isArray(value)) {
-    return []
-  }
+  const source = Array.isArray(value)
+    ? value
+    : (String(value || '').trim() ? [String(value || '').trim()] : [])
   const normalized = []
   const seen = new Set()
-  value.forEach((item) => {
+  source.forEach((item) => {
     const text = String(item || '').trim()
     if (!text || seen.has(text)) {
       return
@@ -418,6 +424,16 @@ const normalizePermissionList = (value) => {
   }]
 }
 
+const getPermissionBindingSingleValue = (value) => {
+  const normalized = normalizeDepartmentList(value)
+  return normalized[0] || ''
+}
+
+const setPermissionBindingSingleValue = (row, field, value) => {
+  const text = String(value || '').trim()
+  row[field] = text ? [text] : []
+}
+
 const formatPermissionLabel = (permission) => {
   if (permission === 'edit') {
     return '编辑'
@@ -432,6 +448,36 @@ const formatPermissionText = (item) => {
   const departmentText = departments.length ? departments.join('、') : '无'
   const folderText = folders.length ? folders.join('、') : '无'
   return `${permission} | 部门: ${departmentText} | 文件夹: ${folderText}`
+}
+
+const normalizeRoleValue = (role) => {
+  const value = String(role || '').trim()
+  if ([ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN].includes(value)) {
+    return value
+  }
+  return ROLE_ADMIN
+}
+
+const getRoleText = (role) => {
+  const value = normalizeRoleValue(role)
+  if (value === ROLE_SUPER_ADMIN) {
+    return '超管'
+  }
+  if (value === ROLE_SYNOLOGY_SUPER_ADMIN) {
+    return '群晖超管'
+  }
+  return '管理员'
+}
+
+const getRoleTagType = (role) => {
+  const value = normalizeRoleValue(role)
+  if (value === ROLE_SUPER_ADMIN) {
+    return 'danger'
+  }
+  if (value === ROLE_SYNOLOGY_SUPER_ADMIN) {
+    return 'success'
+  }
+  return 'warning'
 }
 
 const getLoginNameIconClass = (row) => {
@@ -451,9 +497,7 @@ const loadUsers = async () => {
   const list = Array.isArray(data?.users) ? data.users : []
   rows.value = list.map((item) => ({
     ...item,
-    role: ['super_admin', 'admin'].includes(String(item?.role || '').trim())
-      ? String(item.role).trim()
-      : 'admin',
+    role: normalizeRoleValue(item?.role),
     department_list: normalizeDepartmentList(item.department_list),
     folder_list: normalizeDepartmentList(item.folder_list),
     permission_list: normalizePermissionList(item.permission_list),
@@ -465,11 +509,11 @@ const loadCurrentPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
     currentPermission.value = String(data?.permission || 'view').trim() || 'view'
-    currentRole.value = String(data?.role || 'admin').trim() || 'admin'
+    currentRole.value = normalizeRoleValue(data?.role)
     currentLoginName.value = String(data?.login_name || '').trim()
   } catch (_error) {
     currentPermission.value = 'view'
-    currentRole.value = 'admin'
+    currentRole.value = ROLE_ADMIN
     currentLoginName.value = ''
   }
 }
@@ -549,7 +593,7 @@ const openCreateUserDialog = () => {
     name: '',
     password: '',
     passwordConfirm: '',
-    role: 'admin',
+    role: ROLE_ADMIN,
     permission_list: [
       {
         permission: 'view',
@@ -568,24 +612,19 @@ const closeCreateUserDialog = () => {
   editingUserId.value = 0
 }
 
+const enforceSuperRolePermissionList = (permissionList) => {
+  return [{
+    permission: 'edit',
+    departments: ['全部'],
+    folders: ['全部'],
+  }]
+}
+
 const handleCreateUserRoleChange = (value) => {
-  if (String(value || '').trim() !== 'super_admin') {
+  if (!SUPER_ROLE_SET.has(String(value || '').trim())) {
     return
   }
-  const current = normalizePermissionList(createUserForm.value.permission_list)
-  if (!current.length) {
-    createUserForm.value.permission_list = [{
-      permission: 'view',
-      departments: ['全部'],
-      folders: ['全部'],
-    }]
-    return
-  }
-  createUserForm.value.permission_list = current.map((item) => ({
-    ...item,
-    departments: item.departments.length ? item.departments : ['全部'],
-    folders: item.folders.length ? item.folders : ['全部'],
-  }))
+  createUserForm.value.permission_list = enforceSuperRolePermissionList(createUserForm.value.permission_list)
 }
 
 const submitCreateUser = async () => {
@@ -622,11 +661,16 @@ const submitCreateUser = async () => {
       return
     }
   }
-  if (!['super_admin', 'admin'].includes(role)) {
+  if (![ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN].includes(role)) {
     ElMessage.warning('请选择角色')
     return
   }
-  const permissionList = normalizePermissionList(createUserForm.value.permission_list)
+  const permissionList = SUPER_ROLE_SET.has(role)
+    ? enforceSuperRolePermissionList(createUserForm.value.permission_list)
+    : normalizePermissionList(createUserForm.value.permission_list)
+  if (SUPER_ROLE_SET.has(role)) {
+    createUserForm.value.permission_list = permissionList
+  }
   if (!permissionList.length) {
     ElMessage.warning('请至少添加一条权限绑定')
     return
@@ -686,10 +730,11 @@ const openPermissionEditDialog = (row) => {
     name: String(row?.description || '').trim(),
     password: '',
     passwordConfirm: '',
-    role: ['super_admin', 'admin'].includes(String(row?.role || '').trim())
-      ? String(row.role).trim()
-      : 'admin',
+    role: normalizeRoleValue(row?.role),
     permission_list: normalizePermissionList(row?.permission_list),
+  }
+  if (SUPER_ROLE_SET.has(createUserForm.value.role)) {
+    createUserForm.value.permission_list = enforceSuperRolePermissionList(createUserForm.value.permission_list)
   }
   createUserDialogVisible.value = true
 }
@@ -887,7 +932,7 @@ onMounted(async () => {
 
 .card-tip {
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 14px;
   color: #6b7280;
 }
 

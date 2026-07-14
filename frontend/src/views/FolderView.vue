@@ -22,7 +22,7 @@
       </template>
 
       <div ref="folderLayoutRef" class="folder-layout" :style="folderLayoutStyle">
-        <div ref="leftPanelRef" class="left-panel">
+        <div ref="leftPanelRef" class="left-panel" @contextmenu.prevent="onLeftPanelContextMenu">
           <div class="panel-title">
             <div class="panel-title-main">
               <button
@@ -74,27 +74,27 @@
               </span>
             </template>
           </el-tree>
-            <div v-if="contextMenuVisible" class="tree-context-menu" :style="contextMenuStyle">
-              <button type="button" class="menu-item" @click="handleContextCommand('create')">新建文件夹</button>
-              <button
-                v-if="canRenameContextFolder"
-                type="button"
-                class="menu-item"
-                :disabled="!contextTargetPath"
-                @click="handleContextCommand('rename')"
-              >
-                改名
-              </button>
-              <button
-                v-if="canDeleteContextFolder"
-                type="button"
-                class="menu-item menu-item-danger"
-                :disabled="!contextTargetPath"
-                @click="handleContextCommand('delete')"
-              >
-                删除文件夹
-              </button>
-            </div>
+          </div>
+          <div v-if="contextMenuVisible" class="tree-context-menu" :style="contextMenuStyle">
+            <button type="button" class="menu-item" @click="handleContextCommand('create')">新建文件夹</button>
+            <button
+              v-if="canRenameContextFolder"
+              type="button"
+              class="menu-item"
+              :disabled="!contextTargetPath"
+              @click="handleContextCommand('rename')"
+            >
+              改名
+            </button>
+            <button
+              v-if="canDeleteContextFolder"
+              type="button"
+              class="menu-item menu-item-danger"
+              :disabled="!contextTargetPath"
+              @click="handleContextCommand('delete')"
+            >
+              删除文件夹
+            </button>
           </div>
         </div>
 
@@ -528,8 +528,13 @@ const buildOcrPreviewUrlFromFilePath = (filePath) => {
   return `${appBasePrefix}preview/${encodedPath}/`
 }
 
-const isSuperAdminUser = computed(() => userRole.value === 'super_admin')
-const isViewPermissionUser = computed(() => userPermission.value === 'view')
+const isSuperAdminUser = computed(() => ['super_admin', 'synology_super_admin'].includes(userRole.value))
+const isViewPermissionUser = computed(() => {
+  if (isSuperAdminUser.value) {
+    return false
+  }
+  return userPermission.value === 'view'
+})
 const hasAllFolderPermission = computed(() => {
   if (isSuperAdminUser.value) {
     return true
@@ -574,6 +579,14 @@ const hasFolderAccess = (path) => {
     return false
   }
   return allowedFolderRootSet.value.has(topLevelFolder)
+}
+
+const filterChildrenByFolderAccess = (children) => {
+  const list = Array.isArray(children) ? children : []
+  if (hasAllFolderPermission.value) {
+    return list
+  }
+  return list.filter((item) => hasFolderAccess(item?.path || ''))
 }
 
 const canOperateOnSelectedFolder = computed(() => {
@@ -699,7 +712,7 @@ const fetchFolderChildren = async (parentPath = '') => {
     const { data } = await http.get('/folders/children', {
       params: { parent_path: normalizedParent },
     })
-    const children = Array.isArray(data?.children) ? data.children : []
+    const children = filterChildrenByFolderAccess(data?.children)
     folderChildrenCache.set(normalizedParent, {
       ts: Date.now(),
       children,
@@ -761,7 +774,7 @@ const showContextMenu = (event, path = '') => {
   hideFileContextMenu()
   const normalizedPath = normalizePath(path)
 
-  if (!normalizedPath && !hasAllFolderPermission.value) {
+  if (isViewPermissionUser.value) {
     hideContextMenu()
     return
   }
@@ -772,7 +785,10 @@ const showContextMenu = (event, path = '') => {
 
   contextTargetPath.value = normalizedPath
 
-  const container = event.target?.closest?.('.tree-wrap')
+  const container = event.currentTarget?.closest?.('.left-panel')
+    || event.target?.closest?.('.tree-wrap')
+    || event.target?.closest?.('.left-panel')
+    || leftPanelRef.value
   const rect = container?.getBoundingClientRect?.()
   const left = rect ? event.clientX - rect.left : 0
   const top = rect ? event.clientY - rect.top : 0
@@ -802,6 +818,14 @@ const showFileContextMenu = (event, row) => {
 }
 
 const onPanelContextMenu = (event) => {
+  showContextMenu(event, '')
+}
+
+const onLeftPanelContextMenu = (event) => {
+  const target = event?.target
+  if (target?.closest?.('.tree-node-content') || target?.closest?.('.panel-title')) {
+    return
+  }
   showContextMenu(event, '')
 }
 
@@ -1660,6 +1684,13 @@ const onWindowDropCapture = async (event) => {
 
 const loadFolderFiles = async (folderPath) => {
   const normalizedPath = normalizePath(folderPath)
+  if (!normalizedPath && !hasAllFolderPermission.value) {
+    selectedFolderPath.value = ''
+    files.value = []
+    noPermissionForSelectedFolder.value = true
+    loadingFiles.value = false
+    return
+  }
   if (normalizedPath && !hasFolderAccess(normalizedPath)) {
     selectedFolderPath.value = normalizedPath
     files.value = []
@@ -2226,6 +2257,7 @@ watch(previewDialogVisible, (visible) => {
 }
 
 .left-panel {
+  position: relative;
   border-right: 0;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;

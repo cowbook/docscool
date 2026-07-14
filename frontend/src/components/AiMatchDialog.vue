@@ -157,6 +157,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  previewUrl: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm-selection', 'cancel'])
@@ -171,16 +175,27 @@ const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewMessage = ref('暂无文件')
 const fullPreviewVisible = ref(false)
+const ownsPreviewUrl = ref(false)
 
 const cleanupPreview = () => {
-  if (previewUrl.value) {
+  if (previewUrl.value && ownsPreviewUrl.value) {
     window.URL.revokeObjectURL(previewUrl.value)
-    previewUrl.value = ''
   }
+  previewUrl.value = ''
+  ownsPreviewUrl.value = false
 }
 
 const loadPreviewFromFile = () => {
   cleanupPreview()
+
+  const externalPreviewUrl = String(props.previewUrl || '').trim()
+  if (externalPreviewUrl) {
+    previewUrl.value = externalPreviewUrl
+    previewMessage.value = ''
+    previewLoading.value = false
+    ownsPreviewUrl.value = false
+    return
+  }
 
   if (!props.file) {
     previewMessage.value = '暂无文件'
@@ -197,6 +212,7 @@ const loadPreviewFromFile = () => {
   previewMessage.value = ''
   try {
     previewUrl.value = window.URL.createObjectURL(props.file)
+    ownsPreviewUrl.value = true
   } finally {
     previewLoading.value = false
   }
@@ -213,6 +229,12 @@ watch(() => props.modelValue, (visibleNow) => {
 })
 
 watch(() => props.file, () => {
+  if (props.modelValue) {
+    loadPreviewFromFile()
+  }
+})
+
+watch(() => props.previewUrl, () => {
   if (props.modelValue) {
     loadPreviewFromFile()
   }

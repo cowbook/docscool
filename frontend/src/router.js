@@ -6,6 +6,7 @@ import MainLayout from './views/MainLayout.vue'
 import HomeView from './views/HomeView.vue'
 import ContractView from './views/ContractView.vue'
 import FolderView from './views/FolderView.vue'
+import ContractScanView from './views/ContractScanView.vue'
 import LogoutView from './views/LogoutView.vue'
 import DepartmentSettingsView from './views/DepartmentSettingsView.vue'
 import ProjectSettingsView from './views/ProjectSettingsView.vue'
@@ -25,6 +26,7 @@ const routes = [
       { path: 'home', component: HomeView },
       { path: 'contracts/all', component: ContractView },
       { path: 'contracts/folders', component: FolderView },
+      { path: 'contracts/scan', component: ContractScanView },
       { path: 'settings/departments', component: DepartmentSettingsView },
       { path: 'settings/projects', component: ProjectSettingsView },
       { path: 'settings/stamp-tax-rates', component: StampTaxRateSettingsView },

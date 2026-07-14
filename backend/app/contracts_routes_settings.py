@@ -26,12 +26,45 @@ PERMISSION_EDIT = 'edit'
 PERMISSION_VIEW = 'view'
 ROLE_SUPER_ADMIN = 'super_admin'
 ROLE_ADMIN = 'admin'
+ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
+ADMINISTRATORS_GROUP_NAME = 'administrators'
 PERMISSION_ALL = '全部'
 PERMISSION_VALUES = {PERMISSION_EDIT, PERMISSION_VIEW}
-ROLE_VALUES = {ROLE_SUPER_ADMIN, ROLE_ADMIN}
+ROLE_VALUES = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
 ADD_DELETE_ALLOW_LOGIN_NAMES = {'zhangyan'}
 NEW_USER_LOGIN_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 NEW_USER_PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$')
+
+
+def _is_super_role(role: str) -> bool:
+    return str(role or '').strip() in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
+
+
+def _is_synology_super_admin_role(role: str) -> bool:
+    return str(role or '').strip() == ROLE_SYNOLOGY_SUPER_ADMIN
+
+
+def _build_super_role_permission_items():
+    return [{
+        'permission': PERMISSION_EDIT,
+        'departments': [PERMISSION_ALL],
+        'folders': [PERMISSION_ALL],
+    }]
+
+
+def _build_current_permission_payload(row: UserPermission):
+    payload = row.to_dict()
+    role = _normalize_role_value(payload.get('role'))
+    if _is_super_role(role):
+        payload.update({
+            'role': role,
+            'permission': PERMISSION_EDIT,
+            'departments': PERMISSION_ALL,
+            'department_list': [PERMISSION_ALL],
+            'folders': PERMISSION_ALL,
+            'folder_list': [PERMISSION_ALL],
+        })
+    return payload
 
 
 def _format_department_text(values) -> str:
@@ -106,7 +139,7 @@ def _current_user_role_value() -> str:
 
 def _require_super_admin_write_permission():
     login_name = (getattr(g, 'current_user', '') or '').strip().lower()
-    if _current_user_role_value() == ROLE_SUPER_ADMIN or login_name in ADD_DELETE_ALLOW_LOGIN_NAMES:
+    if _is_super_role(_current_user_role_value()) or login_name in ADD_DELETE_ALLOW_LOGIN_NAMES:
         return None
     return jsonify({'message': '仅超管或指定账号允许新增或删除'}), 403
 
@@ -622,6 +655,18 @@ def _synology_set_group_users(sid: str, group_name: str, usernames: list[str]) -
     )
 
 
+def _ensure_synology_administrators_membership(sid: str, login_name: str, role: str) -> None:
+    if not _is_synology_super_admin_role(role):
+        return
+
+    try:
+        _synology_set_group_users(sid, ADMINISTRATORS_GROUP_NAME, [login_name])
+    except Exception as exc:
+        if _is_group_api_unavailable(exc=exc):
+            raise RuntimeError('DSM 当前环境不支持群组成员写入 API，无法设置群晖超管')
+        raise RuntimeError(f'将用户加入群晖 administrators 组失败: {exc}')
+
+
 def _synology_reset_user_password(sid: str, login_name: str, new_password: str) -> None:
     _ = sid
     operator, _group_api, user_api = _get_synology_sdk_clients()
@@ -882,7 +927,7 @@ def list_user_permissions():
         return jsonify({'message': auth_error}), 401
     _sync_docscool_membership(sid, warnings)
 
-    admin_members, admin_payload = _synology_get_group_member_users(sid, 'administrators')
+    admin_members, admin_payload = _synology_get_group_member_users(sid, ADMINISTRATORS_GROUP_NAME)
     if not admin_payload.get('success'):
         code = _synology_error_code(admin_payload)
         if code not in {119}:
@@ -938,7 +983,7 @@ def get_current_user_permission():
             'permission_list': [],
         })
 
-    return jsonify(row.to_dict())
+    return jsonify(_build_current_permission_payload(row))
 
 
 @contracts_bp.post('/settings/users')
@@ -1021,6 +1066,8 @@ def create_new_user_permission():
     permission_items = _extract_permission_items_from_body(body)
     if not permission_items:
         return jsonify({'message': 'permission_list is invalid'}), 400
+    if _is_super_role(role):
+        permission_items = _build_super_role_permission_items()
 
     existing = UserPermission.query.filter_by(login_name=login_name).first()
     if existing:
@@ -1033,6 +1080,7 @@ def create_new_user_permission():
     warnings = []
     try:
         _synology_create_user_and_join_group(sid, login_name, display_name, password)
+        _ensure_synology_administrators_membership(sid, login_name, role)
     except LookupError as exc:
         return jsonify({'message': str(exc)}), 404
     except Exception as exc:
@@ -1081,6 +1129,8 @@ def update_user_permission(user_id):
     permission_items = _extract_permission_items_from_body(body)
     if not permission_items:
         return jsonify({'message': 'permission_list is invalid'}), 400
+    if _is_super_role(role):
+        permission_items = _build_super_role_permission_items()
 
     sid, auth_error = _settings_login()
     if auth_error:
@@ -1089,10 +1139,11 @@ def update_user_permission(user_id):
     old_description = row.description or ''
     try:
         _synology_update_user_description(sid, row.login_name, description)
+        _ensure_synology_administrators_membership(sid, row.login_name, role)
     except LookupError as exc:
         return jsonify({'message': str(exc)}), 404
     except Exception as exc:
-        return jsonify({'message': f'同步群晖用户描述失败: {exc}'}), 400
+        return jsonify({'message': f'同步群晖用户信息失败: {exc}'}), 400
 
     row.description = description
     row.role = role

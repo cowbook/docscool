@@ -85,10 +85,45 @@
 
         <aside class="side-column">
 
+          
+          <div class="side-placeholder side-placeholder-compact">
+            <div class="side-header">
+              <div class="side-title">扫描仪</div>
+              <div class="side-subtitle">扫描存储里最新的 PDF 文件</div>
+            </div>
+
+            <div v-if="scannerLoading" class="side-loading side-loading-compact">正在加载扫描文件...</div>
+            <div v-else-if="!scannerFiles.length" class="side-empty side-empty-compact">暂无可展示的扫描文件</div>
+            <div v-else class="scanner-wrap">
+              <div class="scanner-row">
+                <button
+                  v-for="item in scannerFiles"
+                  :key="`scan-${item.file_path}-${item.mtime}`"
+                  class="latest-card scanner-card"
+                  type="button"
+                  @click="openScannerFile(item)"
+                >
+                  <div class="latest-thumb-box scanner-thumb-box">
+                    <img
+                      v-if="scannerThumbMap[item.file_path]"
+                      :src="scannerThumbMap[item.file_path]"
+                      :alt="item.name"
+                      class="latest-thumb"
+                    >
+                    <div v-else class="latest-thumb-fallback">缩略图加载中</div>
+                  </div>
+                  <div class="latest-meta scanner-meta">
+                    <div class="latest-desc">{{ formatLatestModifiedTime(item.uploaded_at || item.mtime) }}</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div class="side-placeholder">
             <div class="side-header">
               <div class="side-title">最新上传</div>
-              <div class="side-subtitle">最近修改的合同文档</div>
+              <div class="side-subtitle">按文件上传时间排序的文档</div>
             </div>
 
             <div v-if="latestLoading" class="side-loading">正在加载最新上传...</div>
@@ -123,12 +158,13 @@
                       <span class="latest-file-icon" :class="getLatestFileTypeClass(item)" aria-hidden="true" />
                       <span>{{ item.name }}</span>
                     </div>
-                    <div class="latest-desc">{{ item.modified_by || '-' }} · {{ formatLatestModifiedTime(item.mtime) }}</div>
+                    <div class="latest-desc">{{ item.modified_by || '-' }} · {{ formatLatestModifiedTime(item.uploaded_at || item.mtime) }}</div>
                   </div>
                 </button>
               </div>
             </div>
           </div>
+
         </aside>
       </div>
 
@@ -169,7 +205,7 @@
       :options="contractEditorOptions"
       v-model:aiParsing="contractItemAiParsing"
       :show-file-actions="false"
-      @saved="loadLatestFiles"
+      @saved="handleHomeContractSaved"
     />
   </div>
 </template>
@@ -177,6 +213,7 @@
 <script setup>
 
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import ContractItem from '../components/ContractItem.vue'
@@ -190,6 +227,7 @@ echarts.use([PieChart, BarChart, TitleComponent, TooltipComponent, LegendCompone
 
 // 注册全局组件
 const vChart = VChart
+const router = useRouter()
 
 // 图表数据占位
 const optionContractFilePie = ref({
@@ -253,6 +291,9 @@ const hasReadyData = ref(false)
 const latestLoading = ref(false)
 const latestFiles = ref([])
 const latestThumbMap = ref({})
+const scannerLoading = ref(false)
+const scannerFiles = ref([])
+const scannerThumbMap = ref({})
 const previewVisible = ref(false)
 const previewLoading = ref(false)
 const activePreviewUrl = ref('')
@@ -262,6 +303,7 @@ const previewRequestId = ref(0)
 const contractItemRef = ref(null)
 const contractItemAiParsing = ref(false)
 const currentUserPermission = ref('view')
+const currentUserRole = ref('admin')
 const contractEditorDepartments = ref([])
 const contractEditorOptions = ref({
   contract_determination_method: [],
@@ -276,7 +318,13 @@ const contractEditorReady = ref(false)
 const contractEditorLoading = ref(false)
 
 const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
-const isViewPermissionUser = computed(() => String(currentUserPermission.value || '').trim() === 'view')
+const isViewPermissionUser = computed(() => {
+  const role = String(currentUserRole.value || '').trim()
+  if (['super_admin', 'synology_super_admin'].includes(role)) {
+    return false
+  }
+  return String(currentUserPermission.value || '').trim() === 'view'
+})
 
 const applyDashboardData = (stat, charts) => {
   if (stat) {
@@ -345,35 +393,61 @@ function formatAmount(val) {
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const revokeThumbUrls = () => {
-  Object.values(latestThumbMap.value).forEach((url) => {
-    if (url) {
-      URL.revokeObjectURL(url)
-    }
-  })
+const clearThumbMap = () => {
   latestThumbMap.value = {}
 }
 
-const loadLatestThumbnails = async (rows) => {
-  revokeThumbUrls()
-  const loaded = {}
+const clearScannerThumbMap = () => {
+  scannerThumbMap.value = {}
+}
 
-  await Promise.all(rows.map(async (item) => {
-    try {
-      const { data } = await http.get('/folders/file-thumbnail', {
-        params: {
-          path: item.file_path,
-          mtime: item.mtime,
-        },
-        responseType: 'blob',
-      })
-      loaded[item.file_path] = URL.createObjectURL(data)
-    } catch (_error) {
-      loaded[item.file_path] = ''
+const getApiAssetBase = () => (import.meta.env.PROD ? '/docs/api' : '/api')
+
+const buildThumbUrl = (item, source = '') => {
+  const thumbKey = String(item?.thumbnail_key || '').trim()
+  if (thumbKey) {
+    const params = new URLSearchParams()
+    params.set('key', thumbKey)
+    if (source) {
+      params.set('source', source)
     }
-  }))
+    return `${getApiAssetBase()}/folders/file-thumbnail?${params.toString()}`
+  }
 
+  const path = String(item?.file_path || '').trim()
+  if (!path) {
+    return ''
+  }
+
+  const params = new URLSearchParams()
+  params.set('path', path)
+  params.set('mtime', String(item?.mtime ?? 0))
+  if (source) {
+    params.set('source', source)
+  }
+
+  const token = (localStorage.getItem('token') || '').trim()
+  if (token) {
+    params.set('token', token)
+  }
+
+  return `${getApiAssetBase()}/folders/file-thumbnail?${params.toString()}`
+}
+
+const loadLatestThumbnails = (rows) => {
+  const loaded = {}
+  rows.forEach((item) => {
+    loaded[item.file_path] = buildThumbUrl(item)
+  })
   latestThumbMap.value = loaded
+}
+
+const loadScannerThumbnails = (rows) => {
+  const loaded = {}
+  rows.forEach((item) => {
+    loaded[item.file_path] = buildThumbUrl(item, 'scan')
+  })
+  scannerThumbMap.value = loaded
 }
 
 const resolveErrorMessage = (error, fallbackMessage) => {
@@ -555,8 +629,10 @@ const loadCurrentUserPermission = async () => {
   try {
     const { data } = await http.get('/settings/users/current-permission')
     currentUserPermission.value = String(data?.permission || 'view').trim() || 'view'
+    currentUserRole.value = String(data?.role || 'admin').trim() || 'admin'
   } catch (_error) {
     currentUserPermission.value = 'view'
+    currentUserRole.value = 'admin'
   }
 }
 
@@ -640,7 +716,7 @@ const loadLatestFiles = async () => {
     })
     const files = Array.isArray(data?.files) ? data.files : []
     latestFiles.value = files
-    await loadLatestThumbnails(files)
+    loadLatestThumbnails(files)
   } catch (_error) {
     const errorMessage = resolveErrorMessage(_error, '最新上传加载失败')
     if (shouldRedirectToLogin(_error?.response?.status, errorMessage)) {
@@ -650,11 +726,49 @@ const loadLatestFiles = async () => {
     }
 
     latestFiles.value = []
-    revokeThumbUrls()
+    clearThumbMap()
     ElMessage.error(`最新上传加载失败：${errorMessage}`)
   } finally {
     latestLoading.value = false
   }
+}
+
+const loadScannerFiles = async () => {
+  scannerLoading.value = true
+  try {
+    const { data } = await http.get('/folders/scan-files', {
+      params: { limit: 10 },
+    })
+    const files = Array.isArray(data?.files) ? data.files : []
+    scannerFiles.value = files
+    loadScannerThumbnails(files)
+  } catch (_error) {
+    const errorMessage = resolveErrorMessage(_error, '扫描文件加载失败')
+    if (shouldRedirectToLogin(_error?.response?.status, errorMessage)) {
+      ElMessage.error('登录凭据已过期，请重新登录')
+      redirectToLogin()
+      return
+    }
+
+    scannerFiles.value = []
+    clearScannerThumbMap()
+    ElMessage.error(`扫描文件加载失败：${errorMessage}`)
+  } finally {
+    scannerLoading.value = false
+  }
+}
+
+const openScannerFile = async (item) => {
+  const targetFilePath = normalizePath(item?.file_path)
+  if (!targetFilePath) {
+    ElMessage.warning('当前扫描文件路径无效')
+    return
+  }
+
+  await router.push({
+    path: '/contracts/scan',
+    query: { file: targetFilePath },
+  })
 }
 
 const releasePreviewUrl = () => {
@@ -760,6 +874,13 @@ const loadStatistics = async () => {
   }
 }
 
+const handleHomeContractSaved = async () => {
+  await Promise.all([
+    loadLatestFiles(),
+    loadScannerFiles(),
+  ])
+}
+
 onMounted(() => {
   const cached = readDashboardCache()
   if (cached) {
@@ -770,10 +891,12 @@ onMounted(() => {
   loadCurrentUserPermission()
   loadStatistics()
   loadLatestFiles()
+  loadScannerFiles()
 })
 
 onBeforeUnmount(() => {
-  revokeThumbUrls()
+  clearThumbMap()
+  clearScannerThumbMap()
   releasePreviewUrl()
 })
 </script>
@@ -811,6 +934,9 @@ onBeforeUnmount(() => {
 .side-column {
   min-width: 0;
   min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .side-placeholder {
@@ -824,6 +950,10 @@ onBeforeUnmount(() => {
   justify-content: flex-start;
   padding: 18px;
   color: #5a74a6;
+}
+
+.side-placeholder-compact {
+  min-height: auto;
 }
 
 .side-header {
@@ -850,7 +980,16 @@ onBeforeUnmount(() => {
   color: #6077a3;
 }
 
+.side-loading-compact,
+.side-empty-compact {
+  min-height: 120px;
+}
+
 .latest-wrap {
+  padding-bottom: 4px;
+}
+
+.scanner-wrap {
   padding-bottom: 4px;
 }
 
@@ -859,6 +998,16 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: clamp(10px, 0.9vw, 14px);
+}
+
+.scanner-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: clamp(10px, 0.9vw, 14px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
 }
 
 .latest-card {
@@ -874,6 +1023,10 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.scanner-card {
+  flex: 0 0 148px;
+}
+
 .latest-thumb-box {
   width: min(100%, 168px);
   max-width: 168px;
@@ -885,6 +1038,12 @@ onBeforeUnmount(() => {
   background: rgba(231, 238, 250, 0.8);
   border: 1px solid rgba(72, 112, 186, 0.18);
   transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s ease;
+}
+
+.scanner-thumb-box {
+  width: 148px;
+  max-width: 148px;
+  max-height: 206px;
 }
 
 .latest-contract-badge {
@@ -949,6 +1108,10 @@ onBeforeUnmount(() => {
   gap: clamp(2px, 0.25vw, 4px);
 }
 
+.scanner-meta {
+  width: 148px;
+}
+
 .latest-name {
   font-size: clamp(11px, 0.78vw, 13px);
   font-weight: 600;
@@ -958,6 +1121,10 @@ onBeforeUnmount(() => {
   word-break: break-all;
   overflow-wrap: anywhere;
   line-height: 1.35;
+}
+
+.scanner-name {
+  font-size: 12px;
 }
 
 .latest-file-icon {

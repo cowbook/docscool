@@ -40,6 +40,10 @@
                 <Icon :icon="folderIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>文件档案</span>
               </el-menu-item>
+              <el-menu-item index="/contracts/scan">
+                <Icon :icon="ticketsIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>合同扫描</span>
+              </el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="/settings">
               <template #title>
@@ -127,6 +131,10 @@
             <Icon :icon="folderIcon" style="font-size:20px;vertical-align:middle;" />
             <span>文件档案</span>
           </el-menu-item>
+          <el-menu-item index="/contracts/scan">
+            <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
+            <span>合同扫描</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="/settings-mobile">
@@ -190,7 +198,7 @@ const canShowUserPermissionMenu = computed(() => {
   if (normalizedUsername === 'zhangyan') {
     return true
   }
-  return String(currentUserRole.value || '').trim() === 'super_admin'
+  return ['super_admin', 'synology_super_admin'].includes(String(currentUserRole.value || '').trim())
 })
 
 const activePath = computed(() => route.path)
@@ -198,6 +206,7 @@ const activePath = computed(() => route.path)
 const pageTitle = computed(() => {
   if (route.path === '/home') return '首页'
   if (route.path === '/contracts/folders') return '文件夹'
+  if (route.path === '/contracts/scan') return '合同扫描'
   if (route.path.startsWith('/contracts')) return '合同管理'
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'
