@@ -16,7 +16,7 @@
 
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| `htno` | String | 是 | 合同编号（如：`134702`） |
+| `htno` | String | 是 | 合同编号（如：`CG-GK-B-2025-122`） |
 
 ---
 
@@ -35,8 +35,8 @@
 
 | 字段名 | 类型 | 说明 | 示例 |
 |--------|------|------|------|
-| `HTSP_NO` | String | 合同编号 | 134702 |
-| `HTSP_ID` | String | 合同主键 | CG-GK-B-2025-122 |
+| `HTSP_NO` | String | 合同主键 | 134702 |
+| `HTSP_ID` | String | 合同编号 | CG-GK-B-2025-122 |
 | `HTSP_NAM` | String | 合同名称 | 广东省沿海成品油管道惠州-汕头-揭阳段（A段）工程钢管采购合同 |
 | `HYVEN_NO` | String | 供应商名称 | 北京巨龙钢管有限公司 |
 | `WZHT_AMT` | String | 合同金额 | 156397813.48783 |
@@ -86,10 +86,10 @@
 
 ```bash
 # GET 请求
-curl -u "$HT_DETAIL_API_USERNAME:$HT_DETAIL_API_PASSWORD" "http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=134702"
+curl -u "$HT_DETAIL_API_USERNAME:$HT_DETAIL_API_PASSWORD" "http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=CG-GK-B-2025-122"
 
 # POST 请求
-curl -u "$HT_DETAIL_API_USERNAME:$HT_DETAIL_API_PASSWORD" -X POST "http://10.254.56.59:7002/Liems/webservice/getHtDetail" -d "htno=134702"
+curl -u "$HT_DETAIL_API_USERNAME:$HT_DETAIL_API_PASSWORD" -X POST "http://10.254.56.59:7002/Liems/webservice/getHtDetail" -d "htno=CG-GK-B-2025-122"
 ```
 
 ### 5.2 Python
@@ -101,7 +101,7 @@ import os
 url = "http://10.254.56.59:7002/Liems/webservice/getHtDetail"
 response = requests.get(
     url,
-    params={"htno": "134702"},
+    params={"htno": "CG-GK-B-2025-122"},
     auth=(os.getenv("HT_DETAIL_API_USERNAME"), os.getenv("HT_DETAIL_API_PASSWORD")),
 )
 print(response.json())
@@ -110,7 +110,7 @@ print(response.json())
 ### 5.3 JavaScript (fetch)
 
 ```javascript
-fetch('http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=134702', {
+fetch('http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=CG-GK-B-2025-122', {
     headers: { 'Authorization': 'Basic ' + btoa(`${HT_DETAIL_API_USERNAME}:${HT_DETAIL_API_PASSWORD}`) }
 })
 .then(res => res.json())
@@ -126,7 +126,7 @@ import java.util.Base64;
 
 public class HtDetailClient {
     public static void main(String[] args) throws Exception {
-        String url = "http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=134702";
+        String url = "http://10.254.56.59:7002/Liems/webservice/getHtDetail?htno=CG-GK-B-2025-122";
         URL obj = new URL(url);
         
         String auth = System.getenv("HT_DETAIL_API_USERNAME") + ":" + System.getenv("HT_DETAIL_API_PASSWORD");
@@ -195,7 +195,7 @@ public class HtDetailClient {
 
 ## 8. 注意事项
 
-1. **合同编号**：传入 `htno` 参数（如 `134702`），合同主键
+1. **合同编号**：传入 `htno` 参数（如 `CG-GK-B-2025-122`），合同编号对应返回的HTSP_ID
 2. **认证**：必须携带 HTTP Basic Auth
 3. **编码**：返回 UTF-8 编码
 4. **付款信息**：`payment` 数组可能为空（如合同无付款记录）
