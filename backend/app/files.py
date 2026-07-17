@@ -1048,6 +1048,44 @@ def _import_scan_file_to_contract_storage(relative_file_path: str, target_folder
     return _build_synology_file_path(normalized_target_folder, resolved_name), resolved_name
 
 
+def _delete_file_for_source(source: str, relative_file_path: str) -> str:
+    normalized_source = _normalize_storage_source(source)
+    normalized = _normalize_relative_path(relative_file_path)
+    if not normalized:
+        raise ValueError('file_path is required')
+
+    if normalized_source != STORAGE_SOURCE_SCAN:
+        return _delete_storage_file(normalized)
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        remote_file_path = _build_source_remote_path(normalized_source, normalized)
+        sid = _synology_upload_login()
+        payload = _synology_api_post(
+            sid,
+            {
+                'api': 'SYNO.FileStation.Delete',
+                'version': '2',
+                'method': 'delete',
+            },
+            data={
+                'path': f'["{remote_file_path}"]',
+            },
+        )
+        if not payload.get('success'):
+            code = _synology_error_code(payload)
+            if code in {404, 415}:
+                raise FileNotFoundError('文件不存在')
+            raise RuntimeError(_synology_error_message(payload, 'filestation'))
+        return normalized
+
+    local_file_path = _safe_local_file_path_for_source(normalized_source, normalized)
+    if not os.path.isfile(local_file_path):
+        raise FileNotFoundError('文件不存在')
+
+    os.remove(local_file_path)
+    return normalized
+
+
 def _build_thumb_rel_path(relative_file_path: str, mtime: int, source: str = STORAGE_SOURCE_DEFAULT) -> str:
     normalized = _normalize_relative_path(relative_file_path)
     normalized_source = _normalize_storage_source(source)
@@ -1908,6 +1946,30 @@ def import_scan_file():
     return jsonify({
         'file_path': imported_path,
         'name': imported_name,
+    })
+
+
+@files_bp.delete('/folders/scan-file')
+@require_auth
+def delete_scan_file():
+    body = request.get_json(silent=True) or {}
+    file_path = body.get('path') or body.get('file_path') or request.args.get('path') or request.args.get('file_path') or ''
+
+    try:
+        normalized_path = _delete_file_for_source(STORAGE_SOURCE_SCAN, file_path)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({'message': str(exc)}), 409
+    except Exception as exc:
+        return jsonify({'message': f'删除扫描文件失败: {exc}'}), 500
+
+    return jsonify({
+        'success': True,
+        'path': normalized_path,
+        'source': STORAGE_SOURCE_SCAN,
     })
 
 

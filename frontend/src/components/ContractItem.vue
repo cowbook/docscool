@@ -203,14 +203,15 @@
               />
 
               <div v-loading="paymentFlowLoading" class="payment-flow-table-wrap">
+
                 <el-table
                   v-if="paymentFlowRows.length"
                   :data="paymentFlowRows"
                   size="small"
                   border
                   stripe
-                  max-height="280"
-                >
+                  max-height="280">
+
                   <el-table-column prop="FPYZ_NAM" label="付款描述" min-width="180" show-overflow-tooltip />
                   <el-table-column prop="VEN_NO" label="供应商" min-width="160" show-overflow-tooltip />
                   <el-table-column prop="FKSP_STA" label="审批状态" min-width="110" />
@@ -221,29 +222,13 @@
                   <el-table-column prop="JBUSR_ID" label="承办人" min-width="100" />
                   <el-table-column prop="JBRQ_DTM" label="承办日期" min-width="160" />
                   <el-table-column prop="CWFK_ID" label="付款审批编号" min-width="160" show-overflow-tooltip />
+
                 </el-table>
 
                 <el-empty v-else :description="paymentFlowLoading ? '正在加载支付流水...' : paymentFlowEmptyText" :image-size="64" />
+              
               </div>
 
-              <div class="payment-query-history-section">
-                <div class="payment-query-history-title">查询历史记录</div>
-                <el-table
-                  v-if="paymentFlowQueryHistory.length"
-                  :data="paymentFlowQueryHistory"
-                  size="small"
-                  border
-                  stripe
-                  max-height="220"
-                >
-                  <el-table-column prop="status" label="状态" min-width="90" />
-                  <el-table-column prop="payment_count" label="流水条数" min-width="90" />
-                  <el-table-column prop="queried_by" label="查询人" min-width="100" />
-                  <el-table-column prop="contract_number" label="合同编号" min-width="120" />
-                  <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
-                </el-table>
-                <el-empty v-else description="暂无查询历史" :image-size="52" />
-              </div>
             </div>
 
             
@@ -598,7 +583,6 @@ const uploadFileInputRef = ref(null)
 const paymentFlowRows = ref([])
 const paymentFlowLoading = ref(false)
 const paymentFlowError = ref('')
-const paymentFlowQueryHistory = ref([])
 
 const saving = ref(false)
 const contractDialogLoading = ref(false)
@@ -811,7 +795,6 @@ const resetPaymentFlows = () => {
   paymentFlowRows.value = []
   paymentFlowError.value = ''
   paymentFlowLoading.value = false
-  paymentFlowQueryHistory.value = []
 }
 
 const loadPaymentFlows = async (contractId) => {
@@ -820,10 +803,8 @@ const loadPaymentFlows = async (contractId) => {
   try {
     const { data } = await http.get(`/contracts/${contractId}/payment-flows`)
     paymentFlowRows.value = Array.isArray(data?.payments) ? data.payments : []
-    paymentFlowQueryHistory.value = Array.isArray(data?.query_history) ? data.query_history : []
   } catch (error) {
     paymentFlowRows.value = []
-    paymentFlowQueryHistory.value = []
     paymentFlowError.value = error?.response?.data?.message || '支付流水加载失败'
   } finally {
     paymentFlowLoading.value = false
@@ -1736,8 +1717,16 @@ const ensureLinkTreeLoaded = async () => {
   linkTreeData.value = await fetchLinkFolderChildren('', { force: true })
 }
 
-const onUploadFolderNodeClick = (node) => {
-  uploadFolderSelectedPath.value = normalizePath(node?.path || '')
+const onUploadFolderNodeClick = async (node) => {
+  const normalizedFolderPath = normalizePath(node?.path || '')
+  uploadFolderSelectedPath.value = normalizedFolderPath
+
+  const cachedChildren = getCachedChildren(normalizedFolderPath)
+  if (cachedChildren) {
+    linkTreeRef.value?.updateKeyChildren?.(normalizedFolderPath, cachedChildren)
+  }
+
+  await refreshLinkTreeNodeChildren(normalizedFolderPath, false)
 }
 
 const openUploadFolderDialog = async () => {
@@ -2419,16 +2408,6 @@ defineExpose({
 
 .payment-flow-table-wrap {
   min-height: 86px;
-}
-
-.payment-query-history-section {
-  margin-top: 10px;
-}
-
-.payment-query-history-title {
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: #4b5563;
 }
 
 .form-item-span-2 {

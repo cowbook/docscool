@@ -20,6 +20,7 @@
             class="scan-card"
             :class="{ 'is-active': activeFilePath === item.file_path }"
             @click="selectScanFile(item)"
+            @contextmenu.prevent.stop="onScanFileContextMenu($event, item)"
           >
             <div class="scan-thumb-box">
               <img
@@ -34,6 +35,17 @@
               <div class="scan-card-name" :title="item.name">{{ item.name }}</div>
               <div class="scan-card-desc">{{ formatLatestModifiedTime(item.uploaded_at || item.mtime) }}</div>
             </div>
+          </button>
+        </div>
+
+        <div
+          v-if="scanFileContextMenuVisible && !isViewPermissionUser"
+          class="scan-file-context-menu"
+          :style="scanFileContextMenuStyle"
+          @click.stop
+        >
+          <button type="button" class="scan-file-context-item danger" @click="handleScanFileContextCommand('delete')">
+            删除文件
           </button>
         </div>
       </section>
@@ -128,7 +140,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import AiMatchDialog from '../components/AiMatchDialog.vue'
 import ContractItem from '../components/ContractItem.vue'
@@ -145,6 +157,9 @@ const activeFilePath = ref('')
 const previewLoading = ref(false)
 const activePreviewUrl = ref('')
 const previewRequestId = ref(0)
+const scanFileContextMenuVisible = ref(false)
+const scanFileContextMenuStyle = ref({ left: '0px', top: '0px' })
+const scanFileContextTarget = ref(null)
 const importingScan = ref(false)
 const importFolderDialogVisible = ref(false)
 const folderTreeLoading = ref(false)
@@ -392,6 +407,7 @@ const loadFieldOptions = async () => {
 }
 
 const loadScanFiles = async () => {
+  hideScanFileContextMenu()
   scanLoading.value = true
   try {
     const { data } = await http.get('/folders/scan-files')
@@ -447,6 +463,7 @@ const applyRouteSelectedFile = async () => {
 }
 
 const selectScanFile = async (item) => {
+  hideScanFileContextMenu()
   if (!item?.file_path) {
     return
   }
@@ -478,6 +495,86 @@ const selectScanFile = async (item) => {
     if (previewRequestId.value === requestId) {
       previewLoading.value = false
     }
+  }
+}
+
+const hideScanFileContextMenu = () => {
+  scanFileContextMenuVisible.value = false
+  scanFileContextTarget.value = null
+}
+
+const onScanFileContextMenu = (event, row) => {
+  if (isViewPermissionUser.value) {
+    hideScanFileContextMenu()
+    return
+  }
+
+  if (!row?.file_path) {
+    return
+  }
+
+  const MENU_WIDTH = 160
+  const MENU_HEIGHT = 56
+  const GAP = 8
+  const container = event.currentTarget?.closest?.('.scan-list-panel')
+  const rect = container?.getBoundingClientRect?.()
+  const rawLeft = rect ? event.clientX - rect.left : event.clientX
+  const rawTop = rect ? event.clientY - rect.top : event.clientY
+  const maxLeft = rect ? rect.width - MENU_WIDTH - GAP : rawLeft
+  const maxTop = rect ? rect.height - MENU_HEIGHT - GAP : rawTop
+  const left = Math.max(GAP, Math.min(rawLeft, maxLeft))
+  const top = Math.max(GAP, Math.min(rawTop, maxTop))
+
+  scanFileContextTarget.value = row
+  scanFileContextMenuStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+  }
+  scanFileContextMenuVisible.value = true
+}
+
+const deleteScanFileRow = async (row) => {
+  const filePath = String(row?.file_path || '').trim()
+  const fileName = String(row?.name || filePath || '').trim()
+  if (!filePath) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除扫描文件「${fileName}」吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+
+    await http.delete('/folders/scan-file', {
+      data: { path: filePath },
+    })
+
+    await loadScanFiles()
+    ElMessage.success('扫描文件已删除')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return
+    }
+    ElMessage.error(resolveErrorMessage(error, '删除扫描文件失败'))
+  }
+}
+
+const handleScanFileContextCommand = async (command) => {
+  const row = scanFileContextTarget.value
+  hideScanFileContextMenu()
+
+  if (!row?.file_path) {
+    return
+  }
+
+  if (command === 'delete') {
+    await deleteScanFileRow(row)
   }
 }
 
@@ -722,6 +819,7 @@ watch(() => route.query.file, () => {
 })
 
 onMounted(async () => {
+  window.addEventListener('click', hideScanFileContextMenu)
   await Promise.all([
     loadCurrentUserPermission(),
     loadDepartments(),
@@ -731,7 +829,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('click', hideScanFileContextMenu)
   previewRequestId.value = 0
+  hideScanFileContextMenu()
   releasePreviewUrl()
 })
 </script>
@@ -754,6 +854,7 @@ onBeforeUnmount(() => {
 
 .scan-list-panel,
 .scan-preview-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: rgba(255, 255, 255, 0.82);
@@ -881,6 +982,42 @@ onBeforeUnmount(() => {
   margin-top: 6px;
   font-size: 12px;
   color: #76849b;
+}
+
+.scan-file-context-menu {
+  position: absolute;
+  z-index: 4000;
+  min-width: 148px;
+  padding: 6px;
+  border: 1px solid rgba(206, 217, 238, 0.95);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 34px rgba(26, 48, 83, 0.24);
+}
+
+.scan-file-context-item {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f3355;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.scan-file-context-item:hover {
+  background: rgba(234, 242, 255, 0.92);
+}
+
+.scan-file-context-item.danger {
+  color: #b42318;
+}
+
+.scan-file-context-item.danger:hover {
+  background: rgba(255, 236, 236, 0.95);
 }
 
 .scan-preview-body {

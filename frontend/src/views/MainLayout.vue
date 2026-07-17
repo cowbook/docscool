@@ -41,7 +41,15 @@
                 <span>文件档案</span>
               </el-menu-item>
               <el-menu-item index="/contracts/scan">
-                <Icon :icon="ticketsIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span class="menu-inline-icon menu-inline-icon-scanner" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M5 8.5h14a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8"/>
+                    <path d="M7 6h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M7.5 12.2h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M9 15.2h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M7.2 17.8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  </svg>
+                </span>
                 <span>合同扫描</span>
               </el-menu-item>
             </el-sub-menu>
@@ -59,7 +67,15 @@
                 <span>项目设置</span>
               </el-menu-item>
               <el-menu-item index="/settings/stamp-tax-rates">
-                <Icon :icon="projectIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span class="menu-inline-icon menu-inline-icon-money" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                    <path d="M8.8 8.4h6.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M12 8.4v7.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M9.4 11.8H12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M10.1 15.6h3.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  </svg>
+                </span>
                 <span>印花税率</span>
               </el-menu-item>
               <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
@@ -132,7 +148,15 @@
             <span>文件档案</span>
           </el-menu-item>
           <el-menu-item index="/contracts/scan">
-            <Icon :icon="ticketsIcon" style="font-size:20px;vertical-align:middle;" />
+            <span class="menu-inline-icon menu-inline-icon-scanner" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 8.5h14a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M7 6h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M7.5 12.2h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M9 15.2h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M7.2 17.8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </span>
             <span>合同扫描</span>
           </el-menu-item>
         </el-sub-menu>
@@ -151,7 +175,15 @@
             <span>项目设置</span>
           </el-menu-item>
           <el-menu-item index="/settings/stamp-tax-rates">
-            <Icon :icon="projectIcon" style="font-size:20px;vertical-align:middle;" />
+            <span class="menu-inline-icon menu-inline-icon-money" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M8.8 8.4h6.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M12 8.4v7.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M9.4 11.8H12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <path d="M10.1 15.6h3.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </span>
             <span>印花税率</span>
           </el-menu-item>
           <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
@@ -306,6 +338,21 @@ onBeforeUnmount(() => {
 .menu {
   border-right: none;
   margin-left:90px;
+}
+
+.menu-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  margin-right: 6px;
+  color: currentColor;
+}
+
+.menu-inline-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .topbar {

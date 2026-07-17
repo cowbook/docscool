@@ -757,6 +757,144 @@ def _delete_contract_file(record: Contract) -> None:
         os.remove(local_file_path)
 
 
+def _sanitize_contract_file_stem(raw_text: str) -> str:
+    text = str(raw_text or '').strip()
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '_', text)
+    text = re.sub(r'\s+', ' ', text).strip(' .')
+    return text
+
+
+def _build_contract_attachment_base_name(record: Contract) -> str:
+    number = _sanitize_contract_file_stem(getattr(record, 'contract_number', '') or '')
+    name = _sanitize_contract_file_stem(getattr(record, 'contract_name', '') or '')
+    return f"{number}{name}".strip()
+
+
+def _next_available_folder_name(parent_dir: str, desired_name: str) -> str:
+    if not os.path.isdir(parent_dir):
+        return desired_name
+
+    existing = {
+        item.name.lower()
+        for item in os.scandir(parent_dir)
+        if item.is_dir(follow_symlinks=False)
+    }
+    if desired_name.lower() not in existing:
+        return desired_name
+
+    index = 1
+    while True:
+        candidate = f"{desired_name}_{index}"
+        if candidate.lower() not in existing:
+            return candidate
+        index += 1
+
+
+def _rename_ocr_dir_for_file_rename(old_file_path: str, new_file_path: str) -> None:
+    old_normalized = _normalize_relative_path(old_file_path)
+    new_normalized = _normalize_relative_path(new_file_path)
+    if not old_normalized or not new_normalized:
+        return
+
+    old_parent = posixpath.dirname(old_normalized)
+    new_parent = posixpath.dirname(new_normalized)
+    old_stem = os.path.splitext(posixpath.basename(old_normalized))[0].strip()
+    new_stem = os.path.splitext(posixpath.basename(new_normalized))[0].strip()
+    if not old_stem or not new_stem:
+        return
+
+    old_ocr_rel = posixpath.join(old_parent, old_stem) if old_parent not in {'', '.'} else old_stem
+    new_ocr_rel = posixpath.join(new_parent, new_stem) if new_parent not in {'', '.'} else new_stem
+    if old_ocr_rel == new_ocr_rel:
+        return
+
+    ocr_root = os.path.realpath(os.path.join(current_app.root_path, '..', 'instance', 'ocr'))
+    old_abs = os.path.realpath(os.path.join(ocr_root, old_ocr_rel.replace('/', os.sep)))
+    if not (old_abs == ocr_root or old_abs.startswith(ocr_root + os.sep)):
+        return
+    if not os.path.isdir(old_abs):
+        return
+
+    desired_new_abs = os.path.realpath(os.path.join(ocr_root, new_ocr_rel.replace('/', os.sep)))
+    if not (desired_new_abs == ocr_root or desired_new_abs.startswith(ocr_root + os.sep)):
+        return
+
+    new_parent_abs = os.path.dirname(desired_new_abs)
+    os.makedirs(new_parent_abs, exist_ok=True)
+
+    final_stem = os.path.basename(desired_new_abs)
+    final_stem = _next_available_folder_name(new_parent_abs, final_stem)
+    final_abs = os.path.join(new_parent_abs, final_stem)
+
+    if old_abs == final_abs:
+        return
+
+    os.rename(old_abs, final_abs)
+
+
+def _rename_contract_file_to_contract_identity(record: Contract) -> str:
+    normalized_file_path = _normalize_contract_file_path(record.file_path)
+    if not normalized_file_path:
+        return ''
+
+    directory = posixpath.dirname(normalized_file_path)
+    old_name = posixpath.basename(normalized_file_path)
+    if not old_name:
+        return normalized_file_path
+
+    old_stem, ext = os.path.splitext(old_name)
+    target_base = _build_contract_attachment_base_name(record)
+    if not target_base:
+        return normalized_file_path
+
+    desired_name = f"{target_base}{ext}"
+
+    if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
+        remote_folder = _build_filestation_path(directory) if directory else _build_filestation_path()
+        remote_file_path = _build_filestation_path(normalized_file_path)
+        sid = _synology_upload_login()
+        existing_names = _synology_list_file_names(sid, remote_folder)
+        existing_without_current = [name for name in existing_names if name != old_name]
+        final_name = _next_available_filename(existing_without_current, desired_name)
+
+        if final_name != old_name:
+            payload = _synology_api_post(
+                sid,
+                {
+                    'api': 'SYNO.FileStation.Rename',
+                    'version': '2',
+                    'method': 'rename',
+                },
+                data={
+                    'path': _synology_json_array(remote_file_path),
+                    'name': _synology_json_array(final_name),
+                },
+            )
+            if not payload.get('success'):
+                raise RuntimeError(f"Synology 文件重命名失败: {_synology_error_message(payload, 'filestation')}")
+        new_file_path = _build_synology_file_path(directory, final_name)
+    else:
+        local_file_path = _safe_local_file_path(normalized_file_path)
+        if not os.path.isfile(local_file_path):
+            raise FileNotFoundError('文件不存在或已被移动')
+
+        local_dir = os.path.dirname(local_file_path)
+        existing_names = [
+            name for name in os.listdir(local_dir)
+            if os.path.isfile(os.path.join(local_dir, name)) and name != old_name
+        ]
+        final_name = _next_available_filename(existing_names, desired_name)
+        new_file_path = _build_synology_file_path(directory, final_name)
+        if final_name != old_name:
+            new_local_path = _safe_local_file_path(new_file_path)
+            os.rename(local_file_path, new_local_path)
+
+    if old_stem and os.path.splitext(posixpath.basename(new_file_path))[0] != old_stem:
+        _rename_ocr_dir_for_file_rename(normalized_file_path, new_file_path)
+
+    return new_file_path
+
+
 def _normalize_relative_path(raw_path: str) -> str:
     value = (raw_path or '').replace('\\', '/').strip().lstrip('/')
     if not value:

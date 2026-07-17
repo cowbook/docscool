@@ -97,27 +97,46 @@
             <div v-else class="scanner-wrap">
               <div class="scanner-row">
                 <button
-                  v-for="item in scannerFiles"
-                  :key="`scan-${item.file_path}-${item.mtime}`"
+                  v-for="item in scannerDisplayFiles"
+                  :key="`scan-${item.file_path}-${item.mtime || 'guide'}`"
                   class="latest-card scanner-card"
                   type="button"
                   @click="openScannerFile(item)"
-                >
+                  @mouseenter="handleScannerCardEnter(item)"
+                  @mouseleave="handleScannerCardLeave(item)"
+                  @focus="handleScannerCardEnter(item)"
+                  @blur="handleScannerCardLeave(item)">
+
                   <div class="latest-thumb-box scanner-thumb-box">
                     <img
-                      v-if="scannerThumbMap[item.file_path]"
-                      :src="scannerThumbMap[item.file_path]"
+                      v-if="scannerThumbMap[item.file_path] || item.preview_src"
+                      :src="scannerThumbMap[item.file_path] || item.preview_src"
                       :alt="item.name"
-                      class="latest-thumb"
-                    >
+                      class="latest-thumb">
                     <div v-else class="latest-thumb-fallback">缩略图加载中</div>
                   </div>
+
                   <div class="latest-meta scanner-meta">
-                    <div class="latest-desc">{{ formatLatestModifiedTime(item.uploaded_at || item.mtime) }}</div>
+                    <div class="latest-desc">{{ item.guide_text || formatLatestModifiedTime(item.uploaded_at || item.mtime) }}</div>
                   </div>
+                
                 </button>
               </div>
             </div>
+
+            <transition name="scanner-guide-preview-fade">
+              <div
+                v-if="hoveredScannerGuide"
+                class="scanner-guide-preview"
+                aria-hidden="true"
+              >
+                <img
+                  :src="scanGuideImage"
+                  alt="扫描文件夹引导大图"
+                  class="scanner-guide-preview-image"
+                >
+              </div>
+            </transition>
           </div>
 
           <div class="side-placeholder">
@@ -217,6 +236,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import ContractItem from '../components/ContractItem.vue'
+import scanGuideImage from '../assets/scan.jpg'
 import VChart from 'vue-echarts'
 import * as echarts from 'echarts/core'
 import { PieChart, BarChart } from 'echarts/charts'
@@ -294,6 +314,7 @@ const latestThumbMap = ref({})
 const scannerLoading = ref(false)
 const scannerFiles = ref([])
 const scannerThumbMap = ref({})
+const hoveredScannerGuide = ref(false)
 const previewVisible = ref(false)
 const previewLoading = ref(false)
 const activePreviewUrl = ref('')
@@ -318,6 +339,19 @@ const contractEditorReady = ref(false)
 const contractEditorLoading = ref(false)
 
 const showFullLoading = computed(() => backendLoading.value && !hasReadyData.value)
+const scannerDisplayFiles = computed(() => {
+  return [
+    {
+      file_path: '__scan_guide__',
+      name: '扫描文件夹引导',
+      preview_src: scanGuideImage,
+      guide_text: '点击进入扫描页',
+      isGuideCard: true,
+    },
+    ...scannerFiles.value,
+  ]
+})
+
 const isViewPermissionUser = computed(() => {
   const role = String(currentUserRole.value || '').trim()
   if (['super_admin', 'synology_super_admin'].includes(role)) {
@@ -759,6 +793,11 @@ const loadScannerFiles = async () => {
 }
 
 const openScannerFile = async (item) => {
+  if (item?.isGuideCard) {
+    await router.push({ path: '/contracts/scan' })
+    return
+  }
+
   const targetFilePath = normalizePath(item?.file_path)
   if (!targetFilePath) {
     ElMessage.warning('当前扫描文件路径无效')
@@ -769,6 +808,16 @@ const openScannerFile = async (item) => {
     path: '/contracts/scan',
     query: { file: targetFilePath },
   })
+}
+
+const handleScannerCardEnter = (item) => {
+  hoveredScannerGuide.value = !!item?.isGuideCard
+}
+
+const handleScannerCardLeave = (item) => {
+  if (item?.isGuideCard) {
+    hoveredScannerGuide.value = false
+  }
 }
 
 const releasePreviewUrl = () => {
@@ -1006,7 +1055,9 @@ onBeforeUnmount(() => {
   gap: clamp(10px, 0.9vw, 14px);
   overflow-x: auto;
   overflow-y: hidden;
+  padding-top: 8px;
   padding-bottom: 6px;
+  margin-top: -8px;
   scrollbar-width: thin;
 }
 
@@ -1110,6 +1161,48 @@ onBeforeUnmount(() => {
 
 .scanner-meta {
   width: 148px;
+}
+
+.scanner-guide-preview-fade-enter-active,
+.scanner-guide-preview-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.scanner-guide-preview-fade-enter-from,
+.scanner-guide-preview-fade-leave-to {
+  opacity: 0;
+}
+
+.scanner-guide-preview {
+  position: fixed;
+  inset: 4vh 5vw;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.scanner-guide-preview::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.22);
+}
+
+.scanner-guide-preview-image {
+  position: relative;
+  display: block;
+  max-width: min(92vw, 1100px);
+  max-height: 88vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 22px;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.28);
 }
 
 .latest-name {

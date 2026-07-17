@@ -1,6 +1,5 @@
 import os
 import re
-from collections import deque
 from io import BytesIO
 from decimal import Decimal
 from typing import Any
@@ -38,6 +37,7 @@ from .contracts_core import (
     _normalize_relative_path,
     _parse_date,
     _preview_lines,
+    _rename_contract_file_to_contract_identity,
     _safe_decimal,
     _get_stamp_tax_rate_by_contract_type,
     _sanitize_upload_filename,
@@ -82,9 +82,6 @@ HT_DETAIL_PAYMENT_FIELDS = [
     'JBRQ_DTM',
     'JHFK_DTM',
 ]
-
-HT_DETAIL_QUERY_HISTORY = deque(maxlen=200)
-
 
 def _normalize_external_payment_items(payload: Any) -> list[dict[str, str]]:
     if not isinstance(payload, list):
@@ -132,27 +129,6 @@ def _request_external_contract_detail(htno: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError('GetHtDetail 接口返回格式异常')
     return data
-
-
-def _record_payment_flow_query(
-    *,
-    contract_id: int,
-    contract_number: str,
-    queried_by: str,
-    status: str,
-    message: str,
-    payment_count: int,
-) -> dict[str, Any]:
-    row = {
-        'contract_id': int(contract_id),
-        'contract_number': str(contract_number or '').strip(),
-        'queried_by': str(queried_by or '').strip() or '-',
-        'status': str(status or '').strip() or 'unknown',
-        'message': str(message or '').strip(),
-        'payment_count': int(payment_count or 0),
-    }
-    HT_DETAIL_QUERY_HISTORY.appendleft(row)
-    return row
 
 
 def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
@@ -335,33 +311,16 @@ def get_contract_payment_flows(contract_id):
     current_user = (getattr(g, 'current_user', '') or '').strip()
     contract_number = (row.contract_number or '').strip()
     if not contract_number:
-        history_item = _record_payment_flow_query(
-            contract_id=row.id,
-            contract_number='',
-            queried_by=current_user,
-            status='skipped',
-            message='当前合同没有合同编号，无法查询支付流水',
-            payment_count=0,
-        )
         return jsonify({
             'contract_id': row.id,
             'contract_number': '',
             'payments': [],
             'message': '当前合同没有合同编号，无法查询支付流水',
-            'query_history': [history_item],
         })
 
     try:
         detail_payload = _request_external_contract_detail(contract_number)
     except RuntimeError as exc:
-        history_item = _record_payment_flow_query(
-            contract_id=row.id,
-            contract_number=contract_number,
-            queried_by=current_user,
-            status='failed',
-            message=str(exc),
-            payment_count=0,
-        )
         current_app.logger.warning(
             'payment-flow query failed contract_id=%s contract_number=%s user=%s message=%s',
             row.id,
@@ -372,14 +331,6 @@ def get_contract_payment_flows(contract_id):
         return jsonify({'message': str(exc)}), 502
 
     payments = _normalize_external_payment_items(detail_payload.get('payment'))
-    history_item = _record_payment_flow_query(
-        contract_id=row.id,
-        contract_number=contract_number,
-        queried_by=current_user,
-        status='success',
-        message='查询成功',
-        payment_count=len(payments),
-    )
     current_app.logger.info(
         'payment-flow query success contract_id=%s contract_number=%s user=%s payment_count=%s payments=%s',
         row.id,
@@ -388,16 +339,10 @@ def get_contract_payment_flows(contract_id):
         len(payments),
         payments,
     )
-    related_history = [
-        item
-        for item in HT_DETAIL_QUERY_HISTORY
-        if item.get('contract_id') == row.id
-    ][:20]
     return jsonify({
         'contract_id': row.id,
         'contract_number': contract_number,
         'payments': payments,
-        'query_history': related_history or [history_item],
     })
 
 
@@ -507,6 +452,21 @@ def create_contract():
         return jsonify({'message': message}), status_code
 
     db.session.add(record)
+    try:
+        renamed_file_path = _rename_contract_file_to_contract_identity(record)
+    except FileNotFoundError as exc:
+        db.session.rollback()
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        db.session.rollback()
+        return jsonify({'message': 'file_path 非法'}), 400
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'message': f'附件重命名失败: {exc}'}), 500
+
+    if renamed_file_path:
+        record.file_path = renamed_file_path
+
     db.session.commit()
     return jsonify(record.to_dict(include_fullbody=True)), 201
 
@@ -785,6 +745,18 @@ def update_contract(contract_id):
     if 'status' in body:
         record.status = (body.get('status') or '').strip() or record.status
 
+    try:
+        renamed_file_path = _rename_contract_file_to_contract_identity(record)
+    except FileNotFoundError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        return jsonify({'message': 'file_path 非法'}), 400
+    except Exception as exc:
+        return jsonify({'message': f'附件重命名失败: {exc}'}), 500
+
+    if renamed_file_path:
+        record.file_path = renamed_file_path
+
     record.updated_by = (getattr(g, 'current_user', '') or '').strip() or None
 
     db.session.commit()
@@ -835,6 +807,22 @@ def upload_contract_file(contract_id):
         uploaded.save(target_path)
 
     record.file_path = _build_synology_file_path(record.department, final_name)
+
+    try:
+        renamed_file_path = _rename_contract_file_to_contract_identity(record)
+    except FileNotFoundError as exc:
+        db.session.rollback()
+        return jsonify({'message': str(exc)}), 404
+    except ValueError:
+        db.session.rollback()
+        return jsonify({'message': 'file_path 非法'}), 400
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'message': f'附件重命名失败: {exc}'}), 500
+
+    if renamed_file_path:
+        record.file_path = renamed_file_path
+
     db.session.commit()
 
     return jsonify({'file_path': record.file_path})
