@@ -10,7 +10,6 @@ from urllib.parse import urlparse, unquote
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pypdf import PdfReader
-from rapidocr_onnxruntime import RapidOCR
 
 def _preview_lines(text: str, limit: int = 6):
     lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
@@ -22,7 +21,18 @@ import os
 def get_ocr_engine():
     global _OCR_ENGINE
     if '_OCR_ENGINE' not in globals():
-        globals()['_OCR_ENGINE'] = RapidOCR()
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except Exception as exc:
+            current_app.logger.warning('AI parse: local OCR unavailable, skip RapidOCR import: %s', exc)
+            globals()['_OCR_ENGINE'] = None
+            return None
+
+        try:
+            globals()['_OCR_ENGINE'] = RapidOCR()
+        except Exception as exc:
+            current_app.logger.warning('AI parse: local OCR engine init failed, skip RapidOCR: %s', exc)
+            globals()['_OCR_ENGINE'] = None
     return globals()['_OCR_ENGINE']
 
 def extract_pdf_text_via_ocr(pdf_bytes: bytes) -> str:
@@ -30,6 +40,9 @@ def extract_pdf_text_via_ocr(pdf_bytes: bytes) -> str:
     from PIL import Image
     doc = fitz.open(stream=pdf_bytes, filetype='pdf')
     ocr = get_ocr_engine()
+    if ocr is None:
+        current_app.logger.warning('AI parse: local OCR disabled because RapidOCR is unavailable')
+        return ''
     all_text = []
     max_pages = min(len(doc), 20)
     current_app.logger.info('AI parse: OCR fallback enabled, pages=%s (max=%s)', len(doc), max_pages)
