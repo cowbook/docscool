@@ -205,6 +205,21 @@ const markdownMetaApiUrl = computed(() => {
   return `${apiPrefix}/html-meta/${encodedMdPath.value}`
 })
 
+const storagePdfPreviewApiUrl = computed(() => {
+  const path = String(storagePdfPath.value || '').trim()
+  if (!path) {
+    return ''
+  }
+
+  const encodedPath = path
+    .split('/')
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join('/')
+
+  return `${apiPrefix}/folders/file-preview?path=${encodedPath}`
+})
+
 const isProtectedPdfPreviewUrl = (url) => {
   const source = String(url || '').trim()
   return source.startsWith('/api/folders/file-preview') || source.startsWith('/docs/api/folders/file-preview')
@@ -719,12 +734,13 @@ const loadMarkdownMeta = async () => {
 
     const data = await response.json()
     markdownExists.value = typeof data?.markdown_exists === 'boolean' ? data.markdown_exists : true
-    pdfPreviewUrl.value = data?.pdf_preview_url || ''
+    pdfPreviewUrl.value = data?.pdf_preview_url || storagePdfPreviewApiUrl.value || ''
     await syncPdfPreviewUrl()
   } catch (_error) {
     revokePdfBlobUrl()
-    pdfPreviewUrl.value = ''
+    pdfPreviewUrl.value = storagePdfPreviewApiUrl.value || ''
     markdownExists.value = false
+    await syncPdfPreviewUrl()
   } finally {
     pdfPreviewLoading.value = false
   }

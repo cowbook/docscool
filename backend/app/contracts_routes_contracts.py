@@ -903,12 +903,35 @@ def parse_contract_pdf_bak():
     })
 
 
+def _update_contract_fullbody_by_file_path(file_path: str, fullbody: str) -> int:
+    normalized_path = _normalize_relative_path(file_path)
+    normalized_fullbody = str(fullbody or '').strip()
+    if not normalized_path or not normalized_fullbody:
+        return 0
+
+    rows = Contract.query.filter(
+        Contract.file_path.isnot(None),
+        func.lower(Contract.file_path) == normalized_path.lower(),
+    ).all()
+    if not rows:
+        return 0
+
+    current_user = (getattr(g, 'current_user', '') or '').strip() or None
+    for row in rows:
+        row.fullbody = normalized_fullbody
+        row.updated_by = current_user
+
+    db.session.commit()
+    return len(rows)
+
+
 @contracts_bp.post('/contracts/ai-parse')
 @require_auth
 def parse_contract_pdf():
     body = request.get_json(silent=True) or {}
     incoming_fullbody = str(body.get('fullbody') or '').strip()
     incoming_url = str(body.get('url') or body.get('file_path') or request.form.get('url') or '').strip()
+    normalized_storage_path = ''
     use_fullbody_directly = len(incoming_fullbody) > 20
 
     if use_fullbody_directly:
@@ -943,14 +966,14 @@ def parse_contract_pdf():
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400
     elif incoming_url:
-        normalized_path = _normalize_relative_path(incoming_url)
-        if not normalized_path:
+        normalized_storage_path = _normalize_relative_path(incoming_url)
+        if not normalized_storage_path:
             return jsonify({'message': 'url is invalid'}), 400
-        if not normalized_path.lower().endswith('.pdf'):
+        if not normalized_storage_path.lower().endswith('.pdf'):
             return jsonify({'message': 'url 对应文件必须是PDF'}), 400
 
         try:
-            content, file_name, _mime = _load_storage_file_payload(normalized_path)
+            content, file_name, _mime = _load_storage_file_payload(normalized_storage_path)
         except PermissionError as exc:
             return jsonify({'message': str(exc)}), 401
         except FileNotFoundError as exc:
@@ -960,14 +983,14 @@ def parse_contract_pdf():
         except Exception as exc:
             return jsonify({'message': f'读取存储文件失败: {exc}'}), 500
 
-        effective_name = str(file_name or os.path.basename(normalized_path) or 'upload.pdf')
+        effective_name = str(file_name or os.path.basename(normalized_storage_path) or 'upload.pdf')
         if not effective_name.lower().endswith('.pdf'):
             effective_name = f'{effective_name}.pdf'
 
         current_app.logger.info(
             'AI parse: url mode user=%s path=%s bytes=%s',
             g.current_user,
-            normalized_path,
+            normalized_storage_path,
             len(content or b''),
         )
 
@@ -978,7 +1001,7 @@ def parse_contract_pdf():
         )
 
         try:
-            pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded, source_file_path=normalized_path)
+            pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded, source_file_path=normalized_storage_path)
         except Exception as exc:
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400
@@ -991,6 +1014,20 @@ def parse_contract_pdf():
             'message': 'PDF未解析到可用文本，请确认扫描件清晰度/方向或是否含可读文字',
             'ocr_preview_lines': preview_lines,
         }), 400
+
+    if normalized_storage_path:
+        try:
+            updated_rows = _update_contract_fullbody_by_file_path(normalized_storage_path, pdf_text)
+        except Exception as exc:
+            db.session.rollback()
+            current_app.logger.exception('AI parse: failed to persist fullbody by file_path=%s', normalized_storage_path)
+            return jsonify({'message': f'更新合同全文失败: {exc}'}), 500
+        current_app.logger.info(
+            'AI parse: persisted fullbody by file_path=%s matched_rows=%s chars=%s',
+            normalized_storage_path,
+            updated_rows,
+            len(pdf_text),
+        )
 
     try:
         raw_fields = _minimax_extract_fields(pdf_text)
