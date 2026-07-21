@@ -726,6 +726,28 @@ def _find_storage_pdf_relative_path_from_md(md_relative_path: str) -> str:
     return guessed_path
 
 
+def _update_contract_fullbody_by_storage_path(storage_pdf_path: str, markdown_text: str) -> int:
+    normalized_path = _normalize_relative_path(storage_pdf_path)
+    normalized_fullbody = str(markdown_text or '').strip()
+    if not normalized_path or not normalized_fullbody:
+        return 0
+
+    rows = Contract.query.filter(
+        Contract.file_path.isnot(None),
+        func.lower(Contract.file_path) == normalized_path.lower(),
+    ).all()
+    if not rows:
+        return 0
+
+    current_user = (getattr(g, 'current_user', '') or '').strip() or None
+    for row in rows:
+        row.fullbody = normalized_fullbody
+        row.updated_by = current_user
+
+    db.session.commit()
+    return len(rows)
+
+
 def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
     username = (getattr(g, 'current_user', '') or '').strip()
     if not username:
@@ -2056,7 +2078,18 @@ def serve_ocr_html_assets(relative_path):
         except Exception as exc:
             return jsonify({'message': f'保存 Markdown 失败: {exc}'}), 500
 
-        return jsonify({'success': True, 'path': relative})
+        updated_rows = 0
+        # When saving OCR full.md, also persist markdown into matching contract fullbody.
+        if relative.lower().endswith('/full.md') or relative.lower() == 'full.md':
+            storage_pdf_path = _find_storage_pdf_relative_path_from_md(relative)
+            if storage_pdf_path:
+                try:
+                    updated_rows = _update_contract_fullbody_by_storage_path(storage_pdf_path, markdown_text)
+                except Exception as exc:
+                    db.session.rollback()
+                    return jsonify({'message': f'保存 Markdown 成功，但更新合同全文失败: {exc}'}), 500
+
+        return jsonify({'success': True, 'path': relative, 'updated_contract_rows': int(updated_rows)})
 
     if os.path.isdir(target_abs):
         directory_index_abs = os.path.join(target_abs, 'index.html')

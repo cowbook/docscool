@@ -1154,7 +1154,8 @@ const openContractEditFromFileRow = async (row) => {
   if (!contractId) {
     return
   }
-  await contractItemRef.value?.openEdit({ id: contractId }, { readOnly: isViewPermissionUser.value })
+  const readOnly = isViewPermissionUser.value || (isArchivedValue(row?.is_archived) && !isSuperAdminUser.value)
+  await contractItemRef.value?.openEdit({ id: contractId }, { readOnly })
 }
 
 const openCreateFromFileRow = (row) => {

@@ -9,6 +9,17 @@
 
 ## 时间线
 
+### 2026-07-21 本轮更新
+- 合同导出 EXCEL 功能落地：
+	- 后端新增 `GET /api/contracts/export-excel`，按当前筛选条件导出单表“合同信息”。
+	- 前端 `ContractView` 已接入“导出EXCEL”按钮，调用导出接口并下载文件。
+- 归档权限控制回归并固定：
+	- 后端合同写操作（更新、删除、上传附件）统一限制：已归档合同仅 `super_admin` 或 `synology_super_admin` 可修改。
+	- AI 解析通过 `file_path` 回写 `fullbody` 时，同步受归档权限约束。
+- OCR Markdown 保存回写能力补齐：
+	- `PUT /api/html/<path>/full.md` 在保存 markdown 成功后，会按文件路径匹配 `contracts.file_path`，并同步更新匹配行的 `fullbody` 与 `updated_by`。
+	- 接口返回新增 `updated_contract_rows`，用于标识本次回写更新的合同条数。
+
 ### 2026-07-17 本轮更新
 - MIS 合同详情接口调用口径确认：
 	- `htno` 已统一按合同编号格式（`HTSP_ID`）作为优先入参，例如 `CG-GK-B-2025-122`、`GC-DY-C-2025-096`。

@@ -127,9 +127,11 @@
 - GET /api/contracts/<id>/preview：预览合同 PDF
 - GET /api/contracts/<id>/download：下载原文件
 - POST /api/contracts/ai-parse：AI OCR / 字段提取 / fullbody 返回
+- GET /api/contracts/export-excel：按当前筛选条件导出合同信息 EXCEL（单工作表）
 - POST /api/contracts/import-excel：EXCEL 导入
 - GET /api/contracts/import-template：下载导入模板
 - GET /api/contracts/import-error-report/<token>：下载导入失败明细
+- PUT /api/html/<path>/full.md：保存 OCR Markdown，并按路径匹配合同同步更新 fullbody
 - POST /api/folders/upload：向当前目录批量上传文件
 - POST /api/folders/batch-match：批量匹配当前文件夹未关联合同文件
 - GET /api/folders/file-count：返回当前目录及子目录文件总数

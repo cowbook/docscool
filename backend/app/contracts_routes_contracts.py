@@ -155,6 +155,36 @@ def _resolve_current_user_department_scope() -> tuple[bool, list[str]]:
 
     return False, departments
 
+
+def _current_user_role() -> str:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return ''
+
+    permission_row = UserPermission.query.filter_by(login_name=username).first()
+    if not permission_row:
+        return ''
+
+    return str(getattr(permission_row, 'role', '') or '').strip()
+
+
+def _is_super_role(role: str) -> bool:
+    return str(role or '').strip() in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
+
+
+def _is_archived_contract(record: Contract) -> bool:
+    return (getattr(record, 'is_archived', '') or '').strip() == '已归档'
+
+
+def _ensure_archived_contract_editable(record: Contract):
+    if not _is_archived_contract(record):
+        return None
+
+    if _is_super_role(_current_user_role()):
+        return None
+
+    return jsonify({'message': '已归档合同仅超管或群晖超管可修改'}), 403
+
 @contracts_bp.get('/contracts')
 @require_auth
 def list_contracts():
@@ -221,6 +251,133 @@ def list_contracts():
 
     rows = query.order_by(Contract.updated_at.desc()).all()
     return jsonify([row.to_dict() for row in rows])
+
+
+@contracts_bp.get('/contracts/export-excel')
+@require_auth
+def export_contracts_excel():
+    department = (request.args.get('handling_department') or request.args.get('department') or '').strip()
+    project = (request.args.get('project') or '').strip()
+    status = (request.args.get('status') or '').strip()
+    keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
+    has_file = (request.args.get('has_file') or '').strip().lower()
+    is_archived = (request.args.get('is_archived') or '').strip()
+
+    query = Contract.query
+    unrestricted, allowed_departments = _resolve_current_user_department_scope()
+    if not unrestricted:
+        if not allowed_departments:
+            return jsonify({'message': '无可导出数据'}), 403
+        query = query.filter(Contract.department.in_(allowed_departments))
+
+    if department == '__empty__':
+        query = query.filter(Contract.department.is_(None))
+    elif department:
+        query = query.filter(Contract.department == department)
+    if project == '__empty__':
+        query = query.filter(Contract.project.is_(None))
+    elif project:
+        query = query.filter(Contract.project == project)
+    if status:
+        query = query.filter(Contract.status == status)
+    if has_file == 'true':
+        query = query.filter(Contract.file_path.isnot(None))
+    elif has_file == 'false':
+        query = query.filter(or_(Contract.file_path.is_(None), Contract.file_path == ''))
+    if is_archived:
+        query = query.filter(Contract.is_archived == is_archived)
+    if keyword:
+        pattern = f'%{keyword}%'
+        query = query.filter(or_(
+            Contract.contract_number.ilike(pattern),
+            Contract.contract_name.ilike(pattern),
+            Contract.contract_unit.ilike(pattern),
+            Contract.currency.ilike(pattern),
+            Contract.handler.ilike(pattern),
+            Contract.department.ilike(pattern),
+            Contract.contract_determination_method.ilike(pattern),
+            Contract.contract_type.ilike(pattern),
+            Contract.purchase_type.ilike(pattern),
+            Contract.stamp_tax_rate.ilike(pattern),
+            Contract.pricing_method.ilike(pattern),
+            Contract.save_place.ilike(pattern),
+            Contract.is_archived.ilike(pattern),
+            Contract.project.ilike(pattern),
+            Contract.status.ilike(pattern),
+            Contract.file_path.ilike(pattern),
+            Contract.fullbody.ilike(pattern),
+            Contract.created_by.ilike(pattern),
+            Contract.updated_by.ilike(pattern),
+            cast(Contract.amount, String).ilike(pattern),
+            cast(Contract.copy_count, String).ilike(pattern),
+            cast(Contract.handling_date, String).ilike(pattern),
+            cast(Contract.start_date, String).ilike(pattern),
+            cast(Contract.end_date, String).ilike(pattern),
+            cast(Contract.created_at, String).ilike(pattern),
+            cast(Contract.updated_at, String).ilike(pattern),
+        ))
+
+    rows = query.order_by(Contract.updated_at.desc()).all()
+
+    try:
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = '合同信息'
+
+        headers = [
+            '合同编号', '合同名称', '合同单位', '合同金额', '币种', '承办人', '承办部门',
+            '定标方式', '承办日期', '合同类型', '采购类型', '印花税率', '计价方式',
+            '份数', '存档位置', '是否归档', '项目', '全文', '开始日期', '结束日期',
+            '状态', '文件路径', '创建人', '修改人', '创建时间', '修改时间',
+        ]
+        sheet.append(headers)
+
+        for row in rows:
+            payload = row.to_dict(include_fullbody=True)
+            sheet.append([
+                payload.get('contract_number') or '',
+                payload.get('contract_name') or '',
+                payload.get('contract_unit') or '',
+                payload.get('contract_amount') or '',
+                payload.get('currency') or '',
+                payload.get('handler') or '',
+                payload.get('handling_department') or '',
+                payload.get('contract_determination_method') or '',
+                payload.get('handling_date') or '',
+                payload.get('contract_type') or '',
+                payload.get('purchase_type') or '',
+                payload.get('stamp_tax_rate') or '',
+                payload.get('pricing_method') or '',
+                payload.get('copy_count') or '',
+                payload.get('save_place') or '',
+                payload.get('is_archived') or '',
+                payload.get('project') or '',
+                payload.get('fullbody') or '',
+                payload.get('start_date') or '',
+                payload.get('end_date') or '',
+                payload.get('status') or '',
+                payload.get('file_path') or '',
+                payload.get('created_by') or '',
+                payload.get('updated_by') or '',
+                payload.get('created_at') or '',
+                payload.get('updated_at') or '',
+            ])
+
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+    except Exception as exc:
+        current_app.logger.exception('Contract export failed')
+        return jsonify({'message': f'导出EXCEL失败: {exc}'}), 500
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='合同信息导出.xlsx',
+    )
 
 
 @contracts_bp.get('/contracts/statistics')
@@ -657,6 +814,10 @@ def update_contract(contract_id):
     body = request.get_json(silent=True) or {}
     record = Contract.query.get_or_404(contract_id)
 
+    denied = _ensure_archived_contract_editable(record)
+    if denied:
+        return denied
+
     if 'contract_number' in body:
         candidate = (body.get('contract_number') or '').strip()
         if candidate:
@@ -768,6 +929,10 @@ def update_contract(contract_id):
 def delete_contract(contract_id):
     record = Contract.query.get_or_404(contract_id)
 
+    denied = _ensure_archived_contract_editable(record)
+    if denied:
+        return denied
+
     try:
         _delete_contract_file(record)
     except ValueError:
@@ -784,6 +949,11 @@ def delete_contract(contract_id):
 @require_auth
 def upload_contract_file(contract_id):
     record = Contract.query.get_or_404(contract_id)
+
+    denied = _ensure_archived_contract_editable(record)
+    if denied:
+        return denied
+
     if 'file' not in request.files:
         return jsonify({'message': 'file is required'}), 400
 
@@ -903,26 +1073,35 @@ def parse_contract_pdf_bak():
     })
 
 
-def _update_contract_fullbody_by_file_path(file_path: str, fullbody: str) -> int:
+def _update_contract_fullbody_by_file_path(file_path: str, fullbody: str) -> tuple[int, int]:
     normalized_path = _normalize_relative_path(file_path)
     normalized_fullbody = str(fullbody or '').strip()
     if not normalized_path or not normalized_fullbody:
-        return 0
+        return 0, 0
 
     rows = Contract.query.filter(
         Contract.file_path.isnot(None),
         func.lower(Contract.file_path) == normalized_path.lower(),
     ).all()
     if not rows:
-        return 0
+        return 0, 0
 
+    can_edit_archived = _is_super_role(_current_user_role())
     current_user = (getattr(g, 'current_user', '') or '').strip() or None
+    updated_count = 0
+    blocked_archived_count = 0
     for row in rows:
+        if _is_archived_contract(row) and not can_edit_archived:
+            blocked_archived_count += 1
+            continue
         row.fullbody = normalized_fullbody
         row.updated_by = current_user
+        updated_count += 1
 
-    db.session.commit()
-    return len(rows)
+    if updated_count > 0:
+        db.session.commit()
+
+    return updated_count, blocked_archived_count
 
 
 @contracts_bp.post('/contracts/ai-parse')
@@ -1017,15 +1196,25 @@ def parse_contract_pdf():
 
     if normalized_storage_path:
         try:
-            updated_rows = _update_contract_fullbody_by_file_path(normalized_storage_path, pdf_text)
+            updated_rows, blocked_archived_rows = _update_contract_fullbody_by_file_path(normalized_storage_path, pdf_text)
         except Exception as exc:
             db.session.rollback()
             current_app.logger.exception('AI parse: failed to persist fullbody by file_path=%s', normalized_storage_path)
             return jsonify({'message': f'更新合同全文失败: {exc}'}), 500
+
+        if blocked_archived_rows > 0 and updated_rows == 0:
+            current_app.logger.warning(
+                'AI parse: blocked archived fullbody update by file_path=%s blocked_rows=%s',
+                normalized_storage_path,
+                blocked_archived_rows,
+            )
+            return jsonify({'message': '已归档合同仅超管或群晖超管可修改'}), 403
+
         current_app.logger.info(
-            'AI parse: persisted fullbody by file_path=%s matched_rows=%s chars=%s',
+            'AI parse: persisted fullbody by file_path=%s matched_rows=%s blocked_archived_rows=%s chars=%s',
             normalized_storage_path,
             updated_rows,
+            blocked_archived_rows,
             len(pdf_text),
         )
 

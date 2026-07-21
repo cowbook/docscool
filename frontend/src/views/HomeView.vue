@@ -360,6 +360,16 @@ const isViewPermissionUser = computed(() => {
   return String(currentUserPermission.value || '').trim() === 'view'
 })
 
+const isSuperAdminUser = computed(() => {
+  const role = String(currentUserRole.value || '').trim()
+  return ['super_admin', 'synology_super_admin'].includes(role)
+})
+
+const isArchivedValue = (value) => {
+  const text = String(value ?? '').trim().toLowerCase()
+  return ['已归档', '是', 'yes', 'true', '1', 'y'].includes(text)
+}
+
 const applyDashboardData = (stat, charts) => {
   if (stat) {
     statistics.value = {
@@ -707,7 +717,8 @@ const openBoundContract = async (item) => {
   if (directContractId > 0) {
     try {
       await ensureContractEditorResources()
-      await contractItemRef.value?.openEdit({ id: directContractId }, { readOnly: isViewPermissionUser.value })
+      const readOnly = isViewPermissionUser.value || (isArchivedValue(item?.is_archived) && !isSuperAdminUser.value)
+      await contractItemRef.value?.openEdit({ id: directContractId }, { readOnly })
       return
     } catch (_error) {
       ElMessage.error('打开合同失败')
@@ -736,7 +747,8 @@ const openBoundContract = async (item) => {
     }
 
     await ensureContractEditorResources()
-    await contractItemRef.value?.openEdit({ id: matched.id }, { readOnly: isViewPermissionUser.value })
+    const readOnly = isViewPermissionUser.value || (isArchivedValue(matched?.is_archived) && !isSuperAdminUser.value)
+    await contractItemRef.value?.openEdit({ id: matched.id }, { readOnly })
   } catch (_error) {
     ElMessage.error('打开合同失败')
   }

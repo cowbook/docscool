@@ -16,7 +16,7 @@
        <div class="header-notice">
      
           <div class="notice-content">
-            ℹ️ <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有管理员可以修改</span>
+            ℹ️ <span>合同金额单位为元，合同编号必须唯一，归档状态为已归档的只有超管可以修改</span>
           </div>
 
           <div v-if="showDepartmentRestrictedNotice" class="notice-content">
@@ -71,6 +71,11 @@
               <el-button :loading="importingExcel" :disabled="aiParsing" @click="importDialogVisible = true">
                 <el-icon><Upload /></el-icon>
                 <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
+              </el-button>
+
+              <el-button :loading="exportingExcel" :disabled="aiParsing" @click="exportContractsExcel">
+                <el-icon><Download /></el-icon>
+                <span>{{ exportingExcel ? '导出中...' : '导出EXCEL' }}</span>
               </el-button>
 
              
@@ -220,10 +225,24 @@
           <template #default="scope">
             <div class="action-buttons">
               <el-tooltip content="编辑" placement="top">
-                <el-button circle size="small" type="primary" :icon="Edit" @click.stop="openEdit(scope.row)" />
+                <el-button
+                  circle
+                  size="small"
+                  type="primary"
+                  :icon="Edit"
+                  :disabled="!hasDepartmentEditPermissionForContract(scope.row)"
+                  @click.stop="openEdit(scope.row)"
+                />
               </el-tooltip>
               <el-tooltip content="删除" placement="top">
-                <el-button circle size="small" type="danger" :icon="Delete" @click.stop="handleDelete(scope.row)" />
+                <el-button
+                  circle
+                  size="small"
+                  type="danger"
+                  :icon="Delete"
+                  :disabled="!hasDepartmentEditPermissionForContract(scope.row)"
+                  @click.stop="handleDelete(scope.row)"
+                />
               </el-tooltip>
             </div>
           </template>
@@ -515,6 +534,7 @@ const dragPreview = reactive({
 })
 const fieldSortDraftColumns = ref([])
 const importingExcel = ref(false)
+const exportingExcel = ref(false)
 const importDialogVisible = ref(false)
 const currentPage = ref(1)
 const contractItemRef = ref(null)
@@ -1138,11 +1158,20 @@ const openCreateFromAi = (file, fields) => {
   contractItemRef.value?.openCreateFromAi(file, fields)
 }
 
+const isArchivedContract = (row) => {
+  return String(row?.is_archived || '').trim() === '已归档'
+}
+
 const hasDepartmentEditPermissionForContract = (row) => {
   const role = String(currentUserRole.value || '').trim()
   if (SUPER_ROLE_SET.has(role)) {
     return true
   }
+
+  if (isArchivedContract(row)) {
+    return false
+  }
+
   if (String(currentUserPermission.value || '').trim() === 'view') {
     return false
   }
@@ -1252,6 +1281,30 @@ const downloadImportErrorReport = async (token, fallbackName = '合同导入失�
   })
   const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
   triggerBrowserDownload(response.data, headerName || fallbackName)
+}
+
+const exportContractsExcel = async () => {
+  exportingExcel.value = true
+  try {
+    const response = await http.get('/contracts/export-excel', {
+      responseType: 'blob',
+      params: {
+        handling_department: filters.handling_department || undefined,
+        project: filters.project || undefined,
+        keyword: filters.keyword || undefined,
+        has_file: filters.has_file || undefined,
+        is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
+      },
+    })
+    const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
+    triggerBrowserDownload(response.data, headerName || '合同信息导出.xlsx')
+    ElMessage.success('EXCEL 导出成功')
+  } catch (error) {
+    const message = await parseErrorMessage(error, 'EXCEL 导出失败')
+    ElMessage.error(message)
+  } finally {
+    exportingExcel.value = false
+  }
 }
 
 const closeAiMatchDialog = () => {
@@ -1440,6 +1493,11 @@ const doUpload = async (contractId, file) => {
 
 const handleDelete = async (row) => {
   if (!row?.id) {
+    return
+  }
+
+  if (!hasDepartmentEditPermissionForContract(row)) {
+    ElMessage.warning('已归档合同仅超管或群晖超管可修改')
     return
   }
 

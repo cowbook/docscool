@@ -651,6 +651,10 @@ const hasDepartmentEditPermissionForContract = (row) => {
   if (SUPER_ROLE_SET.has(role)) {
     return true
   }
+  const archivedText = String(row?.is_archived || '').trim()
+  if (archivedText === '已归档') {
+    return false
+  }
   if (String(currentUserPermission.value || '').trim() === 'view') {
     return false
   }
