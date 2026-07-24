@@ -50,6 +50,10 @@ DEFAULT_STAMP_TAX_RATE_OPTIONS = {
 warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
 
+def _is_sqlite_database() -> bool:
+    return db.engine.dialect.name == 'sqlite'
+
+
 def _ensure_contract_columns():
     required_columns = {
         'contract_unit': 'ALTER TABLE contracts ADD COLUMN contract_unit VARCHAR(255)',
@@ -471,10 +475,11 @@ def create_app() -> Flask:
 
     with app.app_context():
         db.create_all()
-        _ensure_contract_columns()
-        _ensure_user_permission_columns()
-        _drop_legacy_contract_columns()
-        _drop_legacy_user_permission_columns()
+        if _is_sqlite_database():
+            _ensure_contract_columns()
+            _ensure_user_permission_columns()
+            _drop_legacy_contract_columns()
+            _drop_legacy_user_permission_columns()
         _seed_departments()
         _seed_project_options()
         _seed_stamp_tax_rate_options()
