@@ -1,5 +1,6 @@
 import os
 import re
+from copy import copy
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -362,6 +363,106 @@ def _build_import_error_report(sheet_name: str, source_headers, failed_rows):
         ])
 
     sheet.freeze_panes = 'A2'
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def _build_group_report_excel(rows, company_name: str, report_year: int):
+    from openpyxl import load_workbook
+
+    template_path = os.path.abspath(
+        os.path.join(current_app.root_path, '..', 'scripts', '年度采购统计表.xlsx')
+    )
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f'集团上报模板不存在: {template_path}')
+
+    workbook = load_workbook(template_path)
+
+    grouped_rows = {month: [] for month in range(1, 13)}
+    for row in rows or []:
+        handling_date = getattr(row, 'handling_date', None)
+        if not handling_date or handling_date.year != report_year:
+            continue
+        grouped_rows.setdefault(handling_date.month, []).append(row)
+
+    company_text = str(company_name or '').strip()
+    filled_at_text = datetime.now().strftime('%Y-%m-%d')
+
+    def _copy_row_style(worksheet, source_row: int, target_row: int, max_col: int = 10):
+        for col_index in range(1, max_col + 1):
+            source_cell = worksheet.cell(row=source_row, column=col_index)
+            target_cell = worksheet.cell(row=target_row, column=col_index)
+            if source_cell.has_style:
+                target_cell._style = copy(source_cell._style)
+            if source_cell.font:
+                target_cell.font = copy(source_cell.font)
+            if source_cell.fill:
+                target_cell.fill = copy(source_cell.fill)
+            if source_cell.border:
+                target_cell.border = copy(source_cell.border)
+            if source_cell.alignment:
+                target_cell.alignment = copy(source_cell.alignment)
+            if source_cell.protection:
+                target_cell.protection = copy(source_cell.protection)
+            target_cell.number_format = source_cell.number_format
+
+        worksheet.row_dimensions[target_row].height = worksheet.row_dimensions[source_row].height
+
+    def _clear_row_values(worksheet, row_number: int, start_col: int = 2, end_col: int = 10):
+        for col_index in range(start_col, end_col + 1):
+            worksheet.cell(row=row_number, column=col_index).value = None
+
+    for month in range(1, 13):
+        sheet = workbook[f'{month}月']
+        sheet['A1'] = f'{report_year}年{month}月月度采购情况统计表'
+        sheet['A2'] = f'填报单位：{company_text}' if company_text else '填报单位：'
+        sheet['A3'] = f'统计周期：{report_year}年{month}月1日-{month}月末，请于次月10日前填报完毕'
+
+        month_rows = grouped_rows.get(month, [])
+        base_data_rows = 20
+        data_start_row = 5
+        summary_base_row = 25
+        extra_rows = max(0, len(month_rows) - base_data_rows)
+
+        if extra_rows:
+            sheet.insert_rows(summary_base_row, amount=extra_rows)
+            for row_number in range(summary_base_row, summary_base_row + extra_rows):
+                _copy_row_style(sheet, summary_base_row - 1, row_number)
+
+        summary_row = summary_base_row + extra_rows
+
+        for merged_range in list(sheet.merged_cells.ranges):
+            if merged_range.min_col == 1 and merged_range.max_col == 6 and merged_range.min_row == merged_range.max_row:
+                sheet.unmerge_cells(str(merged_range))
+        total_data_rows = max(base_data_rows, len(month_rows))
+        for offset in range(total_data_rows):
+            row_number = data_start_row + offset
+            sheet.cell(row=row_number, column=1).value = offset + 1
+            _clear_row_values(sheet, row_number)
+
+        for index, row in enumerate(month_rows, start=1):
+            row_number = data_start_row + index - 1
+            contract_name = row.contract_name or ''
+            handling_date = row.handling_date.strftime('%Y-%m-%d') if row.handling_date else ''
+            amount_value = float(row.amount) if row.amount is not None else None
+            sheet.cell(row=row_number, column=2).value = company_text or ''
+            sheet.cell(row=row_number, column=3).value = contract_name
+            sheet.cell(row=row_number, column=4).value = row.contract_determination_method or ''
+            sheet.cell(row=row_number, column=5).value = row.contract_unit or ''
+            sheet.cell(row=row_number, column=6).value = handling_date
+            sheet.cell(row=row_number, column=7).value = amount_value
+            sheet.cell(row=row_number, column=8).value = '是'
+            sheet.cell(row=row_number, column=9).value = row.handler or ''
+            sheet.cell(row=row_number, column=10).value = filled_at_text
+
+        sheet.merge_cells(start_row=summary_row, start_column=1, end_row=summary_row, end_column=6)
+        sheet.cell(row=summary_row, column=1).value = f'{month}月合计'
+        sheet.cell(row=summary_row, column=7).value = f'=SUM(G{data_start_row}:G{summary_row - 1})'
+        for col_index in range(8, 11):
+            sheet.cell(row=summary_row, column=col_index).value = None
+
     output = BytesIO()
     workbook.save(output)
     output.seek(0)

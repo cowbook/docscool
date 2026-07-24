@@ -52,6 +52,7 @@ from .contracts_routes_contracts_helpers import (
     _build_completeness_value,
     _build_contract_import_template,
     _build_contract_record,
+    _build_group_report_excel,
     _build_import_payload_from_row,
     _detect_excel_header,
     _is_excel_row_empty,
@@ -490,6 +491,117 @@ def export_contracts_excel():
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
         download_name='合同信息导出.xlsx',
+    )
+
+
+@contracts_bp.get('/contracts/export-group-report-excel')
+@require_auth
+def export_group_report_excel():
+    year_param = (request.args.get('year') or '').strip()
+    if year_param:
+        try:
+            report_year = int(year_param)
+        except ValueError:
+            return jsonify({'message': 'year 参数无效'}), 400
+    else:
+        report_year = date.today().year
+
+    if report_year < 2025 or report_year > date.today().year:
+        return jsonify({'message': 'year 参数超出允许范围'}), 400
+
+    department = (request.args.get('handling_department') or request.args.get('department') or '').strip()
+    project = (request.args.get('project') or '').strip()
+    status = (request.args.get('status') or '').strip()
+    keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
+    has_file = (request.args.get('has_file') or '').strip().lower()
+    is_archived = (request.args.get('is_archived') or '').strip()
+    color_flag = (request.args.get('color_flag') or '').strip()
+    completeness = (request.args.get('completeness') or '').strip()
+
+    query = Contract.query
+    unrestricted, allowed_departments = _resolve_current_user_department_scope()
+    if not unrestricted:
+        if not allowed_departments:
+            return jsonify({'message': '无可导出数据'}), 403
+        query = query.filter(Contract.department.in_(allowed_departments))
+
+    if department == '__empty__':
+        query = query.filter(Contract.department.is_(None))
+    elif department:
+        query = query.filter(Contract.department == department)
+    if project == '__empty__':
+        query = query.filter(Contract.project.is_(None))
+    elif project:
+        query = query.filter(Contract.project == project)
+    if status:
+        query = query.filter(Contract.status == status)
+    if has_file == 'true':
+        query = query.filter(Contract.file_path.isnot(None))
+    elif has_file == 'false':
+        query = query.filter(or_(Contract.file_path.is_(None), Contract.file_path == ''))
+    if is_archived:
+        query = query.filter(Contract.is_archived == is_archived)
+    if color_flag:
+        query = query.filter(Contract.color_flag == color_flag)
+    if completeness:
+        query = query.filter(Contract.completeness == completeness)
+    query = query.filter(or_(
+        Contract.contract_determination_method.is_(None),
+        Contract.contract_determination_method != '非采购类',
+    ))
+    if keyword:
+        pattern = f'%{keyword}%'
+        query = query.filter(or_(
+            Contract.contract_number.ilike(pattern),
+            Contract.contract_name.ilike(pattern),
+            Contract.contract_unit.ilike(pattern),
+            Contract.currency.ilike(pattern),
+            Contract.handler.ilike(pattern),
+            Contract.department.ilike(pattern),
+            Contract.current_management_department.ilike(pattern),
+            Contract.contract_determination_method.ilike(pattern),
+            Contract.contract_type.ilike(pattern),
+            Contract.purchase_type.ilike(pattern),
+            Contract.stamp_tax_rate.ilike(pattern),
+            Contract.pricing_method.ilike(pattern),
+            Contract.save_place.ilike(pattern),
+            Contract.is_archived.ilike(pattern),
+            Contract.color_flag.ilike(pattern),
+            Contract.completeness.ilike(pattern),
+            Contract.project.ilike(pattern),
+            Contract.status.ilike(pattern),
+            Contract.file_path.ilike(pattern),
+            Contract.fullbody.ilike(pattern),
+            Contract.created_by.ilike(pattern),
+            Contract.updated_by.ilike(pattern),
+            cast(Contract.amount, String).ilike(pattern),
+            cast(Contract.copy_count, String).ilike(pattern),
+            cast(Contract.handling_date, String).ilike(pattern),
+            cast(Contract.start_date, String).ilike(pattern),
+            cast(Contract.end_date, String).ilike(pattern),
+            cast(Contract.created_at, String).ilike(pattern),
+            cast(Contract.updated_at, String).ilike(pattern),
+        ))
+
+    year_start = date(report_year, 1, 1)
+    next_year_start = date(report_year + 1, 1, 1)
+    rows = query.filter(
+        Contract.handling_date.isnot(None),
+        Contract.handling_date >= year_start,
+        Contract.handling_date < next_year_start,
+    ).order_by(Contract.handling_date.asc(), Contract.updated_at.asc()).all()
+
+    try:
+        output = _build_group_report_excel(rows, current_app.config.get('MY_COMP', ''), report_year)
+    except Exception as exc:
+        current_app.logger.exception('Group report export failed')
+        return jsonify({'message': f'集团上报EXCEL导出失败: {exc}'}), 500
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'集团上报EXCEL_{report_year}.xlsx',
     )
 
 

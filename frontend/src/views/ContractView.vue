@@ -86,10 +86,29 @@
                 <span>{{ importingExcel ? '导入中...' : '导入Excel' }}</span>
               </el-button>
 
-              <el-button :loading="exportingExcel" :disabled="aiParsing" @click="exportContractsExcel">
+              <el-dropdown
+                split-button
+                type="primary"
+                trigger="click"
+                :loading="exportingExcel || exportingGroupExcel"
+                :disabled="aiParsing"
+                @click="exportContractsExcel"
+                @command="handleGroupReportExportCommand"
+              >
                 <el-icon><Download /></el-icon>
-                <span>{{ exportingExcel ? '导出中...' : '导出EXCEL' }}</span>
-              </el-button>
+                <span>{{ exportingExcel || exportingGroupExcel ? '导出中...' : '导出EXCEL' }}</span>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="year in groupReportYears"
+                      :key="year"
+                      :command="year"
+                    >
+                      {{ year }}集团上报
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
 
              
 
@@ -614,6 +633,7 @@ const dragPreview = reactive({
 const fieldSortDraftColumns = ref([])
 const importingExcel = ref(false)
 const exportingExcel = ref(false)
+const exportingGroupExcel = ref(false)
 const importDialogVisible = ref(false)
 const currentPage = ref(1)
 const contractItemRef = ref(null)
@@ -818,6 +838,15 @@ const filters = reactive({
   keyword: '',
   has_file: '',
   is_archived: null,
+})
+
+const currentYear = new Date().getFullYear()
+const groupReportYears = computed(() => {
+  const startYear = 2025
+  if (currentYear < startYear) {
+    return []
+  }
+  return Array.from({ length: currentYear - startYear + 1 }, (_, index) => startYear + index)
 })
 
 const options = reactive({
@@ -1452,20 +1481,22 @@ const downloadImportErrorReport = async (token, fallbackName = '合同导入失�
   triggerBrowserDownload(response.data, headerName || fallbackName)
 }
 
+const buildExportParams = () => ({
+  handling_department: filters.handling_department || undefined,
+  project: filters.project || undefined,
+  color_flag: filters.color_flag || undefined,
+  completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
+  keyword: filters.keyword || undefined,
+  has_file: filters.has_file || undefined,
+  is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
+})
+
 const exportContractsExcel = async () => {
   exportingExcel.value = true
   try {
     const response = await http.get('/contracts/export-excel', {
       responseType: 'blob',
-      params: {
-        handling_department: filters.handling_department || undefined,
-        project: filters.project || undefined,
-        color_flag: filters.color_flag || undefined,
-        completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
-        keyword: filters.keyword || undefined,
-        has_file: filters.has_file || undefined,
-        is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
-      },
+      params: buildExportParams(),
     })
     const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
     triggerBrowserDownload(response.data, headerName || '合同信息导出.xlsx')
@@ -1476,6 +1507,31 @@ const exportContractsExcel = async () => {
   } finally {
     exportingExcel.value = false
   }
+}
+
+const exportGroupReportExcel = async (year) => {
+  exportingGroupExcel.value = true
+  try {
+    const response = await http.get('/contracts/export-group-report-excel', {
+      responseType: 'blob',
+      params: {
+        ...buildExportParams(),
+        year,
+      },
+    })
+    const headerName = parseFilenameFromDisposition(response.headers?.['content-disposition'])
+    triggerBrowserDownload(response.data, headerName || '集团上报EXCEL.xlsx')
+    ElMessage.success(`${year}年集团上报EXCEL导出成功`)
+  } catch (error) {
+    const message = await parseErrorMessage(error, '集团上报EXCEL导出失败')
+    ElMessage.error(message)
+  } finally {
+    exportingGroupExcel.value = false
+  }
+}
+
+const handleGroupReportExportCommand = (year) => {
+  exportGroupReportExcel(year)
 }
 
 const closeAiMatchDialog = () => {
