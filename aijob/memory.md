@@ -9,6 +9,22 @@
 
 ## 时间线
 
+### 2026-07-24 本轮更新（数据库切换与自动部署）
+- 后端数据库迁移到 MySQL：
+	- 已通过 `MYSQL_DATABASE_URL` 连通性校验（`SELECT 1`）。
+	- 已将 `SOURCE_SQLITE_URL=sqlite:///instance/contracts.db` 全量导入到 MySQL。
+	- 导入结果：`contracts=1164`、`departments=17`、`users=6`。
+	- 运行时 `DATABASE_URL` 已切换为 MySQL，应用可正常启动并返回健康检查。
+- 启动兼容修复：
+	- SQLite 专用启动迁移逻辑改为仅在 sqlite 方言下执行，避免 MySQL 环境下触发 `PRAGMA` 兼容性问题。
+- Webhook 自动部署链路落地：
+	- 新增 `POST /api/webhook`，不校验 GitHub 来源，不要求登录鉴权。
+	- 接口被调用后同步执行 `git pull`，成功后立即返回。
+	- 同时异步触发部署脚本：前端 `npm run build` + 后端重启，避免 GitHub webhook 超时。
+	- 已兼容 DSM/Linux：
+		- Linux/DSM 使用 `backend/scripts/webhook_post_pull.sh`。
+		- Windows 保留 `backend/scripts/webhook_post_pull.ps1` 本地兼容。
+
 ### 2026-07-24 本轮更新
 - 合同关联字段落地：
 	- 合同模型新增 `original_contract_id` 自关联外键，支持“原合同”指向已有合同。

@@ -1,5 +1,8 @@
+import os
 import json
 import re
+import subprocess
+from pathlib import Path
 from importlib import import_module
 from urllib.parse import urlparse
 
@@ -34,6 +37,64 @@ ROLE_VALUES = {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
 ADD_DELETE_ALLOW_LOGIN_NAMES = {'zhangyan'}
 NEW_USER_LOGIN_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 NEW_USER_PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s])[\S]{8,}$')
+
+
+def _repo_root_path() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _run_git_pull(repo_root: Path) -> tuple[bool, str]:
+    result = subprocess.run(
+        ['git', 'pull'],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    output = (result.stdout or '') + (result.stderr or '')
+    return result.returncode == 0, output.strip()
+
+
+def _trigger_async_post_pull_deploy(repo_root: Path) -> None:
+    if os.name == 'nt':
+        script_path = repo_root / 'backend' / 'scripts' / 'webhook_post_pull.ps1'
+        if not script_path.exists():
+            raise FileNotFoundError(f'未找到部署脚本: {script_path}')
+
+        creation_flags = 0
+        creation_flags |= getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+        creation_flags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
+
+        subprocess.Popen(
+            [
+                'powershell.exe',
+                '-NoProfile',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-File',
+                str(script_path),
+            ],
+            cwd=str(repo_root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=creation_flags,
+            close_fds=False,
+        )
+        return
+
+    script_path = repo_root / 'backend' / 'scripts' / 'webhook_post_pull.sh'
+    if not script_path.exists():
+        raise FileNotFoundError(f'未找到部署脚本: {script_path}')
+
+    subprocess.Popen(
+        ['/bin/sh', str(script_path)],
+        cwd=str(repo_root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
 
 
 def _is_super_role(role: str) -> bool:
@@ -1472,3 +1533,32 @@ def delete_department_setting(department_id):
     db.session.delete(row)
     db.session.commit()
     return jsonify({'success': True})
+
+
+@contracts_bp.post('/webhook')
+def github_webhook():
+    repo_root = _repo_root_path()
+    ok, pull_output = _run_git_pull(repo_root)
+    if not ok:
+        current_app.logger.error('[webhook] git pull failed: %s', pull_output)
+        return jsonify({
+            'success': False,
+            'message': 'git pull failed',
+            'output': pull_output,
+        }), 500
+
+    try:
+        _trigger_async_post_pull_deploy(repo_root)
+    except Exception as exc:
+        current_app.logger.error('[webhook] post-pull async deploy trigger failed: %s', exc)
+        return jsonify({
+            'success': False,
+            'message': f'git pull succeeded, but async deploy trigger failed: {exc}',
+            'output': pull_output,
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'git pull succeeded; frontend rebuild and backend restart started asynchronously',
+        'output': pull_output,
+    })

@@ -7,7 +7,7 @@
 
 ## 技术架构
 - 后端：Flask + Flask-SQLAlchemy
-- 数据库：SQLite
+- 数据库：MySQL（生产/当前运行）+ SQLite（历史源库/迁移来源）
 - 前端：Vue 3 + Vite + Element Plus + Axios
 - PDF 预览：vue-pdf-embed + pdfjs-dist
 - OCR / AI：PyMuPDF、RapidOCR、Pillow、numpy、MiniMax API、讯飞 OCR
@@ -50,7 +50,9 @@
 ## 后端环境变量
 - FLASK_ENV：运行环境
 - APP_SECRET_KEY：应用密钥
-- DATABASE_URL：SQLite 地址，默认 sqlite:///instance/contracts.db
+- DATABASE_URL：当前运行数据库连接串（现为 MySQL）
+- MYSQL_DATABASE_URL：MySQL 目标连接串（导入脚本优先读取）
+- SOURCE_SQLITE_URL：SQLite 源库连接串（导入脚本读取）
 - SYNOLOGY_BASE_URL：DSM 地址，例如 https://NAS_URL:5001
 - SYNOLOGY_VERIFY_SSL：是否校验证书，内网常设为 false
 - SYNOLOGY_USER：远程存储访问使用的服务账号
@@ -134,6 +136,7 @@
 - GET /api/contracts/import-template：下载导入模板
 - GET /api/contracts/import-error-report/<token>：下载导入失败明细
 - PUT /api/html/<path>/full.md：保存 OCR Markdown，并按路径匹配合同同步更新 fullbody
+- POST /api/webhook：执行 git pull，并异步触发前端重编译与后端重启（DSM/Linux 兼容）
 - POST /api/folders/upload：向当前目录批量上传文件
 - POST /api/folders/batch-match：批量匹配当前文件夹未关联合同文件
 - GET /api/folders/file-count：返回当前目录及子目录文件总数

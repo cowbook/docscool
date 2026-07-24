@@ -3,6 +3,13 @@
 更新时间：2026-07-24
 
 ## 已完成（2026-07-24）
+- 数据库切换：
+	- 后端已切换到 MySQL（`DATABASE_URL`）。
+	- 本地 SQLite（`contracts.db`）已完成导入 MySQL 并验证读写可用。
+- 自动部署：
+	- 新增 `POST /api/webhook`，调用后执行 `git pull`。
+	- `git pull` 成功后异步触发“前端重编译 + 后端重启”。
+	- 部署脚本已同时覆盖 DSM/Linux 与 Windows。
 - 合同字段扩展：
 	- 新增合同形式 `contract_form`（新签合同、补充合同、补充协议、变更合同）。
 	- 新增原合同关联 `original_contract_id`（自关联外键）。
