@@ -441,6 +441,18 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     normalized_file_path = _normalize_contract_file_path(raw_file_path) if has_file_path_input else None
     normalized_contract_type = _normalize_contract_type_value(payload.get('contract_type'))
     normalized_stamp_tax_rate = (payload.get('stamp_tax_rate') or '').strip() or _get_stamp_tax_rate_by_contract_type(normalized_contract_type)
+    normalized_contract_form = (payload.get('contract_form') or '').strip() or '新签合同'
+
+    original_contract_id_text = str(payload.get('original_contract_id') or '').strip()
+    if original_contract_id_text:
+        if not re.fullmatch(r'\d+', original_contract_id_text):
+            return None, 'original_contract_id is invalid', 400, False
+        original_contract_id = int(original_contract_id_text)
+        original_contract = Contract.query.get(original_contract_id)
+        if not original_contract:
+            return None, 'original_contract_id not found', 404, False
+    else:
+        original_contract_id = None
 
     required = ['contract_name', 'handling_department']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
@@ -501,6 +513,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 if has_file_path_input:
                     existing_contract.file_path = normalized_file_path or None
                 existing_contract.department = (payload.get('handling_department') or '').strip()
+                existing_contract.contract_form = normalized_contract_form or None
                 existing_contract.contract_determination_method = (payload.get('contract_determination_method') or '').strip() or None
                 existing_contract.handling_date = _parse_date(payload.get('handling_date'))
                 existing_contract.contract_type = normalized_contract_type or None
@@ -510,6 +523,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 existing_contract.copy_count = copy_count
                 existing_contract.save_place = save_place
                 existing_contract.project = (payload.get('project') or '').strip() or None
+                existing_contract.original_contract_id = original_contract_id
                 existing_contract.fullbody = (payload.get('fullbody') or '').strip() or None
                 existing_contract.start_date = _parse_date(payload.get('start_date'))
                 existing_contract.end_date = _parse_date(payload.get('end_date'))
@@ -540,6 +554,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         currency='CNY',
         handler=(payload.get('handler') or '').strip() or None,
         department=department,
+        contract_form=normalized_contract_form or None,
         contract_determination_method=(payload.get('contract_determination_method') or '').strip() or None,
         handling_date=_parse_date(payload.get('handling_date')),
         contract_type=normalized_contract_type or None,
@@ -550,6 +565,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         save_place=save_place,
         is_archived='未归档',
         project=project,
+        original_contract_id=original_contract_id,
         file_path=normalized_file_path or None,
         fullbody=(payload.get('fullbody') or '').strip() or None,
         start_date=_parse_date(payload.get('start_date')),

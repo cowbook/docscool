@@ -850,6 +850,8 @@ def update_contract(contract_id):
         
     if 'handler' in body:
         record.handler = (body.get('handler') or '').strip() or None
+    if 'contract_form' in body:
+        record.contract_form = (body.get('contract_form') or '').strip() or None
     if 'handling_department' in body:
         department = (body.get('handling_department') or '').strip()
         if department:
@@ -858,6 +860,20 @@ def update_contract(contract_id):
                 return jsonify({'message': 'handling_department is not in configured department settings'}), 400
             _department_dir(department)
             record.department = department
+    if 'original_contract_id' in body:
+        original_contract_id_text = str(body.get('original_contract_id') or '').strip()
+        if original_contract_id_text:
+            if not re.fullmatch(r'\d+', original_contract_id_text):
+                return jsonify({'message': 'original_contract_id is invalid'}), 400
+            original_contract_id = int(original_contract_id_text)
+            if original_contract_id == record.id:
+                return jsonify({'message': 'original_contract_id cannot reference self'}), 400
+            original_contract = Contract.query.get(original_contract_id)
+            if not original_contract:
+                return jsonify({'message': 'original_contract_id not found'}), 404
+            record.original_contract_id = original_contract_id
+        else:
+            record.original_contract_id = None
     if 'contract_determination_method' in body:
         record.contract_determination_method = (body.get('contract_determination_method') or '').strip() or None
     if 'handling_date' in body:

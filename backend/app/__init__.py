@@ -54,6 +54,7 @@ def _ensure_contract_columns():
     required_columns = {
         'contract_unit': 'ALTER TABLE contracts ADD COLUMN contract_unit VARCHAR(255)',
         'handler': 'ALTER TABLE contracts ADD COLUMN handler VARCHAR(64)',
+        'contract_form': 'ALTER TABLE contracts ADD COLUMN contract_form VARCHAR(32)',
         'contract_determination_method': 'ALTER TABLE contracts ADD COLUMN contract_determination_method VARCHAR(64)',
         'handling_date': 'ALTER TABLE contracts ADD COLUMN handling_date DATE',
         'contract_type': 'ALTER TABLE contracts ADD COLUMN contract_type VARCHAR(64)',
@@ -64,6 +65,7 @@ def _ensure_contract_columns():
         'save_place': 'ALTER TABLE contracts ADD COLUMN save_place VARCHAR(50)',
         'is_archived': 'ALTER TABLE contracts ADD COLUMN is_archived VARCHAR(32)',
         'project': 'ALTER TABLE contracts ADD COLUMN project VARCHAR(255)',
+        'original_contract_id': 'ALTER TABLE contracts ADD COLUMN original_contract_id INTEGER',
         'fullbody': 'ALTER TABLE contracts ADD COLUMN fullbody TEXT',
         'updated_by': 'ALTER TABLE contracts ADD COLUMN updated_by VARCHAR(128)',
     }
@@ -96,6 +98,8 @@ def _drop_legacy_contract_columns():
         'save_place',
         'is_archived',
         'project',
+        'contract_form',
+        'original_contract_id',
         'fullbody',
         'start_date',
         'end_date',
@@ -126,6 +130,7 @@ def _drop_legacy_contract_columns():
             currency VARCHAR(16) NOT NULL,
             handler VARCHAR(64),
             department VARCHAR(128) NOT NULL,
+            contract_form VARCHAR(32),
             contract_determination_method VARCHAR(64),
             handling_date DATE,
             contract_type VARCHAR(64),
@@ -136,6 +141,7 @@ def _drop_legacy_contract_columns():
             save_place VARCHAR(50),
             is_archived VARCHAR(32),
             project VARCHAR(255),
+            original_contract_id INTEGER,
             fullbody TEXT,
             start_date DATE,
             end_date DATE,
@@ -145,7 +151,8 @@ def _drop_legacy_contract_columns():
             updated_by VARCHAR(128),
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
-            PRIMARY KEY (id)
+            PRIMARY KEY (id),
+            FOREIGN KEY(original_contract_id) REFERENCES contracts (id)
         )
         '''
     ))
@@ -153,15 +160,17 @@ def _drop_legacy_contract_columns():
         '''
         INSERT INTO contracts (
             id, contract_number, contract_name, contract_unit, amount, currency,
-            handler, department, contract_determination_method,
+            handler, department, contract_form, contract_determination_method,
             handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
+            original_contract_id,
             fullbody, start_date, end_date, status, file_path, created_by,
             updated_by, created_at, updated_at
         )
         SELECT
             id, contract_number, contract_name, contract_unit, amount, currency,
-            handler, department, contract_determination_method,
+            handler, department, NULL, contract_determination_method,
             handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
+            NULL,
             fullbody, start_date, end_date, status, file_path, created_by,
             created_by, created_at, updated_at
         FROM contracts_legacy_drop_fields

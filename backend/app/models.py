@@ -26,6 +26,7 @@ class Contract(db.Model):
     currency = db.Column(db.String(16), nullable=False, default='CNY')
     handler = db.Column(db.String(64), nullable=True)
     department = db.Column(db.String(128), nullable=False, index=True)
+    contract_form = db.Column(db.String(32), nullable=True)
     contract_determination_method = db.Column(db.String(64), nullable=True)
     handling_date = db.Column(db.Date, nullable=True)
     contract_type = db.Column(db.String(64), nullable=True)
@@ -36,6 +37,7 @@ class Contract(db.Model):
     save_place = db.Column(db.String(50), nullable=True)
     is_archived = db.Column(db.String(32), nullable=True)
     project = db.Column(db.String(255), nullable=True)
+    original_contract_id = db.Column(db.Integer, db.ForeignKey('contracts.id'), nullable=True, index=True)
     fullbody = db.Column(db.Text, nullable=True)
     start_date = db.Column(db.Date, nullable=True)
     end_date = db.Column(db.Date, nullable=True)
@@ -45,6 +47,12 @@ class Contract(db.Model):
     updated_by = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    original_contract = db.relationship(
+        'Contract',
+        remote_side=[id],
+        foreign_keys=[original_contract_id],
+        uselist=False,
+    )
 
     def to_dict(self, include_fullbody: bool = False):
         payload = {
@@ -58,6 +66,7 @@ class Contract(db.Model):
             'handler': self.handler,
             'handling_department': self.department,
             'department': self.department,
+            'contract_form': self.contract_form,
             'contract_determination_method': self.contract_determination_method,
             'handling_date': self.handling_date.isoformat() if self.handling_date else None,
             'contract_type': self.contract_type,
@@ -68,6 +77,7 @@ class Contract(db.Model):
             'save_place': self.save_place,
             'is_archived': self.is_archived,
             'project': self.project,
+            'original_contract_id': self.original_contract_id,
             'start_date': self.start_date.isoformat() if self.start_date else None,
             'end_date': self.end_date.isoformat() if self.end_date else None,
             'status': self.status,
@@ -79,6 +89,13 @@ class Contract(db.Model):
         }
         if include_fullbody:
             payload['fullbody'] = self.fullbody or ''
+            payload['original_contract'] = None
+            if self.original_contract is not None:
+                payload['original_contract'] = {
+                    'id': self.original_contract.id,
+                    'contract_number': self.original_contract.contract_number,
+                    'contract_name': self.original_contract.contract_name,
+                }
         return payload
 
 

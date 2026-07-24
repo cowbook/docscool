@@ -49,6 +49,7 @@ CONTRACT_FIELD_KEYS = [
     'contract_amount',
     'handler',
     'handling_department',
+    'contract_form',
     'contract_determination_method',
     'handling_date',
     'contract_type',
@@ -83,16 +84,18 @@ LEGACY_INVALID_CONTRACT_TYPES = {
 }
 
 OPTION_FIELD_DEFAULTS = {
-    'project': '无',
+    'project': '',
+    'contract_form': '新签合同',
     'contract_determination_method': '直接采购',
     'is_archived': '已归档',
 }
 
 
 CSV_OPTION_DEFAULTS = {
-    'contract_determination_method': ['询比采购', '竞价采购', '谈判采购', '直接采购','非采购类'],
+    'contract_form': ['新签合同', '补充合同', '补充协议', '变更合同'],
+    'contract_determination_method': ['公开招标', '邀请招标', '询比采购', '竞价采购', '谈判采购', '直接采购', '电商直采', '零星', '其他', '非采购类'],
     'contract_type': ['买卖合同', '借款合同', '租赁合同', '承揽合同', '建设工程合同', '运输合同', '技术合同', '保管合同', '仓储合同', '财产保险合同','人力资源','其它'],
-    'purchase_type': ['工程', '服务', '设备采购', '非采购类'],
+    'purchase_type': ['工程采购', '服务采购', '设备采购', '非采购类'],
     'pricing_method': ['单价合同', '总价合同','其他'],
     'is_archived': ['已归档', '未归档'],
 }

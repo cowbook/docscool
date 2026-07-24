@@ -360,6 +360,11 @@ def _normalize_option_fields(fields: dict) -> dict:
         option_sets.get('handling_department', []),
         '',
     )
+    normalized['contract_form'] = _match_option_value(
+        normalized.get('contract_form', ''),
+        option_sets.get('contract_form', []),
+        OPTION_FIELD_DEFAULTS['contract_form'],
+    )
     normalized['project'] = _match_option_value(
         normalized.get('project', ''),
         option_sets.get('project', []),
@@ -418,6 +423,7 @@ def _minimax_extract_fields(pdf_text: str) -> dict:
 
     prompt = (
         'contract_type指的是合同类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_type']) + '。必须要返回内容，如果文本没有明确写出类型，请按印花税合同分类选择最贴近的一项：设备材料采购/销售归为买卖合同，贷款融资归为借款合同，房屋设备租用归为租赁合同，委托加工制作归为承揽合同，施工建设归为建设工程合同，货物物流承运归为运输合同，技术开发转让咨询服务归为技术合同，代保管归为保管合同，仓储服务归为仓储合同，保险保单归为财产保险合同。\n'
+            'contract_form指的是合同形式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['contract_form']) + '。必须要返回内容，如果文本没有明确写出形式，请根据上下文判断是新签合同、补充合同、补充协议还是变更合同。\n'
         'purchase_type指的是采购类型，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['purchase_type']) + '。必须要返回内容，按合同业务性质归类：工程施工建设归工程类，咨询运维检测培训等归服务类，设备材料货物采购归采购类，不属于采购项目或与采购无关归非采购类。\n'
         'stamp_tax_rate指的是印花税率，请根据合同类型返回税法规定税率：买卖合同0.03%，借款合同0.005%，租赁合同0.1%，承揽合同0.03%，建设工程合同0.03%，运输合同0.03%，技术合同0.03%，保管合同0.1%，仓储合同0.1%，财产保险合同0.1%，其他类型可返回空字符串。\n'
         'pricing_method指的是合同的计价方式，值在如下选择：' + ','.join(CSV_OPTION_DEFAULTS['pricing_method']) + '。必须要返回内容，如果找不到就请总结提炼这个合同可能是通过什么方式计价的，如果讲到了综合单价暂定工程量就是单价合同，其它默认都返回总价合同。\n'

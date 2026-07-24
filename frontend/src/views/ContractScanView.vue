@@ -181,6 +181,7 @@ const currentUserRole = ref('admin')
 const currentUserPermissionList = ref([])
 const departments = ref([])
 const options = reactive({
+  contract_form: [],
   contract_determination_method: [],
   contract_type: [],
   purchase_type: [],
@@ -397,6 +398,7 @@ const loadDepartments = async () => {
 
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
+  options.contract_form = data?.contract_form || []
   options.contract_determination_method = data?.contract_determination_method || []
   options.contract_type = data?.contract_type || []
   options.purchase_type = data?.purchase_type || []

@@ -139,6 +139,11 @@
                   <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="合同形式">
+                <el-select v-model="form.contract_form" placeholder="请选择合同形式" style="width: 100%">
+                  <el-option v-for="item in normalizedOptions.contract_form" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="合同确定方式">
                 <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_determination_method" :key="item" :label="item" :value="item" />
@@ -178,6 +183,17 @@
                   clearable
                   placeholder="最多50个字符，可留空"
                 />
+              </el-form-item>
+              <el-form-item label="原合同">
+                <el-select v-model="form.original_contract_id" clearable filterable placeholder="请选择原合同" style="width: 100%">
+                  <el-option
+                    v-for="item in originalContractOptions"
+                    :key="item.id"
+                    :label="item.label"
+                    :value="item.id"
+                  />
+                </el-select>
+                <div class="original-contract-hint">当前关联：{{ originalContractDisplayLabel || '无' }}</div>
               </el-form-item>
             </div>
             <div class="contract-meta-info">
@@ -523,6 +539,10 @@ const props = defineProps({
     type: Object,
     default: () => ({}),
   },
+  contracts: {
+    type: Array,
+    default: () => [],
+  },
   linkTreeSnapshot: {
     type: Object,
     default: () => ({}),
@@ -543,6 +563,7 @@ const aiParsing = computed(() => props.aiParsing)
 const departments = computed(() => props.departments || [])
 
 const normalizedOptions = computed(() => ({
+  contract_form: props.options?.contract_form || [],
   contract_determination_method: props.options?.contract_determination_method || [],
   contract_type: props.options?.contract_type || [],
   purchase_type: props.options?.purchase_type || [],
@@ -622,6 +643,7 @@ const form = reactive({
   copy_count: '',
   handler: '',
   handling_department: '',
+  contract_form: '新签合同',
   contract_determination_method: '',
   handling_date: '',
   contract_type: '',
@@ -631,6 +653,8 @@ const form = reactive({
   is_archived: '未归档',
   project: '',
   save_place: '',
+  original_contract_id: '',
+  original_contract_label: '',
   fullbody: '',
   created_by: '',
   created_at: '',
@@ -669,6 +693,40 @@ const formatStorageBreadcrumb = (value) => {
 
 const fullPreviewBreadcrumb = computed(() => formatStorageBreadcrumb(currentPreviewRow.value?.file_path || ''))
 const linkFullPreviewBreadcrumb = computed(() => formatStorageBreadcrumb(linkSelectedFilePath.value))
+
+const originalContractOptions = computed(() => {
+  const currentId = editing.value?.id
+  const base = (props.contracts || [])
+    .filter((item) => item && item.id && item.id !== currentId)
+    .map((item) => ({
+      id: item.id,
+      label: `${item.contract_number || '无编号'} - ${item.contract_name || '未命名合同'}`,
+    }))
+
+  const selectedId = Number(form.original_contract_id)
+  if (Number.isInteger(selectedId) && selectedId > 0 && !base.some((item) => Number(item.id) === selectedId)) {
+    base.unshift({
+      id: selectedId,
+      label: form.original_contract_label || `ID:${selectedId}`,
+    })
+  }
+
+  return base
+})
+
+const originalContractDisplayLabel = computed(() => {
+  const selectedId = Number(form.original_contract_id)
+  if (!Number.isInteger(selectedId) || selectedId <= 0) {
+    return ''
+  }
+
+  const matched = originalContractOptions.value.find((item) => Number(item.id) === selectedId)
+  if (matched?.label) {
+    return matched.label
+  }
+
+  return form.original_contract_label || `ID:${selectedId}`
+})
 
 const apiPrefix = import.meta.env.PROD ? '/docs/api' : '/api'
 const appBasePrefix = import.meta.env.BASE_URL || '/'
@@ -775,6 +833,7 @@ const resetForm = () => {
   form.copy_count = ''
   form.handler = ''
   form.handling_department = ''
+  form.contract_form = '新签合同'
   form.contract_determination_method = ''
   form.handling_date = ''
   form.contract_type = ''
@@ -784,6 +843,8 @@ const resetForm = () => {
   form.is_archived = '未归档'
   form.project = ''
   form.save_place = ''
+  form.original_contract_id = ''
+  form.original_contract_label = ''
   form.fullbody = ''
   form.created_by = ''
   form.created_at = ''
@@ -844,6 +905,7 @@ const populateFormFromContract = (row) => {
   form.copy_count = normalizeCopyCountInput(row.copy_count)
   form.handler = row.handler || ''
   form.handling_department = row.handling_department || row.department || ''
+  form.contract_form = row.contract_form || '新签合同'
   form.contract_determination_method = row.contract_determination_method || ''
   form.handling_date = row.handling_date || ''
   form.contract_type = row.contract_type || ''
@@ -853,6 +915,10 @@ const populateFormFromContract = (row) => {
   form.is_archived = row.is_archived || '未归档'
   form.project = row.project || ''
   form.save_place = row.save_place || ''
+  form.original_contract_id = row.original_contract_id || ''
+  form.original_contract_label = row?.original_contract
+    ? `${row.original_contract.contract_number || '无编号'} - ${row.original_contract.contract_name || '未命名合同'}`
+    : ''
   form.fullbody = row.fullbody || ''
   form.created_by = row.created_by || ''
   form.created_at = row.created_at || ''
@@ -911,6 +977,7 @@ const applyParsedFields = (fields) => {
   form.copy_count = normalizeCopyCountInput(fields?.copy_count || '')
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
+  form.contract_form = fields?.contract_form || '新签合同'
   form.contract_determination_method = fields?.contract_determination_method || ''
   form.handling_date = fields?.handling_date || ''
   form.contract_type = fields?.contract_type || ''
@@ -920,6 +987,10 @@ const applyParsedFields = (fields) => {
   form.is_archived = fields?.is_archived || '未归档'
   form.project = fields?.project || ''
   form.save_place = fields?.save_place || ''
+  form.original_contract_id = fields?.original_contract_id || ''
+  form.original_contract_label = fields?.original_contract
+    ? `${fields.original_contract.contract_number || '无编号'} - ${fields.original_contract.contract_name || '未命名合同'}`
+    : ''
   form.fullbody = fields?.fullbody || ''
 }
 
@@ -1116,6 +1187,7 @@ const saveContract = async () => {
         copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
+        contract_form: form.contract_form,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
         contract_type: form.contract_type,
@@ -1125,6 +1197,7 @@ const saveContract = async () => {
         is_archived: form.is_archived,
         project: form.project,
         save_place: normalizedSavePlace,
+        original_contract_id: form.original_contract_id,
         fullbody: form.fullbody,
       })
       ElMessage.success('更新成功')
@@ -1138,6 +1211,7 @@ const saveContract = async () => {
         copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
+        contract_form: form.contract_form,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
         contract_type: form.contract_type,
@@ -1147,6 +1221,7 @@ const saveContract = async () => {
         is_archived: form.is_archived,
         project: form.project,
         save_place: normalizedSavePlace,
+        original_contract_id: form.original_contract_id,
         fullbody: form.fullbody,
       })
 

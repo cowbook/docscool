@@ -327,6 +327,7 @@ const currentUserPermission = ref('view')
 const currentUserRole = ref('admin')
 const contractEditorDepartments = ref([])
 const contractEditorOptions = ref({
+  contract_form: [],
   contract_determination_method: [],
   contract_type: [],
   purchase_type: [],
@@ -694,6 +695,7 @@ const ensureContractEditorResources = async () => {
 
     contractEditorDepartments.value = (Array.isArray(departments) ? departments : []).map((item) => item.name)
     contractEditorOptions.value = {
+      contract_form: options?.contract_form || [],
       contract_determination_method: options?.contract_determination_method || [],
       contract_type: options?.contract_type || [],
       purchase_type: options?.purchase_type || [],

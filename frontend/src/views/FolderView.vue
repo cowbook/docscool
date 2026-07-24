@@ -260,6 +260,13 @@
               show-overflow-tooltip
               class-name="contract-number-col"
             />
+            <el-table-column label="原合同" min-width="220" show-overflow-tooltip>
+              <template #default="scope">
+                <span :title="formatOriginalContractLabel(scope.row)">
+                  {{ formatOriginalContractLabel(scope.row) || '-' }}
+                </span>
+              </template>
+            </el-table-column>
             <el-table-column prop="contract_unit" label="合同单位" min-width="180" show-overflow-tooltip />
             <el-table-column prop="contract_amount" label="合同金额" min-width="120" />
             <el-table-column prop="copy_count" label="份数" min-width="80" />
@@ -381,6 +388,7 @@
     <ContractItem
       ref="contractItemRef"
       :departments="departments"
+      :contracts="contractEditorContracts"
       :options="options"
       v-model:aiParsing="contractItemAiParsing"
       :show-file-actions="false"
@@ -439,7 +447,9 @@ const previewRow = ref(null)
 const contractItemRef = ref(null)
 const contractItemAiParsing = ref(false)
 const departments = ref([])
+const contractEditorContracts = ref([])
 const options = ref({
+  contract_form: [],
   contract_determination_method: [],
   contract_type: [],
   purchase_type: [],
@@ -999,6 +1009,7 @@ const filteredFiles = computed(() => {
       row?.save_place,
       row?.is_archived,
       row?.project,
+      formatOriginalContractLabel(row),
     ]
       .map((item) => String(item || '').toLowerCase())
       .join(' ')
@@ -1142,6 +1153,32 @@ const getMatchedContractId = (row) => {
 const hasRealContractName = (row) => {
   const name = String(row?.contract_name || '').trim()
   return !!name && name !== '<无匹配>' && getMatchedContractId(row) > 0
+}
+
+const contractBriefById = computed(() => {
+  const map = new Map()
+  ;(contractEditorContracts.value || []).forEach((item) => {
+    const id = Number(item?.id)
+    if (!Number.isInteger(id) || id <= 0) {
+      return
+    }
+    map.set(id, `${item?.contract_number || '无编号'} - ${item?.contract_name || '未命名合同'}`)
+  })
+  return map
+})
+
+const formatOriginalContractLabel = (row) => {
+  const direct = row?.original_contract
+  if (direct && Number.isInteger(Number(direct?.id))) {
+    return `${direct?.contract_number || '无编号'} - ${direct?.contract_name || '未命名合同'}`
+  }
+
+  const id = Number(row?.original_contract_id)
+  if (!Number.isInteger(id) || id <= 0) {
+    return ''
+  }
+
+  return contractBriefById.value.get(id) || `ID:${id}`
 }
 
 const isArchivedValue = (value) => {
@@ -1294,6 +1331,7 @@ const loadCurrentUserFolderPermission = async () => {
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
   options.value = {
+    contract_form: data?.contract_form || [],
     contract_determination_method: data?.contract_determination_method || [],
     contract_type: data?.contract_type || [],
     purchase_type: data?.purchase_type || [],
@@ -1304,9 +1342,15 @@ const loadFieldOptions = async () => {
   }
 }
 
+const loadContractEditorContracts = async () => {
+  const { data } = await http.get('/contracts')
+  contractEditorContracts.value = Array.isArray(data) ? data : []
+}
+
 const handleContractSaved = async () => {
   await Promise.all([
     loadDepartments(),
+    loadContractEditorContracts(),
     loadFieldOptions(),
     loadFolderFiles(selectedFolderPath.value),
   ])
@@ -2212,6 +2256,7 @@ onMounted(async () => {
   await loadCurrentUserFolderPermission()
   await Promise.all([
     loadDepartments(),
+    loadContractEditorContracts(),
     loadFieldOptions(),
     loadTree(false),
   ])

@@ -212,6 +212,20 @@
           </el-table-column>
 
           <el-table-column
+            v-else-if="column.key === 'original_contract'"
+            prop="original_contract_id"
+            label="原合同"
+            min-width="220"
+            show-overflow-tooltip
+          >
+            <template #default="scope">
+              <span class="no-wrap-cell" :title="formatOriginalContractLabel(scope.row)">
+                {{ formatOriginalContractLabel(scope.row) || '-' }}
+              </span>
+            </template>
+          </el-table-column>
+
+          <el-table-column
             v-else
             :prop="column.prop"
             :label="column.label"
@@ -415,6 +429,7 @@
     <ContractItem
       ref="contractItemRef"
       :departments="departments"
+      :contracts="contracts"
       :options="options"
       :link-tree-snapshot="linkTreeSnapshot"
       v-model:aiParsing="aiParsing"
@@ -459,6 +474,7 @@ const DEFAULT_TABLE_COLUMNS = [
   { key: 'is_archived', prop: 'is_archived', label: '是否归档', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'save_place', prop: 'save_place', label: '存档位置', minWidth: 140, visible: true, sortable: true, showOverflowTooltip: true },
   { key: 'project', prop: 'project', label: '项目', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'original_contract', prop: 'original_contract_id', label: '原合同', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
   { key: 'created_by', prop: 'created_by', label: '创建人', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: true },
   { key: 'created_at', prop: 'created_at', label: '创建时间', minWidth: 170, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'updated_by', prop: 'updated_by', label: '修改人', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: true },
@@ -735,6 +751,7 @@ const filters = reactive({
 })
 
 const options = reactive({
+  contract_form: [],
   contract_determination_method: [],
   contract_type: [],
   purchase_type: [],
@@ -839,6 +856,32 @@ const canConfirmAiFolder = computed(() => {
   return !!path
 })
 
+const contractBriefById = computed(() => {
+  const map = new Map()
+  ;(contracts.value || []).forEach((item) => {
+    const id = Number(item?.id)
+    if (!Number.isInteger(id) || id <= 0) {
+      return
+    }
+    map.set(id, `${item?.contract_number || '无编号'} - ${item?.contract_name || '未命名合同'}`)
+  })
+  return map
+})
+
+const formatOriginalContractLabel = (row) => {
+  const direct = row?.original_contract
+  if (direct && Number.isInteger(Number(direct?.id))) {
+    return `${direct?.contract_number || '无编号'} - ${direct?.contract_name || '未命名合同'}`
+  }
+
+  const id = Number(row?.original_contract_id)
+  if (!Number.isInteger(id) || id <= 0) {
+    return ''
+  }
+
+  return contractBriefById.value.get(id) || `ID:${id}`
+}
+
 const contractNameColumnWidth = computed(() => {
   if (!pagedContracts.value || pagedContracts.value.length === 0) return 220
   const baseWidth = 220
@@ -885,6 +928,7 @@ const loadDepartments = async () => {
 
 const loadFieldOptions = async () => {
   const { data } = await http.get('/options/contract-fields')
+  options.contract_form = data?.contract_form || []
   options.contract_determination_method = data?.contract_determination_method || []
   options.contract_type = data?.contract_type || []
   options.purchase_type = data?.purchase_type || []
