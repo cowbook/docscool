@@ -6,6 +6,9 @@ from urllib.parse import urlparse
 import jwt
 from flask import Blueprint, current_app, g, jsonify, request
 
+from .extensions import db
+from .models import UserLog, UserPermission
+
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
@@ -209,6 +212,30 @@ def _encode_token(username: str) -> str:
     return jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
 
 
+def _resolve_user_permission_id(username: str) -> int | None:
+    login_name = str(username or '').strip()
+    if not login_name:
+        return None
+
+    row = UserPermission.query.filter_by(login_name=login_name).first()
+    return row.id if row else None
+
+
+def _write_login_user_log(username: str) -> None:
+    login_name = str(username or '').strip()
+    if not login_name:
+        return
+
+    db.session.add(UserLog(
+        user_id=_resolve_user_permission_id(login_name),
+        operation_module='系统认证',
+        operation_target=login_name,
+        operation_type='登录',
+        detail='用户登录成功',
+    ))
+    db.session.commit()
+
+
 def cache_user_password(username: str, password: str) -> None:
     expires = datetime.now(timezone.utc) + timedelta(hours=current_app.config['JWT_EXPIRES_HOURS'])
     _USER_PASSWORD_CACHE[username] = {
@@ -269,6 +296,12 @@ def login():
         return jsonify({'message': message}), 401
 
     cache_user_password(username, password)
+
+    try:
+        _write_login_user_log(username)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('[auth] failed to write login user log: user=%s', username)
 
     token = _encode_token(username)
     return jsonify({'token': token, 'username': username})

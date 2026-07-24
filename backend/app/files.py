@@ -79,6 +79,28 @@ def _resolve_current_user_id() -> int | None:
     return row.id if row else None
 
 
+def _bind_current_user_from_bearer_token():
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'message': 'Missing token'}), 401
+
+    token = auth_header.replace('Bearer ', '', 1).strip()
+    if not token:
+        return jsonify({'message': 'Missing token'}), 401
+
+    try:
+        payload = decode_token(token)
+    except Exception:
+        return jsonify({'message': 'Invalid token'}), 401
+
+    username = str(payload.get('sub') or '').strip()
+    if not username:
+        return jsonify({'message': 'Invalid token payload'}), 401
+
+    g.current_user = username
+    return None
+
+
 def _write_file_operation_log(operation_type: str, operation_target: str, detail: str) -> None:
     try:
         db.session.add(UserLog(
@@ -2152,6 +2174,10 @@ def serve_ocr_html_assets(relative_path):
         return jsonify({'message': '非法路径'}), 400
 
     if request.method == 'PUT':
+        auth_error = _bind_current_user_from_bearer_token()
+        if auth_error:
+            return auth_error
+
         if not relative.lower().endswith('.md'):
             return jsonify({'message': '仅支持保存 Markdown 文件'}), 400
 
@@ -2234,6 +2260,10 @@ def get_ocr_html_meta(relative_path):
 
 @files_bp.post('/html-upload-image/<path:relative_path>')
 def upload_ocr_markdown_image(relative_path):
+    auth_error = _bind_current_user_from_bearer_token()
+    if auth_error:
+        return auth_error
+
     ocr_root = os.path.realpath(os.path.join(current_app.instance_path, 'ocr'))
     relative = posixpath.normpath(str(relative_path or '').replace('\\', '/')).lstrip('/')
     if not relative or relative in {'.', '..'}:

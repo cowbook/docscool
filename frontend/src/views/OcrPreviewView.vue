@@ -595,10 +595,14 @@ const uploadImageBlob = async (blob, fileName = 'pasted-image.png') => {
   const fd = new FormData()
   fd.append('image', blob, fileName)
 
+  const token = localStorage.getItem('token')
+  const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
   const resp = await fetch(imageUploadApiUrl.value, {
     method: 'POST',
     body: fd,
     credentials: 'same-origin',
+    headers,
   })
   const data = await resp.json()
   if (!resp.ok || !data?.url) {
@@ -871,9 +875,15 @@ const saveMarkdown = async () => {
   try {
     const editorMarkdown = toastEditor.value ? (toastEditor.value.getMarkdown() || '') : (draftMarkdown.value || '')
     const nextMarkdown = fromEditorMarkdown(editorMarkdown)
+    const token = localStorage.getItem('token')
+    const headers = { 'Content-Type': 'application/json' }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+
     const response = await fetch(markdownApiUrl.value, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ markdown: nextMarkdown }),
       credentials: 'same-origin',
     })

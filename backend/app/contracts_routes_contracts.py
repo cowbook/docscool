@@ -159,6 +159,23 @@ def _add_user_log(operation_type: str, operation_target: str, detail: str) -> No
     ))
 
 
+def _write_contract_user_log(operation_type: str, operation_target: str, detail: str) -> None:
+    try:
+        _add_user_log(operation_type, operation_target, detail)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.warning('contract operation log write skipped: %s', exc)
+
+
+def _write_ai_recognition_log(operation_target: str, detail: str, *, is_failure: bool = False) -> None:
+    _write_contract_user_log(
+        operation_type='AI识别失败' if is_failure else 'AI识别',
+        operation_target=operation_target,
+        detail=detail,
+    )
+
+
 def _build_contract_update_detail(before: dict[str, str], after: dict[str, str]) -> str:
     changes = []
     for key, label in CONTRACT_LOG_FIELDS.items():
@@ -1480,6 +1497,9 @@ def parse_contract_pdf():
     incoming_url = str(body.get('url') or body.get('file_path') or request.form.get('url') or '').strip()
     normalized_storage_path = ''
     use_fullbody_directly = len(incoming_fullbody) > 20
+    ai_log_target = 'direct-fullbody'
+    updated_rows = 0
+    blocked_archived_rows = 0
 
     if use_fullbody_directly:
         pdf_text = incoming_fullbody
@@ -1494,6 +1514,8 @@ def parse_contract_pdf():
         uploaded = request.files['file']
         if uploaded.filename == '':
             return jsonify({'message': 'empty filename'}), 400
+
+        ai_log_target = str(uploaded.filename or '').strip() or 'uploaded-pdf'
 
         current_app.logger.info(
             'AI parse: request user=%s filename=%s mimetype=%s content_length=%s',
@@ -1510,6 +1532,7 @@ def parse_contract_pdf():
         try:
             pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded)
         except Exception as exc:
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：PDF解析失败，原因={exc}', is_failure=True)
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400
     elif incoming_url:
@@ -1518,16 +1541,21 @@ def parse_contract_pdf():
             return jsonify({'message': 'url is invalid'}), 400
         if not normalized_storage_path.lower().endswith('.pdf'):
             return jsonify({'message': 'url 对应文件必须是PDF'}), 400
+        ai_log_target = normalized_storage_path
 
         try:
             content, file_name, _mime = _load_storage_file_payload(normalized_storage_path)
         except PermissionError as exc:
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：读取存储文件未授权，原因={exc}', is_failure=True)
             return jsonify({'message': str(exc)}), 401
         except FileNotFoundError as exc:
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：存储文件不存在，原因={exc}', is_failure=True)
             return jsonify({'message': str(exc)}), 404
         except ValueError:
+            _write_ai_recognition_log(ai_log_target, 'AI识别失败：url 非法', is_failure=True)
             return jsonify({'message': 'url is invalid'}), 400
         except Exception as exc:
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：读取存储文件失败，原因={exc}', is_failure=True)
             return jsonify({'message': f'读取存储文件失败: {exc}'}), 500
 
         effective_name = str(file_name or os.path.basename(normalized_storage_path) or 'upload.pdf')
@@ -1550,12 +1578,16 @@ def parse_contract_pdf():
         try:
             pdf_text, preview_lines = mineru_extract_text_from_uploaded_pdf(uploaded, source_file_path=normalized_storage_path)
         except Exception as exc:
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：PDF解析失败，原因={exc}', is_failure=True)
             current_app.logger.exception('AI parse: PDF extraction failed')
             return jsonify({'message': f'PDF解析失败: {exc}'}), 400
     else:
         return jsonify({'message': 'file is required（或提供长度超过20的fullbody，或提供url）'}), 400
 
+    _write_ai_recognition_log(ai_log_target, f'执行AI识别：目标={ai_log_target}')
+
     if not pdf_text:
+        _write_ai_recognition_log(ai_log_target, 'AI识别失败：未解析到可用文本', is_failure=True)
         current_app.logger.warning('AI parse: no text extracted, preview_lines=%s', preview_lines)
         return jsonify({
             'message': 'PDF未解析到可用文本，请确认扫描件清晰度/方向或是否含可读文字',
@@ -1567,10 +1599,12 @@ def parse_contract_pdf():
             updated_rows, blocked_archived_rows = _update_contract_fullbody_by_file_path(normalized_storage_path, pdf_text)
         except Exception as exc:
             db.session.rollback()
+            _write_ai_recognition_log(ai_log_target, f'AI识别失败：更新合同全文失败，原因={exc}', is_failure=True)
             current_app.logger.exception('AI parse: failed to persist fullbody by file_path=%s', normalized_storage_path)
             return jsonify({'message': f'更新合同全文失败: {exc}'}), 500
 
         if blocked_archived_rows > 0 and updated_rows == 0:
+            _write_ai_recognition_log(ai_log_target, 'AI识别失败：目标合同已归档，当前用户无权更新', is_failure=True)
             current_app.logger.warning(
                 'AI parse: blocked archived fullbody update by file_path=%s blocked_rows=%s',
                 normalized_storage_path,
@@ -1589,10 +1623,12 @@ def parse_contract_pdf():
     try:
         raw_fields = _minimax_extract_fields(pdf_text)
     except Exception as exc:
+        _write_ai_recognition_log(ai_log_target, f'AI识别失败：AI字段抽取失败，原因={exc}', is_failure=True)
         current_app.logger.exception('AI parse: Minimax extraction failed')
         return jsonify({'message': f'AI解析失败: {exc}'}), 500
 
     if not _has_any_field_value(raw_fields):
+        _write_ai_recognition_log(ai_log_target, 'AI识别失败：AI返回结果为空，无法提取字段', is_failure=True)
         current_app.logger.warning('AI parse: extracted fields are all empty')
         return jsonify({
             'message': 'AI返回结果为空，无法自动提取字段，请查看OCR预览并检查PDF清晰度',
