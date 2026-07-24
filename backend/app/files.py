@@ -53,7 +53,7 @@ from .files_core_helpers import (
     _synology_upload_login,
 )
 from .extensions import db
-from .models import Contract, UserPermission
+from .models import Contract, UserLog, UserPermission
 
 
 files_bp = Blueprint('files', __name__, url_prefix='/api')
@@ -64,9 +64,34 @@ LATEST_UPLOAD_LIMIT = 12
 ROLE_SUPER_ADMIN = 'super_admin'
 ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
 PERMISSION_ALL = '全部'
+FILE_LOG_MODULE = '文件档案'
 THUMB_KEY_PATTERN = re.compile(r'^[0-9a-f]{2}/[0-9a-f]{40}\.jpg$')
 STORAGE_SOURCE_DEFAULT = 'storage'
 STORAGE_SOURCE_SCAN = 'scan'
+
+
+def _resolve_current_user_id() -> int | None:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return None
+
+    row = UserPermission.query.filter_by(login_name=username).first()
+    return row.id if row else None
+
+
+def _write_file_operation_log(operation_type: str, operation_target: str, detail: str) -> None:
+    try:
+        db.session.add(UserLog(
+            user_id=_resolve_current_user_id(),
+            operation_module=FILE_LOG_MODULE,
+            operation_target=str(operation_target or '-').strip() or '-',
+            operation_type=str(operation_type or '').strip() or '操作',
+            detail=str(detail or '').strip(),
+        ))
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.warning('file operation log write skipped: %s', exc)
 
 
 class _InMemoryUpload:
@@ -1439,6 +1464,12 @@ def batch_match_folder_files():
 
     db.session.commit()
 
+    _write_file_operation_log(
+        operation_type='更新',
+        operation_target=normalized,
+        detail=f'批量匹配文件：总数={len(files)}，成功={success_count}，失败={len(files) - success_count}',
+    )
+
     return jsonify({
         'folder_path': normalized,
         'total': len(files),
@@ -1543,6 +1574,12 @@ def upload_folder_files():
     except Exception as exc:
         return jsonify({'message': f'文件上传失败: {exc}'}), 500
 
+    _write_file_operation_log(
+        operation_type='新建',
+        operation_target=normalized,
+        detail=f'上传文件：目录={normalized or "/"}，上传数量={len(results)}',
+    )
+
     return jsonify({
         'folder_path': normalized,
         'uploaded_count': len(results),
@@ -1567,6 +1604,12 @@ def create_folder():
         return jsonify({'message': str(exc)}), 400
     except Exception as exc:
         return jsonify({'message': f'新建文件夹失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='新建',
+        operation_target=folder_path,
+        detail=f'新建文件夹：父目录={_normalize_relative_path(parent_path) if parent_path else "/"}',
+    )
 
     return jsonify({'path': folder_path}), 201
 
@@ -1598,6 +1641,15 @@ def delete_folder():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'message': f'删除文件夹失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='删除',
+        operation_target=_normalize_relative_path(folder_path),
+        detail=(
+            f'删除文件夹：force={bool(force_delete)}，'
+            f'受影响合同数={len(affected_ids) if force_delete else 0}'
+        ),
+    )
 
     return jsonify({
         'success': True,
@@ -1677,6 +1729,12 @@ def rename_folder():
     except Exception as exc:
         return jsonify({'message': f'重命名文件夹失败: {exc}'}), 500
 
+    _write_file_operation_log(
+        operation_type='更新',
+        operation_target=new_relative_path,
+        detail=f'重命名文件夹：{normalized_path} -> {new_relative_path}',
+    )
+
     return jsonify({'path': new_relative_path})
 
 
@@ -1699,6 +1757,12 @@ def delete_folder_file():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'message': f'删除文件失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='删除',
+        operation_target=normalized_path,
+        detail=f'删除文件：受影响合同数={len(affected_ids)}',
+    )
 
     return jsonify({
         'success': True,
@@ -1730,6 +1794,12 @@ def rename_folder_file():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'message': f'重命名文件失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='更新',
+        operation_target=new_path,
+        detail=f'重命名文件：{old_path} -> {new_path}，受影响合同数={len(affected_ids)}',
+    )
 
     return jsonify({
         'success': True,
@@ -1764,6 +1834,12 @@ def move_folder_file():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'message': f'移动文件失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='更新',
+        operation_target=new_path,
+        detail=f'移动文件：{old_path} -> {new_path}，受影响合同数={len(affected_ids)}',
+    )
 
     return jsonify({
         'success': True,
@@ -1965,6 +2041,12 @@ def import_scan_file():
     except Exception as exc:
         return jsonify({'message': f'导入扫描文件失败: {exc}'}), 500
 
+    _write_file_operation_log(
+        operation_type='新建',
+        operation_target=imported_path,
+        detail=f'扫描文件导入：来源={_normalize_relative_path(file_path)}，目标目录={_normalize_relative_path(target_folder_path)}',
+    )
+
     return jsonify({
         'file_path': imported_path,
         'name': imported_name,
@@ -1987,6 +2069,12 @@ def delete_scan_file():
         return jsonify({'message': str(exc)}), 409
     except Exception as exc:
         return jsonify({'message': f'删除扫描文件失败: {exc}'}), 500
+
+    _write_file_operation_log(
+        operation_type='删除',
+        operation_target=normalized_path,
+        detail='删除扫描目录文件',
+    )
 
     return jsonify({
         'success': True,
@@ -2089,6 +2177,12 @@ def serve_ocr_html_assets(relative_path):
                     db.session.rollback()
                     return jsonify({'message': f'保存 Markdown 成功，但更新合同全文失败: {exc}'}), 500
 
+        _write_file_operation_log(
+            operation_type='更新',
+            operation_target=relative,
+            detail=f'保存OCR Markdown：path={relative}，同步更新合同行数={int(updated_rows)}',
+        )
+
         return jsonify({'success': True, 'path': relative, 'updated_contract_rows': int(updated_rows)})
 
     if os.path.isdir(target_abs):
@@ -2182,5 +2276,10 @@ def upload_ocr_markdown_image(relative_path):
 
     relative_dir = posixpath.dirname(relative)
     image_relative_path = posixpath.join(relative_dir, 'images', file_name) if relative_dir else posixpath.join('images', file_name)
+    _write_file_operation_log(
+        operation_type='新建',
+        operation_target=image_relative_path,
+        detail=f'上传OCR编辑图片：markdown={relative}，图片路径={image_relative_path}',
+    )
     image_url = f"/api/html/{quote(image_relative_path, safe='/')}"
     return jsonify({'url': image_url, 'alt': os.path.splitext(file_name)[0]})

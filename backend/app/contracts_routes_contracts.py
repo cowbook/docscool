@@ -2,6 +2,7 @@ import os
 import re
 from io import BytesIO
 from decimal import Decimal
+from datetime import date, datetime
 from typing import Any
 
 import requests
@@ -25,7 +26,9 @@ from .contracts_core import (
     _find_ai_match_candidates,
     _format_decimal_plain,
     _get_contract_option_sets,
+    _get_all_department_names,
     _get_department_names,
+    _resolve_current_management_department_name,
     _get_project_names,
     _has_any_field_value,
     _load_contract_file_payload,
@@ -46,6 +49,7 @@ from .contracts_core import (
 )
 from .contracts_routes_contracts_helpers import (
     _IMPORT_ERROR_REPORTS,
+    _build_completeness_value,
     _build_contract_import_template,
     _build_contract_record,
     _build_import_payload_from_row,
@@ -57,12 +61,46 @@ from .contracts_routes_contracts_helpers import (
 )
 from .files_core_helpers import _load_storage_file_payload
 from .extensions import db
-from .models import Contract, UserPermission
+from .models import Contract, UserLog, UserPermission
 
 
 ROLE_SUPER_ADMIN = 'super_admin'
 ROLE_SYNOLOGY_SUPER_ADMIN = 'synology_super_admin'
 PERMISSION_ALL = '全部'
+CONTRACT_LOG_MODULE = '合同记录'
+COLOR_FLAG_OPTIONS = {'红旗', '橙旗', '黄旗', '绿旗', '蓝旗'}
+COMPLETENESS_OPTIONS = {'是', '否'}
+
+
+CONTRACT_LOG_FIELDS = {
+    'contract_number': '合同编号',
+    'contract_name': '合同名称',
+    'contract_unit': '合同单位',
+    'amount': '合同金额',
+    'currency': '币种',
+    'handler': '承办人',
+    'department': '承办部门',
+    'current_management_department': '现管部门',
+    'contract_form': '合同形式',
+    'original_contract_id': '原合同ID',
+    'contract_determination_method': '定标方式',
+    'handling_date': '承办日期',
+    'contract_type': '合同类型',
+    'purchase_type': '采购类型',
+    'stamp_tax_rate': '印花税率',
+    'pricing_method': '计价方式',
+    'copy_count': '份数',
+    'save_place': '存档位置',
+    'is_archived': '是否归档',
+    'color_flag': '颜色标记',
+    'completeness': '完整性',
+    'project': '项目',
+    'fullbody': '正文',
+    'file_path': '文件路径',
+    'start_date': '开始日期',
+    'end_date': '结束日期',
+    'status': '状态',
+}
 
 HT_DETAIL_PAYMENT_FIELDS = [
     'FPYZ_NAM',
@@ -82,6 +120,56 @@ HT_DETAIL_PAYMENT_FIELDS = [
     'JBRQ_DTM',
     'JHFK_DTM',
 ]
+
+
+def _serialize_log_value(value: Any) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, Decimal):
+        return format(value, 'f')
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def _snapshot_contract_log_fields(row: Contract) -> dict[str, str]:
+    return {
+        key: _serialize_log_value(getattr(row, key, None))
+        for key in CONTRACT_LOG_FIELDS
+    }
+
+
+def _resolve_current_user_id() -> int | None:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return None
+
+    permission_row = UserPermission.query.filter_by(login_name=username).first()
+    return permission_row.id if permission_row else None
+
+
+def _add_user_log(operation_type: str, operation_target: str, detail: str) -> None:
+    db.session.add(UserLog(
+        user_id=_resolve_current_user_id(),
+        operation_module=CONTRACT_LOG_MODULE,
+        operation_target=operation_target or '-',
+        operation_type=operation_type,
+        detail=detail or '',
+    ))
+
+
+def _build_contract_update_detail(before: dict[str, str], after: dict[str, str]) -> str:
+    changes = []
+    for key, label in CONTRACT_LOG_FIELDS.items():
+        old_value = before.get(key, '')
+        new_value = after.get(key, '')
+        if old_value == new_value:
+            continue
+        changes.append(f'{label}: [{old_value}] -> [{new_value}]')
+
+    if not changes:
+        return '更新合同，但字段值无变化'
+    return '更新字段：' + '; '.join(changes)
 
 def _normalize_external_payment_items(payload: Any) -> list[dict[str, str]]:
     if not isinstance(payload, list):
@@ -172,6 +260,10 @@ def _is_super_role(role: str) -> bool:
     return str(role or '').strip() in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
 
 
+def _is_current_user_super_role() -> bool:
+    return _is_super_role(_current_user_role())
+
+
 def _is_archived_contract(record: Contract) -> bool:
     return (getattr(record, 'is_archived', '') or '').strip() == '已归档'
 
@@ -194,6 +286,8 @@ def list_contracts():
     keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
     has_file = (request.args.get('has_file') or '').strip().lower()
     is_archived = (request.args.get('is_archived') or '').strip()
+    color_flag = (request.args.get('color_flag') or '').strip()
+    completeness = (request.args.get('completeness') or '').strip()
 
     query = Contract.query
     unrestricted, allowed_departments = _resolve_current_user_department_scope()
@@ -218,6 +312,10 @@ def list_contracts():
         query = query.filter(or_(Contract.file_path.is_(None), Contract.file_path == ''))
     if is_archived:
         query = query.filter(Contract.is_archived == is_archived)
+    if color_flag:
+        query = query.filter(Contract.color_flag == color_flag)
+    if completeness:
+        query = query.filter(Contract.completeness == completeness)
     if keyword:
         pattern = f'%{keyword}%'
         query = query.filter(or_(
@@ -227,6 +325,7 @@ def list_contracts():
             Contract.currency.ilike(pattern),
             Contract.handler.ilike(pattern),
             Contract.department.ilike(pattern),
+            Contract.current_management_department.ilike(pattern),
             Contract.contract_determination_method.ilike(pattern),
             Contract.contract_type.ilike(pattern),
             Contract.purchase_type.ilike(pattern),
@@ -234,6 +333,8 @@ def list_contracts():
             Contract.pricing_method.ilike(pattern),
             Contract.save_place.ilike(pattern),
             Contract.is_archived.ilike(pattern),
+            Contract.color_flag.ilike(pattern),
+            Contract.completeness.ilike(pattern),
             Contract.project.ilike(pattern),
             Contract.status.ilike(pattern),
             Contract.file_path.ilike(pattern),
@@ -262,6 +363,8 @@ def export_contracts_excel():
     keyword = (request.args.get('keyword') or request.args.get('search') or '').strip()
     has_file = (request.args.get('has_file') or '').strip().lower()
     is_archived = (request.args.get('is_archived') or '').strip()
+    color_flag = (request.args.get('color_flag') or '').strip()
+    completeness = (request.args.get('completeness') or '').strip()
 
     query = Contract.query
     unrestricted, allowed_departments = _resolve_current_user_department_scope()
@@ -286,6 +389,10 @@ def export_contracts_excel():
         query = query.filter(or_(Contract.file_path.is_(None), Contract.file_path == ''))
     if is_archived:
         query = query.filter(Contract.is_archived == is_archived)
+    if color_flag:
+        query = query.filter(Contract.color_flag == color_flag)
+    if completeness:
+        query = query.filter(Contract.completeness == completeness)
     if keyword:
         pattern = f'%{keyword}%'
         query = query.filter(or_(
@@ -295,6 +402,7 @@ def export_contracts_excel():
             Contract.currency.ilike(pattern),
             Contract.handler.ilike(pattern),
             Contract.department.ilike(pattern),
+            Contract.current_management_department.ilike(pattern),
             Contract.contract_determination_method.ilike(pattern),
             Contract.contract_type.ilike(pattern),
             Contract.purchase_type.ilike(pattern),
@@ -302,6 +410,8 @@ def export_contracts_excel():
             Contract.pricing_method.ilike(pattern),
             Contract.save_place.ilike(pattern),
             Contract.is_archived.ilike(pattern),
+            Contract.color_flag.ilike(pattern),
+            Contract.completeness.ilike(pattern),
             Contract.project.ilike(pattern),
             Contract.status.ilike(pattern),
             Contract.file_path.ilike(pattern),
@@ -327,9 +437,9 @@ def export_contracts_excel():
         sheet.title = '合同信息'
 
         headers = [
-            '合同编号', '合同名称', '合同单位', '合同金额', '币种', '承办人', '承办部门',
+            '合同编号', '合同名称', '合同单位', '合同金额', '币种', '承办人', '承办部门', '现管部门',
             '定标方式', '承办日期', '合同类型', '采购类型', '印花税率', '计价方式',
-            '份数', '存档位置', '是否归档', '项目', '全文', '开始日期', '结束日期',
+            '份数', '存档位置', '是否归档', '颜色标记', '完整性', '项目', '全文', '开始日期', '结束日期',
             '状态', '文件路径', '创建人', '修改人', '创建时间', '修改时间',
         ]
         sheet.append(headers)
@@ -344,6 +454,7 @@ def export_contracts_excel():
                 payload.get('currency') or '',
                 payload.get('handler') or '',
                 payload.get('handling_department') or '',
+                payload.get('current_management_department') or '',
                 payload.get('contract_determination_method') or '',
                 payload.get('handling_date') or '',
                 payload.get('contract_type') or '',
@@ -353,6 +464,8 @@ def export_contracts_excel():
                 payload.get('copy_count') or '',
                 payload.get('save_place') or '',
                 payload.get('is_archived') or '',
+                payload.get('color_flag') or '',
+                payload.get('completeness') or '',
                 payload.get('project') or '',
                 payload.get('fullbody') or '',
                 payload.get('start_date') or '',
@@ -430,9 +543,22 @@ def get_dashboard_charts():
         'without_contract': int(max(len(storage_paths) - with_contract, 0)),
     }
 
+    def _extract_department_from_path(path_text: str) -> str:
+        normalized = _normalize_relative_path(path_text or '')
+        if not normalized:
+            return ''
+        parts = [part.strip() for part in normalized.split('/') if part.strip()]
+        return parts[0] if parts else ''
+
     departments = _get_department_names()
     contract_counts = []
     file_counts = []
+    contracts_by_current_department = {name: [] for name in departments}
+    for row in Contract.query.all():
+        current_department = (getattr(row, 'current_management_department', '') or '').strip()
+        if current_department in contracts_by_current_department:
+            contracts_by_current_department[current_department].append(row)
+
     for name in departments:
         contract_counts.append(Contract.query.filter(Contract.department == name).count())
         file_counts.append(
@@ -443,6 +569,41 @@ def get_dashboard_charts():
             ).count()
         )
 
+    current_year = datetime.now().year
+    total_counts = []
+    organized_counts = []
+    current_year_counts = []
+
+    for name in departments:
+        rows = contracts_by_current_department.get(name, [])
+        total_counts.append(len(rows))
+        organized_counts.append(sum(1 for row in rows if (getattr(row, 'completeness', '') or '').strip() == '是'))
+        current_year_counts.append(sum(
+            1
+            for row in rows
+            if getattr(row, 'handling_date', None) is not None and row.handling_date.year == current_year
+        ))
+
+    storage_pdf_paths = {
+        _normalize_relative_path(item.get('path') or '')
+        for item in storage_files
+        if (item.get('path') or '').strip() and _normalize_relative_path(item.get('path') or '').lower().endswith('.pdf')
+    }
+    contract_pdf_paths = {
+        _normalize_contract_file_path(getattr(row, 'file_path', '') or '')
+        for row in Contract.query.filter(Contract.file_path.isnot(None), Contract.file_path != '').all()
+        if _normalize_contract_file_path(getattr(row, 'file_path', '') or '')
+    }
+
+    no_main_file_counts = []
+    for name in departments:
+        dept_storage_pdf_paths = {
+            path
+            for path in storage_pdf_paths
+            if _extract_department_from_path(path) == name
+        }
+        no_main_file_counts.append(len(dept_storage_pdf_paths - contract_pdf_paths))
+
     return jsonify({
         'contract_file_pie': contract_file_pie,
         'file_contract_pie': file_contract_pie,
@@ -450,6 +611,13 @@ def get_dashboard_charts():
             'departments': departments,
             'contract_counts': contract_counts,
             'file_counts': file_counts,
+        },
+        'dept_current_management_bar': {
+            'departments': departments,
+            'total_counts': total_counts,
+            'organized_counts': organized_counts,
+            'no_main_file_counts': no_main_file_counts,
+            'current_year_counts': current_year_counts,
         },
     })
 
@@ -604,9 +772,22 @@ def quick_match_contract_files():
 def create_contract():
     body = request.get_json(silent=True) or {}
 
+    color_flag = (body.get('color_flag') or '').strip()
+    if color_flag and color_flag not in COLOR_FLAG_OPTIONS:
+        return jsonify({'message': 'color_flag is invalid'}), 400
+
+    completeness = (body.get('completeness') or '').strip()
+    if completeness and completeness not in COMPLETENESS_OPTIONS:
+        return jsonify({'message': 'completeness is invalid'}), 400
+    if completeness and not _is_current_user_super_role():
+        return jsonify({'message': '仅超管或群晖超管可手工修改完整性'}), 403
+
     record, message, status_code, _ = _build_contract_record(body, g.current_user, update_mode=False)
     if record is None:
         return jsonify({'message': message}), status_code
+
+    if completeness:
+        record.completeness = completeness
 
     db.session.add(record)
     try:
@@ -623,6 +804,24 @@ def create_contract():
 
     if renamed_file_path:
         record.file_path = renamed_file_path
+
+    if not completeness:
+        record.completeness = _build_completeness_value(
+            record.file_path,
+            record.contract_determination_method,
+            record.purchase_type,
+        )
+
+    db.session.flush()
+    operation_target = (record.contract_number or '').strip() or f'ID:{record.id or "-"}'
+    _add_user_log(
+        operation_type='新建',
+        operation_target=operation_target,
+        detail=(
+            f'新建合同：合同名称={record.contract_name or ""}; '
+            f'承办部门={record.department or ""}; 文件路径={record.file_path or ""}'
+        ),
+    )
 
     db.session.commit()
     return jsonify(record.to_dict(include_fullbody=True)), 201
@@ -813,6 +1012,8 @@ def download_contract_import_error_report(token):
 def update_contract(contract_id):
     body = request.get_json(silent=True) or {}
     record = Contract.query.get_or_404(contract_id)
+    snapshot_before = _snapshot_contract_log_fields(record)
+    is_super_user = _is_current_user_super_role()
 
     denied = _ensure_archived_contract_editable(record)
     if denied:
@@ -855,11 +1056,16 @@ def update_contract(contract_id):
     if 'handling_department' in body:
         department = (body.get('handling_department') or '').strip()
         if department:
-            allowed_departments = _get_department_names()
-            if department not in allowed_departments:
+            allowed_departments = _get_all_department_names()
+            current_department = (record.department or '').strip()
+            if department not in allowed_departments and department != current_department:
                 return jsonify({'message': 'handling_department is not in configured department settings'}), 400
             _department_dir(department)
             record.department = department
+            if 'current_management_department' not in body:
+                record.current_management_department = _resolve_current_management_department_name(department) or None
+    if 'current_management_department' in body:
+        record.current_management_department = (body.get('current_management_department') or '').strip() or None
     if 'original_contract_id' in body:
         original_contract_id_text = str(body.get('original_contract_id') or '').strip()
         if original_contract_id_text:
@@ -903,6 +1109,18 @@ def update_contract(contract_id):
         record.save_place = save_place or None
     if 'is_archived' in body:
         record.is_archived = (body.get('is_archived') or '').strip() or None
+    if 'color_flag' in body:
+        color_flag = (body.get('color_flag') or '').strip()
+        if color_flag and color_flag not in COLOR_FLAG_OPTIONS:
+            return jsonify({'message': 'color_flag is invalid'}), 400
+        record.color_flag = color_flag or None
+    if 'completeness' in body:
+        completeness = (body.get('completeness') or '').strip()
+        if completeness and completeness not in COMPLETENESS_OPTIONS:
+            return jsonify({'message': 'completeness is invalid'}), 400
+        if completeness and not is_super_user:
+            return jsonify({'message': '仅超管或群晖超管可手工修改完整性'}), 403
+        record.completeness = completeness or None
     if 'project' in body:
         project = (body.get('project') or '').strip() or None
         if project:
@@ -934,7 +1152,22 @@ def update_contract(contract_id):
     if renamed_file_path:
         record.file_path = renamed_file_path
 
+    if 'completeness' not in body:
+        record.completeness = _build_completeness_value(
+            record.file_path,
+            record.contract_determination_method,
+            record.purchase_type,
+        )
+
     record.updated_by = (getattr(g, 'current_user', '') or '').strip() or None
+
+    snapshot_after = _snapshot_contract_log_fields(record)
+    operation_target = (record.contract_number or '').strip() or f'ID:{record.id}'
+    _add_user_log(
+        operation_type='更新',
+        operation_target=operation_target,
+        detail=_build_contract_update_detail(snapshot_before, snapshot_after),
+    )
 
     db.session.commit()
     return jsonify(record.to_dict(include_fullbody=True))
@@ -955,6 +1188,13 @@ def delete_contract(contract_id):
         return jsonify({'message': 'file_path 非法'}), 400
     except Exception as exc:
         return jsonify({'message': f'删除文件失败: {exc}'}), 500
+
+    operation_target = (record.contract_number or '').strip() or f'ID:{record.id}'
+    _add_user_log(
+        operation_type='删除',
+        operation_target=operation_target,
+        detail=f'删除合同：合同名称={record.contract_name or ""}; 承办部门={record.department or ""}',
+    )
 
     db.session.delete(record)
     db.session.commit()

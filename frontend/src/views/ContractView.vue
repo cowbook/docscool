@@ -52,6 +52,19 @@
             inactive-text="未归档"
             @change="loadContracts"
           />
+          <div style="margin-left: 24px">
+
+            <el-switch
+              v-model="filters.completeness"
+              active-text="完整"
+              inactive-text="不完整"
+              @change="loadContracts"
+            />
+          </div>
+
+          <div style="flex-grow:1">
+
+          </div>
 
           
           <div v-if="!isViewPermissionUser" class="header-actions">
@@ -134,6 +147,21 @@
           <el-tooltip content="字段排序" placement="top">
             <el-button class="field-sort-button" circle :icon="Operation" @click="openFieldSortDialog" />
           </el-tooltip>
+          <el-dropdown trigger="click" @command="setColorFlagFilter">
+            <button type="button" class="color-filter-trigger" title="按颜色标记筛选">
+              <span class="color-flag-icon" :class="getColorFlagClass(filters.color_flag)">⚑</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu class="color-flag-dropdown-menu">
+                <el-dropdown-item :command="''">
+                  <span class="color-flag-icon is-none">⚑</span>
+                </el-dropdown-item>
+                <el-dropdown-item v-for="item in colorFlagFilterOptions" :key="item" :command="item">
+                  <span class="color-flag-icon" :class="getColorFlagClass(item)">⚑</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <el-pagination
           v-model:current-page="currentPage"
@@ -146,6 +174,36 @@
       </div>
 
       <el-table :data="pagedContracts" stripe border resizable size="small" class="contract-table" @sort-change="handleSortChange">
+        <el-table-column
+          prop="color_flag"
+          label=""
+          width="54"
+          align="center"
+        >
+          <template #default="scope">
+            <el-dropdown
+              v-if="hasDepartmentEditPermissionForContract(scope.row)"
+              trigger="click"
+              @command="(command) => updateColorFlag(scope.row, command)"
+            >
+              <button type="button" class="color-flag-trigger" title="颜色标记">
+                <span class="color-flag-icon" :class="getColorFlagClass(scope.row.color_flag)">⚑</span>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu class="color-flag-dropdown-menu">
+                  <el-dropdown-item :command="''">
+                    <span class="color-flag-icon is-none">⚑</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item v-for="item in colorFlagFilterOptions" :key="item" :command="item">
+                    <span class="color-flag-icon" :class="getColorFlagClass(item)">⚑</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <span v-else class="color-flag-icon" :class="getColorFlagClass(scope.row.color_flag)">⚑</span>
+          </template>
+        </el-table-column>
+
         <template v-for="column in visibleTableColumns" :key="column.key">
           <el-table-column
             v-if="column.key === 'contract_number'"
@@ -429,8 +487,10 @@
     <ContractItem
       ref="contractItemRef"
       :departments="departments"
+      :current-management-departments="existingDepartments"
       :contracts="contracts"
       :options="options"
+      :current-user-role="currentUserRole"
       :link-tree-snapshot="linkTreeSnapshot"
       v-model:aiParsing="aiParsing"
       @saved="handleContractSaved"
@@ -467,10 +527,12 @@ const DEFAULT_TABLE_COLUMNS = [
   { key: 'copy_count', prop: 'copy_count', label: '份数', minWidth: 80, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'handler', prop: 'handler', label: '承办人', minWidth: 100, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'handling_department', prop: 'handling_department', label: '承办部门', minWidth: 130, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'current_management_department', prop: 'current_management_department', label: '现管部门', minWidth: 130, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'handling_date', prop: 'handling_date', label: '承办日期', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'contract_type', prop: 'contract_type', label: '合同类型', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'purchase_type', prop: 'purchase_type', label: '采购类型', minWidth: 110, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'stamp_tax_rate', prop: 'stamp_tax_rate', label: '印花税率', minWidth: 100, visible: true, sortable: true, showOverflowTooltip: false },
+  { key: 'completeness', prop: 'completeness', label: '完整性', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'is_archived', prop: 'is_archived', label: '是否归档', minWidth: 90, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'save_place', prop: 'save_place', label: '存档位置', minWidth: 140, visible: true, sortable: true, showOverflowTooltip: true },
   { key: 'project', prop: 'project', label: '项目', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
@@ -520,6 +582,7 @@ const loadStoredTableColumns = () => {
 
 const contracts = ref([])
 const departments = ref([])
+const existingDepartments = ref([])
 const aiParsing = ref(false)
 const quickMatching = ref(false)
 const quickMatchDialogVisible = ref(false)
@@ -587,6 +650,11 @@ const confirmFieldSortDialog = () => {
 }
 
 const visibleTableColumns = computed(() => tableColumns.value.filter((item) => item.visible))
+
+const colorFlagFilterOptions = computed(() => {
+  const source = Array.isArray(options.color_flag) ? options.color_flag : []
+  return source.length ? source : ['红旗', '橙旗', '黄旗', '绿旗', '蓝旗']
+})
 
 const persistTableColumns = () => {
   try {
@@ -745,6 +813,8 @@ const aiFolderTreeProps = {
 const filters = reactive({
   handling_department: '',
   project: '',
+  color_flag: '',
+  completeness: null,
   keyword: '',
   has_file: '',
   is_archived: null,
@@ -758,6 +828,8 @@ const options = reactive({
   stamp_tax_rate_by_contract_type: {},
   pricing_method: [],
   is_archived: [],
+  color_flag: [],
+  completeness: [],
   project: [],
 })
 
@@ -923,7 +995,18 @@ const loadContractDetail = async (contractId) => {
 
 const loadDepartments = async () => {
   const { data } = await http.get('/settings/departments')
-  departments.value = (Array.isArray(data) ? data : []).map((item) => item.name)
+  const rows = Array.isArray(data) ? data : []
+  departments.value = rows.map((item) => item.name)
+  existingDepartments.value = rows
+    .filter((item) => {
+      const value = item?.is_existing
+      if (typeof value === 'boolean') return value
+      if (typeof value === 'number') return value !== 0
+      const text = String(value ?? '').trim().toLowerCase()
+      return text === '1' || text === 'true' || text === 'yes' || text === 'y'
+    })
+    .map((item) => String(item?.name || '').trim())
+    .filter(Boolean)
 }
 
 const loadFieldOptions = async () => {
@@ -935,6 +1018,8 @@ const loadFieldOptions = async () => {
   options.stamp_tax_rate_by_contract_type = data?.stamp_tax_rate_by_contract_type || {}
   options.pricing_method = data?.pricing_method || []
   options.is_archived = data?.is_archived || []
+  options.color_flag = data?.color_flag || []
+  options.completeness = data?.completeness || []
   options.project = data?.project || []
 }
 
@@ -1104,6 +1189,8 @@ const loadContracts = async () => {
     params: {
       handling_department: filters.handling_department || undefined,
       project: filters.project || undefined,
+      color_flag: filters.color_flag || undefined,
+      completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
       keyword: filters.keyword || undefined,
       has_file: filters.has_file || undefined,
       is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
@@ -1236,6 +1323,44 @@ const hasDepartmentEditPermissionForContract = (row) => {
   })
 }
 
+const getColorFlagClass = (value) => {
+  const text = String(value || '').trim()
+  if (text === '红旗') return 'is-red'
+  if (text === '橙旗') return 'is-orange'
+  if (text === '黄旗') return 'is-yellow'
+  if (text === '绿旗') return 'is-green'
+  if (text === '蓝旗') return 'is-blue'
+  return 'is-none'
+}
+
+const setColorFlagFilter = async (command) => {
+  filters.color_flag = String(command || '').trim()
+  await loadContracts()
+}
+
+const updateColorFlag = async (row, value) => {
+  if (!row?.id) {
+    return
+  }
+
+  const nextValue = String(value || '').trim()
+  const prevValue = String(row?.color_flag || '').trim()
+  if (nextValue === prevValue) {
+    return
+  }
+
+  try {
+    await http.put(`/contracts/${row.id}`, {
+      color_flag: nextValue,
+    })
+    row.color_flag = nextValue
+    ElMessage.success('颜色标记已更新')
+  } catch (error) {
+    row.color_flag = prevValue
+    ElMessage.error(error?.response?.data?.message || '颜色标记更新失败')
+  }
+}
+
 const openEditWithSupplementalFields = async (row, fields) => {
   await contractItemRef.value?.openEditWithSupplementalFields(row, fields, {
     readOnly: !hasDepartmentEditPermissionForContract(row),
@@ -1335,6 +1460,8 @@ const exportContractsExcel = async () => {
       params: {
         handling_department: filters.handling_department || undefined,
         project: filters.project || undefined,
+        color_flag: filters.color_flag || undefined,
+        completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
         keyword: filters.keyword || undefined,
         has_file: filters.has_file || undefined,
         is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
@@ -1727,6 +1854,29 @@ watch(aiMatchDialogVisible, (visible) => {
   gap: 8px;
 }
 
+.pager-top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-filter-trigger {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.color-filter-trigger:hover {
+  border-color: #dbeafe;
+  background: #eff6ff;
+}
+
 .apple-button-group {
   display: inline-flex;
   border-radius: 19px;
@@ -1810,6 +1960,40 @@ watch(aiMatchDialogVisible, (visible) => {
 .contract-table :deep(.el-table__cell) {
   padding-top: 6px;
   padding-bottom: 6px;
+}
+
+.color-flag-trigger {
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.color-flag-trigger:hover {
+  border-color: #dbeafe;
+  background: #eff6ff;
+}
+
+.color-flag-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.color-flag-icon.is-red { color: #ef4444; }
+.color-flag-icon.is-orange { color: #f97316; }
+.color-flag-icon.is-yellow { color: #eab308; }
+.color-flag-icon.is-green { color: #22c55e; }
+.color-flag-icon.is-blue { color: #3b82f6; }
+.color-flag-icon.is-none { color: #9ca3af; }
+
+.color-flag-dropdown-menu :deep(.el-dropdown-menu__item) {
+  min-width: 40px;
+  justify-content: center;
 }
 
 .file-cell {

@@ -13,6 +13,7 @@ from .contracts_core import (
     _department_dir,
     _format_decimal_plain,
     _get_department_names,
+    _resolve_current_management_department_name,
     _get_stamp_tax_rate_by_contract_type,
     _get_project_names,
     _match_option_value,
@@ -24,7 +25,15 @@ from .contracts_core import (
 )
 from .models import Contract
 
+
+def _build_completeness_value(file_path: str, determination_method: str, purchase_type: str) -> str:
+    has_file = bool(str(file_path or '').strip())
+    has_determination = bool(str(determination_method or '').strip())
+    has_purchase_type = bool(str(purchase_type or '').strip())
+    return '是' if has_file and has_determination and has_purchase_type else '否'
+
 _IMPORT_ERROR_REPORTS = {}
+COLOR_FLAG_OPTIONS = {'红旗', '橙旗', '黄旗', '绿旗', '蓝旗'}
 
 AMOUNT_UNIT_TO_WAN = {
     '元': Decimal('0.0001'),
@@ -442,6 +451,9 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     normalized_contract_type = _normalize_contract_type_value(payload.get('contract_type'))
     normalized_stamp_tax_rate = (payload.get('stamp_tax_rate') or '').strip() or _get_stamp_tax_rate_by_contract_type(normalized_contract_type)
     normalized_contract_form = (payload.get('contract_form') or '').strip() or '新签合同'
+    normalized_color_flag = (payload.get('color_flag') or '').strip() or None
+    if normalized_color_flag and normalized_color_flag not in COLOR_FLAG_OPTIONS:
+        return None, 'color_flag is invalid', 400, False
 
     original_contract_id_text = str(payload.get('original_contract_id') or '').strip()
     if original_contract_id_text:
@@ -458,6 +470,14 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
     if missing:
         return None, f'Missing required fields: {", ".join(missing)}', 400, False
+
+    department = (payload.get('handling_department') or '').strip()
+    normalized_current_management_department = (payload.get('current_management_department') or '').strip()
+    if not normalized_current_management_department:
+        normalized_current_management_department = _resolve_current_management_department_name(department)
+
+    determination_method = (payload.get('contract_determination_method') or '').strip() or None
+    purchase_type = (payload.get('purchase_type') or '').strip() or None
 
     contract_amount_text = str(payload.get('contract_amount') or '').strip()
     amount = _safe_decimal(contract_amount_text) if contract_amount_text else None
@@ -513,27 +533,33 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 if has_file_path_input:
                     existing_contract.file_path = normalized_file_path or None
                 existing_contract.department = (payload.get('handling_department') or '').strip()
+                existing_contract.current_management_department = normalized_current_management_department or None
                 existing_contract.contract_form = normalized_contract_form or None
-                existing_contract.contract_determination_method = (payload.get('contract_determination_method') or '').strip() or None
+                existing_contract.contract_determination_method = determination_method
                 existing_contract.handling_date = _parse_date(payload.get('handling_date'))
                 existing_contract.contract_type = normalized_contract_type or None
-                existing_contract.purchase_type = (payload.get('purchase_type') or '').strip() or None
+                existing_contract.purchase_type = purchase_type
                 existing_contract.stamp_tax_rate = normalized_stamp_tax_rate or None
                 existing_contract.pricing_method = (payload.get('pricing_method') or '').strip() or None
                 existing_contract.copy_count = copy_count
                 existing_contract.save_place = save_place
+                existing_contract.color_flag = normalized_color_flag
                 existing_contract.project = (payload.get('project') or '').strip() or None
                 existing_contract.original_contract_id = original_contract_id
                 existing_contract.fullbody = (payload.get('fullbody') or '').strip() or None
                 existing_contract.start_date = _parse_date(payload.get('start_date'))
                 existing_contract.end_date = _parse_date(payload.get('end_date'))
                 existing_contract.status = (payload.get('status') or 'active').strip() or 'active'
+                existing_contract.completeness = _build_completeness_value(
+                    existing_contract.file_path,
+                    existing_contract.contract_determination_method,
+                    existing_contract.purchase_type,
+                )
                 existing_contract.updated_by = created_by
                 return existing_contract, '', 0, True
             else:
                 return None, 'contract_number already exists', 409, False
 
-    department = (payload.get('handling_department') or '').strip()
     if not update_mode:
         allowed_departments = _get_department_names()
         if department not in allowed_departments:
@@ -554,16 +580,19 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         currency='CNY',
         handler=(payload.get('handler') or '').strip() or None,
         department=department,
+        current_management_department=normalized_current_management_department or None,
         contract_form=normalized_contract_form or None,
-        contract_determination_method=(payload.get('contract_determination_method') or '').strip() or None,
+        contract_determination_method=determination_method,
         handling_date=_parse_date(payload.get('handling_date')),
         contract_type=normalized_contract_type or None,
-        purchase_type=(payload.get('purchase_type') or '').strip() or None,
+        purchase_type=purchase_type,
         stamp_tax_rate=normalized_stamp_tax_rate or None,
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
         copy_count=copy_count,
         save_place=save_place,
         is_archived='未归档',
+        color_flag=normalized_color_flag,
+        completeness=_build_completeness_value(normalized_file_path, determination_method, purchase_type),
         project=project,
         original_contract_id=original_contract_id,
         file_path=normalized_file_path or None,

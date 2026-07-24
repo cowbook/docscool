@@ -49,6 +49,7 @@ CONTRACT_FIELD_KEYS = [
     'contract_amount',
     'handler',
     'handling_department',
+    'current_management_department',
     'contract_form',
     'contract_determination_method',
     'handling_date',
@@ -57,6 +58,8 @@ CONTRACT_FIELD_KEYS = [
     'stamp_tax_rate',
     'pricing_method',
     'is_archived',
+    'color_flag',
+    'completeness',
     'project',
 ]
 
@@ -98,6 +101,8 @@ CSV_OPTION_DEFAULTS = {
     'purchase_type': ['工程采购', '服务采购', '设备采购', '非采购类'],
     'pricing_method': ['单价合同', '总价合同','其他'],
     'is_archived': ['已归档', '未归档'],
+    'color_flag': ['红旗', '橙旗', '黄旗', '绿旗', '蓝旗'],
+    'completeness': ['是', '否'],
 }
 
 
@@ -1264,8 +1269,34 @@ def _select_best_pdf_match(row, pdf_files: list):
 
 
 def _get_department_names():
+    rows = (
+        Department.query
+        .filter(Department.is_existing.is_(True))
+        .order_by(Department.name.asc())
+        .all()
+    )
+    return [row.name for row in rows]
+
+
+def _get_all_department_names():
     rows = Department.query.order_by(Department.name.asc()).all()
     return [row.name for row in rows]
+
+
+def _resolve_current_management_department_name(department_name: str) -> str:
+    normalized = str(department_name or '').strip()
+    if not normalized:
+        return ''
+
+    row = Department.query.filter_by(name=normalized).first()
+    if not row:
+        return normalized
+
+    if bool(getattr(row, 'is_existing', True)):
+        return normalized
+
+    mapped = str(getattr(row, 'current_department_name', '') or '').strip()
+    return mapped or normalized
 
 
 def _get_project_names():

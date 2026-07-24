@@ -2,6 +2,7 @@ import os
 import json
 import re
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from importlib import import_module
 from urllib.parse import urlparse
@@ -21,7 +22,7 @@ from .contracts_core import (
     _list_storage_entries,
 )
 from .extensions import db
-from .models import Contract, Department, ProjectOption, StampTaxRateOption, UserPermission
+from .models import Contract, Department, ProjectOption, StampTaxRateOption, UserLog, UserPermission
 
 
 DOCSCOOL_GROUP_NAME = 'docscool'
@@ -184,6 +185,37 @@ def _extract_permission_items_from_body(body: dict):
 def _normalize_role_value(value: str) -> str:
     role = str(value or ROLE_ADMIN).strip()
     return role if role in ROLE_VALUES else ROLE_ADMIN
+
+
+def _month_range_now() -> tuple[datetime, datetime]:
+    now = datetime.now()
+    month_start = datetime(now.year, now.month, 1, 0, 0, 0)
+    next_month = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1)
+    month_end = next_month - timedelta(seconds=1)
+    return month_start, month_end
+
+
+def _parse_log_time_range() -> tuple[datetime, datetime]:
+    start_text = (request.args.get('start_date') or '').strip()
+    end_text = (request.args.get('end_date') or '').strip()
+    if not start_text and not end_text:
+        return _month_range_now()
+
+    if not start_text or not end_text:
+        raise ValueError('start_date 和 end_date 需要同时提供')
+
+    try:
+        start_date = datetime.strptime(start_text, '%Y-%m-%d')
+        end_date = datetime.strptime(end_text, '%Y-%m-%d')
+    except ValueError as exc:
+        raise ValueError('日期格式错误，应为 YYYY-MM-DD') from exc
+
+    if end_date < start_date:
+        raise ValueError('end_date 不能早于 start_date')
+
+    start_time = datetime(start_date.year, start_date.month, start_date.day, 0, 0, 0)
+    end_time = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
+    return start_time, end_time
 
 
 def _current_user_role_value() -> str:
@@ -1358,6 +1390,47 @@ def list_stamp_tax_rate_settings():
     return jsonify([row.to_dict() for row in rows])
 
 
+@contracts_bp.get('/settings/user-logs')
+@require_auth
+def list_user_logs():
+    try:
+        start_time, end_time = _parse_log_time_range()
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+
+    rows = (
+        UserLog.query
+        .filter(UserLog.record_time >= start_time, UserLog.record_time <= end_time)
+        .order_by(UserLog.record_time.desc(), UserLog.id.desc())
+        .all()
+    )
+
+    user_ids = {row.user_id for row in rows if row.user_id}
+    user_map = {}
+    if user_ids:
+        user_rows = UserPermission.query.filter(UserPermission.id.in_(user_ids)).all()
+        user_map = {row.id: row.login_name for row in user_rows}
+
+    payload = []
+    for row in rows:
+        payload.append({
+            'id': row.id,
+            'record_time': row.record_time.isoformat() if row.record_time else None,
+            'user_id': row.user_id,
+            'login_name': user_map.get(row.user_id, ''),
+            'operation_module': row.operation_module,
+            'operation_target': row.operation_target,
+            'operation_type': row.operation_type,
+            'detail': row.detail,
+        })
+
+    return jsonify({
+        'start_time': start_time.isoformat(),
+        'end_time': end_time.isoformat(),
+        'rows': payload,
+    })
+
+
 @contracts_bp.post('/settings/stamp-tax-rates')
 @require_auth
 def create_stamp_tax_rate_setting():
@@ -1498,20 +1571,53 @@ def create_department_setting():
 
     body = request.get_json(silent=True) or {}
     name = (body.get('name') or '').strip()
+    is_existing = bool(body.get('is_existing', True))
+    current_department_name = (body.get('current_department_name') or '').strip()
 
     if not name:
         return jsonify({'message': 'name is required'}), 400
     if len(name) > 50:
         return jsonify({'message': '部门名称最多50个字符'}), 400
+    if len(current_department_name) > 50:
+        return jsonify({'message': '现在部门最多50个字符'}), 400
     if Department.query.filter_by(name=name).first():
         return jsonify({'message': '部门已存在'}), 409
+    if not is_existing and not current_department_name:
+        return jsonify({'message': '历史部门请填写“现在部门”'}), 400
 
-    row = Department(name=name)
+    row = Department(
+        name=name,
+        is_existing=is_existing,
+        current_department_name=None if is_existing else current_department_name,
+    )
     db.session.add(row)
     db.session.commit()
 
     _department_dir(name)
     return jsonify(row.to_dict()), 201
+
+
+@contracts_bp.put('/settings/departments/<int:department_id>')
+@require_auth
+def update_department_setting(department_id):
+    permission_error = _require_super_admin_write_permission()
+    if permission_error:
+        return permission_error
+
+    row = Department.query.get_or_404(department_id)
+    body = request.get_json(silent=True) or {}
+
+    is_existing = bool(body.get('is_existing', True))
+    current_department_name = (body.get('current_department_name') or '').strip()
+    if len(current_department_name) > 50:
+        return jsonify({'message': '现在部门最多50个字符'}), 400
+    if not is_existing and not current_department_name:
+        return jsonify({'message': '历史部门请填写“现在部门”'}), 400
+
+    row.is_existing = is_existing
+    row.current_department_name = None if is_existing else current_department_name
+    db.session.commit()
+    return jsonify(row.to_dict())
 
 
 @contracts_bp.delete('/settings/departments/<int:department_id>')

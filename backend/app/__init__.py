@@ -3,6 +3,7 @@ import posixpath
 import logging
 import warnings
 import json
+from sqlalchemy import inspect
 
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -92,6 +93,7 @@ def _drop_legacy_contract_columns():
         'currency',
         'handler',
         'department',
+        'current_management_department',
         'contract_determination_method',
         'handling_date',
         'contract_type',
@@ -101,6 +103,8 @@ def _drop_legacy_contract_columns():
         'copy_count',
         'save_place',
         'is_archived',
+        'color_flag',
+        'completeness',
         'project',
         'contract_form',
         'original_contract_id',
@@ -134,6 +138,7 @@ def _drop_legacy_contract_columns():
             currency VARCHAR(16) NOT NULL,
             handler VARCHAR(64),
             department VARCHAR(128) NOT NULL,
+            current_management_department VARCHAR(128),
             contract_form VARCHAR(32),
             contract_determination_method VARCHAR(64),
             handling_date DATE,
@@ -144,6 +149,8 @@ def _drop_legacy_contract_columns():
             copy_count INTEGER,
             save_place VARCHAR(50),
             is_archived VARCHAR(32),
+            color_flag VARCHAR(32),
+            completeness VARCHAR(4),
             project VARCHAR(255),
             original_contract_id INTEGER,
             fullbody TEXT,
@@ -164,16 +171,16 @@ def _drop_legacy_contract_columns():
         '''
         INSERT INTO contracts (
             id, contract_number, contract_name, contract_unit, amount, currency,
-            handler, department, contract_form, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
+            handler, department, current_management_department, contract_form, contract_determination_method,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, color_flag, completeness, project,
             original_contract_id,
             fullbody, start_date, end_date, status, file_path, created_by,
             updated_by, created_at, updated_at
         )
         SELECT
             id, contract_number, contract_name, contract_unit, amount, currency,
-            handler, department, NULL, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, project,
+            handler, department, NULL, NULL, contract_determination_method,
+            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, NULL, NULL, project,
             NULL,
             fullbody, start_date, end_date, status, file_path, created_by,
             created_by, created_at, updated_at
@@ -223,6 +230,103 @@ def _seed_stamp_tax_rate_options():
     for contract_type, tax_rate in missing:
         db.session.add(StampTaxRateOption(contract_type=contract_type, tax_rate=tax_rate))
     db.session.commit()
+
+
+def _ensure_department_columns():
+    inspector = inspect(db.engine)
+    existing = {col.get('name') for col in inspector.get_columns('departments')}
+
+    required_columns = {
+        'is_existing': 'ALTER TABLE departments ADD COLUMN is_existing BOOLEAN NOT NULL DEFAULT 1',
+        'current_department_name': 'ALTER TABLE departments ADD COLUMN current_department_name VARCHAR(50)',
+    }
+    for column, ddl in required_columns.items():
+        if column not in existing:
+            db.session.execute(db.text(ddl))
+
+    db.session.commit()
+
+
+def _ensure_contract_business_columns():
+    inspector = inspect(db.engine)
+    existing = {col.get('name') for col in inspector.get_columns('contracts')}
+
+    required_columns = {
+        'current_management_department': 'ALTER TABLE contracts ADD COLUMN current_management_department VARCHAR(128)',
+        'color_flag': 'ALTER TABLE contracts ADD COLUMN color_flag VARCHAR(32)',
+        'completeness': 'ALTER TABLE contracts ADD COLUMN completeness VARCHAR(4)',
+    }
+
+    for column, ddl in required_columns.items():
+        if column not in existing:
+            db.session.execute(db.text(ddl))
+
+    db.session.commit()
+
+
+def _backfill_contract_completeness():
+    changed = 0
+    rows = Contract.query.all()
+    for row in rows:
+        has_file = bool(str(getattr(row, 'file_path', '') or '').strip())
+        has_determination = bool(str(getattr(row, 'contract_determination_method', '') or '').strip())
+        has_purchase_type = bool(str(getattr(row, 'purchase_type', '') or '').strip())
+        next_value = '是' if has_file and has_determination and has_purchase_type else '否'
+        if str(getattr(row, 'completeness', '') or '').strip() != next_value:
+            row.completeness = next_value
+            changed += 1
+
+    if changed > 0:
+        db.session.commit()
+
+
+def _backfill_current_management_department():
+    def _extract_department_from_file_path(file_path: str) -> str:
+        normalized = str(file_path or '').strip().replace('\\', '/')
+        if not normalized:
+            return ''
+        parts = [part.strip() for part in normalized.split('/') if part.strip()]
+        return parts[0] if parts else ''
+
+    def _resolve_mapped_department(department_name: str, department_map: dict) -> str:
+        normalized = str(department_name or '').strip()
+        if not normalized:
+            return ''
+
+        department_row = department_map.get(normalized)
+        if not department_row:
+            return normalized
+        if bool(getattr(department_row, 'is_existing', True)):
+            return normalized
+
+        mapped_name = str(getattr(department_row, 'current_department_name', '') or '').strip()
+        return mapped_name or normalized
+
+    departments = Department.query.all()
+    department_map = {
+        str(row.name or '').strip(): row
+        for row in departments
+        if str(row.name or '').strip()
+    }
+
+    changed = 0
+    rows = Contract.query.all()
+    for row in rows:
+        file_path_department = _extract_department_from_file_path(getattr(row, 'file_path', ''))
+        fallback_department = str(getattr(row, 'department', '') or '').strip()
+        source_department = file_path_department or fallback_department
+        if not source_department:
+            continue
+
+        next_value = _resolve_mapped_department(source_department, department_map)
+
+        current_value = str(getattr(row, 'current_management_department', '') or '').strip()
+        if current_value != next_value:
+            row.current_management_department = next_value
+            changed += 1
+
+    if changed > 0:
+        db.session.commit()
 
 
 def _ensure_user_permission_columns():
@@ -475,6 +579,8 @@ def create_app() -> Flask:
 
     with app.app_context():
         db.create_all()
+        _ensure_department_columns()
+        _ensure_contract_business_columns()
         if _is_sqlite_database():
             _ensure_contract_columns()
             _ensure_user_permission_columns()
@@ -484,6 +590,8 @@ def create_app() -> Flask:
         _seed_project_options()
         _seed_stamp_tax_rate_options()
         _migrate_legacy_file_paths(app)
+        _backfill_current_management_department()
+        _backfill_contract_completeness()
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(contracts_bp)

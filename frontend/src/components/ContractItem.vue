@@ -85,13 +85,10 @@
 
 
               <el-form-item label="是否归档" class="form-item-span-2">
-                <el-switch
-                  v-model="form.is_archived"
-                  active-text="已归档"
-                  inactive-text="未归档"
-                  active-value="已归档"
-                  inactive-value="未归档"
-                />
+                <div class="status-checkbox-group">
+                  <el-checkbox v-model="isArchivedChecked" label="已归档" />
+                  <el-checkbox v-model="isCompletenessChecked" label="完整" :disabled="!isSuperRole" />
+                </div>
 
                     <el-link
                 class="ocr-md-link"
@@ -106,7 +103,24 @@
               </el-form-item>
 
               <el-form-item label="合同名称" class="form-item-span-2">
-                <el-input v-model="form.contract_name" />
+                <div class="contract-name-with-flag">
+                  <el-dropdown trigger="click" @command="handleColorFlagSelect">
+                    <button type="button" class="flag-trigger" title="颜色标记">
+                      <span class="flag-icon" :class="getColorFlagClass(form.color_flag)">⚑</span>
+                    </button>
+                    <template #dropdown>
+                      <el-dropdown-menu class="flag-dropdown-menu">
+                        <el-dropdown-item :command="''">
+                          <span class="flag-icon is-none">⚑</span>
+                        </el-dropdown-item>
+                        <el-dropdown-item v-for="item in colorFlagOptions" :key="item" :command="item">
+                          <span class="flag-icon" :class="getColorFlagClass(item)">⚑</span>
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                  <el-input v-model="form.contract_name" class="contract-name-input" />
+                </div>
               </el-form-item>
               <el-form-item label="合同编号">
                 <el-input v-model="form.contract_number" />
@@ -139,10 +153,34 @@
                   <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="现管部门">
+                <el-select
+                  v-model="form.current_management_department"
+                  filterable
+                  allow-create
+                  clearable
+                  placeholder="默认为部门映射后的当前部门"
+                  style="width: 100%"
+                >
+                  <el-option v-for="item in currentManagementDepartments" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="合同形式">
                 <el-select v-model="form.contract_form" placeholder="请选择合同形式" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_form" :key="item" :label="item" :value="item" />
                 </el-select>
+              </el-form-item>
+              <el-form-item label="原合同">
+                <div class="original-contract-field">
+                  <el-select v-model="form.original_contract_id" clearable filterable placeholder="请选择原合同" style="width: 100%">
+                    <el-option
+                      v-for="item in originalContractOptions"
+                      :key="item.id"
+                      :label="item.label"
+                      :value="item.id"
+                    />
+                  </el-select>
+                </div>
               </el-form-item>
               <el-form-item label="合同确定方式">
                 <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
@@ -183,17 +221,6 @@
                   clearable
                   placeholder="最多50个字符，可留空"
                 />
-              </el-form-item>
-              <el-form-item label="原合同">
-                <el-select v-model="form.original_contract_id" clearable filterable placeholder="请选择原合同" style="width: 100%">
-                  <el-option
-                    v-for="item in originalContractOptions"
-                    :key="item.id"
-                    :label="item.label"
-                    :value="item.id"
-                  />
-                </el-select>
-                <div class="original-contract-hint">当前关联：{{ originalContractDisplayLabel || '无' }}</div>
               </el-form-item>
             </div>
             <div class="contract-meta-info">
@@ -535,6 +562,10 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  currentManagementDepartments: {
+    type: Array,
+    default: () => [],
+  },
   options: {
     type: Object,
     default: () => ({}),
@@ -551,6 +582,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  currentUserRole: {
+    type: String,
+    default: 'admin',
+  },
   showFileActions: {
     type: Boolean,
     default: true,
@@ -561,6 +596,15 @@ const emit = defineEmits(['saved', 'update:aiParsing'])
 
 const aiParsing = computed(() => props.aiParsing)
 const departments = computed(() => props.departments || [])
+const currentManagementDepartments = computed(() => {
+  const source = Array.isArray(props.currentManagementDepartments)
+    ? props.currentManagementDepartments
+    : []
+  if (source.length > 0) {
+    return source
+  }
+  return departments.value
+})
 
 const normalizedOptions = computed(() => ({
   contract_form: props.options?.contract_form || [],
@@ -570,8 +614,59 @@ const normalizedOptions = computed(() => ({
   stamp_tax_rate_by_contract_type: props.options?.stamp_tax_rate_by_contract_type || {},
   pricing_method: props.options?.pricing_method || [],
   is_archived: props.options?.is_archived || [],
+  color_flag: props.options?.color_flag || [],
+  completeness: props.options?.completeness || [],
   project: props.options?.project || [],
 }))
+
+const isSuperRole = computed(() => ['super_admin', 'synology_super_admin'].includes(String(props.currentUserRole || '').trim()))
+const colorFlagOptions = computed(() => {
+  const source = Array.isArray(normalizedOptions.value.color_flag) ? normalizedOptions.value.color_flag : []
+  return source.length ? source : ['红旗', '橙旗', '黄旗', '绿旗', '蓝旗']
+})
+
+const isArchivedChecked = computed({
+  get: () => String(form.is_archived || '').trim() === '已归档',
+  set: (checked) => {
+    form.is_archived = checked ? '已归档' : '未归档'
+  },
+})
+
+const isCompletenessChecked = computed({
+  get: () => String(form.completeness || '').trim() === '是',
+  set: (checked) => {
+    form.completeness = checked ? '是' : '否'
+  },
+})
+
+const getColorFlagClass = (value) => {
+  const text = String(value || '').trim()
+  if (text === '红旗') return 'is-red'
+  if (text === '橙旗') return 'is-orange'
+  if (text === '黄旗') return 'is-yellow'
+  if (text === '绿旗') return 'is-green'
+  if (text === '蓝旗') return 'is-blue'
+  return 'is-none'
+}
+
+const handleColorFlagSelect = (command) => {
+  form.color_flag = String(command || '').trim()
+}
+
+const computeCompletenessValue = () => {
+  const hasFile = !!String(form.file_path || '').trim()
+  const hasDetermination = !!String(form.contract_determination_method || '').trim()
+  const hasPurchaseType = !!String(form.purchase_type || '').trim()
+  return hasFile && hasDetermination && hasPurchaseType ? '是' : '否'
+}
+
+const applyCompletenessDefault = ({ force = false } = {}) => {
+  const current = String(form.completeness || '').trim()
+  if (!force && isSuperRole.value && current) {
+    return
+  }
+  form.completeness = computeCompletenessValue()
+}
 
 const getStampTaxRateByContractType = (contractType) => {
   const mapping = normalizedOptions.value.stamp_tax_rate_by_contract_type || {}
@@ -643,6 +738,7 @@ const form = reactive({
   copy_count: '',
   handler: '',
   handling_department: '',
+  current_management_department: '',
   contract_form: '新签合同',
   contract_determination_method: '',
   handling_date: '',
@@ -651,6 +747,8 @@ const form = reactive({
   stamp_tax_rate: '',
   pricing_method: '',
   is_archived: '未归档',
+  color_flag: '',
+  completeness: '',
   project: '',
   save_place: '',
   original_contract_id: '',
@@ -833,6 +931,7 @@ const resetForm = () => {
   form.copy_count = ''
   form.handler = ''
   form.handling_department = ''
+  form.current_management_department = ''
   form.contract_form = '新签合同'
   form.contract_determination_method = ''
   form.handling_date = ''
@@ -841,6 +940,8 @@ const resetForm = () => {
   form.stamp_tax_rate = ''
   form.pricing_method = ''
   form.is_archived = '未归档'
+  form.color_flag = ''
+  form.completeness = ''
   form.project = ''
   form.save_place = ''
   form.original_contract_id = ''
@@ -850,6 +951,7 @@ const resetForm = () => {
   form.created_at = ''
   form.updated_by = ''
   form.updated_at = ''
+  applyCompletenessDefault({ force: true })
 }
 
 const resetPaymentFlows = () => {
@@ -905,6 +1007,7 @@ const populateFormFromContract = (row) => {
   form.copy_count = normalizeCopyCountInput(row.copy_count)
   form.handler = row.handler || ''
   form.handling_department = row.handling_department || row.department || ''
+  form.current_management_department = row.current_management_department || ''
   form.contract_form = row.contract_form || '新签合同'
   form.contract_determination_method = row.contract_determination_method || ''
   form.handling_date = row.handling_date || ''
@@ -913,6 +1016,8 @@ const populateFormFromContract = (row) => {
   form.stamp_tax_rate = row.stamp_tax_rate || getStampTaxRateByContractType(row.contract_type)
   form.pricing_method = row.pricing_method || ''
   form.is_archived = row.is_archived || '未归档'
+  form.color_flag = row.color_flag || ''
+  form.completeness = row.completeness || ''
   form.project = row.project || ''
   form.save_place = row.save_place || ''
   form.original_contract_id = row.original_contract_id || ''
@@ -924,6 +1029,7 @@ const populateFormFromContract = (row) => {
   form.created_at = row.created_at || ''
   form.updated_by = row.updated_by || ''
   form.updated_at = row.updated_at || ''
+  applyCompletenessDefault()
 }
 
 const applyAiSupplementalFields = (fields, sourceRow = {}) => {
@@ -935,6 +1041,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['copy_count', 'copy_count'],
     ['handler', 'handler'],
     ['handling_department', 'handling_department'],
+    ['current_management_department', 'current_management_department'],
     ['contract_determination_method', 'contract_determination_method'],
     ['handling_date', 'handling_date'],
     ['contract_type', 'contract_type'],
@@ -942,6 +1049,8 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['stamp_tax_rate', 'stamp_tax_rate'],
     ['pricing_method', 'pricing_method'],
     ['is_archived', 'is_archived'],
+    ['color_flag', 'color_flag'],
+    ['completeness', 'completeness'],
     ['project', 'project'],
     ['save_place', 'save_place'],
     ['fullbody', 'fullbody'],
@@ -977,6 +1086,7 @@ const applyParsedFields = (fields) => {
   form.copy_count = normalizeCopyCountInput(fields?.copy_count || '')
   form.handler = fields?.handler || ''
   form.handling_department = fields?.handling_department || ''
+  form.current_management_department = fields?.current_management_department || ''
   form.contract_form = fields?.contract_form || '新签合同'
   form.contract_determination_method = fields?.contract_determination_method || ''
   form.handling_date = fields?.handling_date || ''
@@ -985,6 +1095,8 @@ const applyParsedFields = (fields) => {
   form.stamp_tax_rate = fields?.stamp_tax_rate || getStampTaxRateByContractType(fields?.contract_type)
   form.pricing_method = fields?.pricing_method || ''
   form.is_archived = fields?.is_archived || '未归档'
+  form.color_flag = fields?.color_flag || ''
+  form.completeness = fields?.completeness || ''
   form.project = fields?.project || ''
   form.save_place = fields?.save_place || ''
   form.original_contract_id = fields?.original_contract_id || ''
@@ -992,6 +1104,7 @@ const applyParsedFields = (fields) => {
     ? `${fields.original_contract.contract_number || '无编号'} - ${fields.original_contract.contract_name || '未命名合同'}`
     : ''
   form.fullbody = fields?.fullbody || ''
+  applyCompletenessDefault({ force: true })
 }
 
 const openCreateFromAi = (file, fields) => {
@@ -1187,6 +1300,7 @@ const saveContract = async () => {
         copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
+        current_management_department: form.current_management_department,
         contract_form: form.contract_form,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
@@ -1195,6 +1309,8 @@ const saveContract = async () => {
         stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
+        color_flag: form.color_flag,
+        ...(isSuperRole.value ? { completeness: form.completeness } : {}),
         project: form.project,
         save_place: normalizedSavePlace,
         original_contract_id: form.original_contract_id,
@@ -1211,6 +1327,7 @@ const saveContract = async () => {
         copy_count: normalizedCopyCount,
         handler: form.handler,
         handling_department: form.handling_department,
+        current_management_department: form.current_management_department,
         contract_form: form.contract_form,
         contract_determination_method: form.contract_determination_method,
         handling_date: form.handling_date,
@@ -1219,6 +1336,8 @@ const saveContract = async () => {
         stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
+        color_flag: form.color_flag,
+        ...(isSuperRole.value ? { completeness: form.completeness } : {}),
         project: form.project,
         save_place: normalizedSavePlace,
         original_contract_id: form.original_contract_id,
@@ -1272,6 +1391,29 @@ watch(
       return
     }
     form.stamp_tax_rate = getStampTaxRateByContractType(value)
+  },
+)
+
+watch(
+  () => form.handling_department,
+  (value, oldValue) => {
+    if (value === oldValue) {
+      return
+    }
+    if (!String(form.current_management_department || '').trim()) {
+      form.current_management_department = String(value || '').trim()
+    }
+  },
+)
+
+watch(
+  [
+    () => form.file_path,
+    () => form.contract_determination_method,
+    () => form.purchase_type,
+  ],
+  () => {
+    applyCompletenessDefault()
   },
 )
 
@@ -2487,6 +2629,71 @@ defineExpose({
 
 .form-item-span-2 {
   grid-column: span 1;
+}
+
+.status-checkbox-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.contract-name-with-flag {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contract-name-input {
+  flex: 1;
+}
+
+.flag-trigger {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.flag-trigger:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.flag-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.flag-icon.is-red { color: #ef4444; }
+.flag-icon.is-orange { color: #f97316; }
+.flag-icon.is-yellow { color: #eab308; }
+.flag-icon.is-green { color: #22c55e; }
+.flag-icon.is-blue { color: #3b82f6; }
+.flag-icon.is-none { color: #9ca3af; }
+
+.flag-dropdown-menu :deep(.el-dropdown-menu__item) {
+  min-width: 46px;
+  justify-content: center;
+}
+
+.original-contract-field {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.original-contract-hint {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+  word-break: break-all;
 }
 
 .preview-actions {

@@ -26,6 +26,7 @@ class Contract(db.Model):
     currency = db.Column(db.String(16), nullable=False, default='CNY')
     handler = db.Column(db.String(64), nullable=True)
     department = db.Column(db.String(128), nullable=False, index=True)
+    current_management_department = db.Column(db.String(128), nullable=True)
     contract_form = db.Column(db.String(32), nullable=True)
     contract_determination_method = db.Column(db.String(64), nullable=True)
     handling_date = db.Column(db.Date, nullable=True)
@@ -36,6 +37,8 @@ class Contract(db.Model):
     copy_count = db.Column(db.Integer, nullable=True)
     save_place = db.Column(db.String(50), nullable=True)
     is_archived = db.Column(db.String(32), nullable=True)
+    color_flag = db.Column(db.String(32), nullable=True)
+    completeness = db.Column(db.String(4), nullable=True)
     project = db.Column(db.String(255), nullable=True)
     original_contract_id = db.Column(db.Integer, db.ForeignKey('contracts.id'), nullable=True, index=True)
     fullbody = db.Column(db.Text, nullable=True)
@@ -66,6 +69,7 @@ class Contract(db.Model):
             'handler': self.handler,
             'handling_department': self.department,
             'department': self.department,
+            'current_management_department': self.current_management_department,
             'contract_form': self.contract_form,
             'contract_determination_method': self.contract_determination_method,
             'handling_date': self.handling_date.isoformat() if self.handling_date else None,
@@ -76,6 +80,8 @@ class Contract(db.Model):
             'copy_count': self.copy_count,
             'save_place': self.save_place,
             'is_archived': self.is_archived,
+            'color_flag': self.color_flag,
+            'completeness': self.completeness,
             'project': self.project,
             'original_contract_id': self.original_contract_id,
             'start_date': self.start_date.isoformat() if self.start_date else None,
@@ -104,12 +110,16 @@ class Department(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    is_existing = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))
+    current_department_name = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
+            'is_existing': bool(self.is_existing),
+            'current_department_name': self.current_department_name or '',
             'created_at': self.created_at.isoformat(),
         }
 
@@ -283,3 +293,15 @@ class UserPermission(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }
+
+
+class UserLog(db.Model):
+    __tablename__ = 'user_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    record_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    operation_module = db.Column(db.String(64), nullable=False)
+    operation_target = db.Column(db.String(255), nullable=False)
+    operation_type = db.Column(db.String(32), nullable=False)
+    detail = db.Column(db.Text, nullable=False, default='')

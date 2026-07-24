@@ -58,6 +58,9 @@
             </div>
           </div>
 
+
+          
+
           <div class="charts-area">
             <div class="chart-row chart-row-top">
               <section class="chart-panel chart-pie">
@@ -67,6 +70,24 @@
               <section class="chart-panel chart-pie">
                 <div class="chart-title">存储文件有无合同挂载</div>
                 <v-chart :option="optionFileContractPie" autoresize style="height:180px" />
+              </section>
+            </div>
+            <div class="chart-row">
+              <section class="chart-panel chart-bar">
+                <div class="chart-title">现管部门合同整理情况</div>
+                <el-table
+                  :data="deptCurrentManagementRows"
+                  stripe
+                  border
+                  size="small"
+                  class="dept-current-table"
+                >
+                  <el-table-column prop="department" label="现管部门" min-width="180" />
+                  <el-table-column prop="total_count" label="总数" min-width="90" align="right" />
+                  <el-table-column prop="organized_count" label="已整理" min-width="90" align="right" />
+                  <el-table-column prop="no_main_file_count" label="无主文件" min-width="110" align="right" />
+                  <el-table-column prop="current_year_count" label="本年度" min-width="90" align="right" />
+                </el-table>
               </section>
             </div>
             <div class="chart-row">
@@ -296,6 +317,8 @@ const optionDeptBar = ref({
   ],
 })
 
+const deptCurrentManagementRows = ref([])
+
 const statistics = ref({
   total_count: 0,
   total_amount: '0',
@@ -391,6 +414,21 @@ const applyDashboardData = (stat, charts) => {
     optionDeptBar.value.xAxis.data = charts.dept_bar?.departments || []
     optionDeptBar.value.series[0].data = charts.dept_bar?.contract_counts || []
     optionDeptBar.value.series[1].data = charts.dept_bar?.file_counts || []
+
+    const payload = charts.dept_current_management_bar || {}
+    const departments = Array.isArray(payload.departments) ? payload.departments : []
+    const totals = Array.isArray(payload.total_counts) ? payload.total_counts : []
+    const organized = Array.isArray(payload.organized_counts) ? payload.organized_counts : []
+    const noMainFiles = Array.isArray(payload.no_main_file_counts) ? payload.no_main_file_counts : []
+    const currentYear = Array.isArray(payload.current_year_counts) ? payload.current_year_counts : []
+
+    deptCurrentManagementRows.value = departments.map((department, index) => ({
+      department,
+      total_count: Number(totals[index] || 0),
+      organized_count: Number(organized[index] || 0),
+      no_main_file_count: Number(noMainFiles[index] || 0),
+      current_year_count: Number(currentYear[index] || 0),
+    }))
   }
 }
 
@@ -1386,6 +1424,10 @@ onBeforeUnmount(() => {
   font-size: 15px;
   margin-bottom: 8px;
   color: #2d4f87;
+}
+
+.dept-current-table {
+  width: 100%;
 }
 
 .stat-content {

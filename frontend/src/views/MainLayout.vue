@@ -78,6 +78,10 @@
                 </span>
                 <span>印花税率</span>
               </el-menu-item>
+              <el-menu-item index="/settings/operation-logs">
+                <Icon :icon="operationLogIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
+                <span>操作日志</span>
+              </el-menu-item>
               <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
                 <Icon :icon="userPermissionIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>用户权限</span>
@@ -186,6 +190,10 @@
             </span>
             <span>印花税率</span>
           </el-menu-item>
+          <el-menu-item index="/settings/operation-logs">
+            <Icon :icon="operationLogIcon" style="font-size:20px;vertical-align:middle;" />
+            <span>操作日志</span>
+          </el-menu-item>
           <el-menu-item v-if="canShowUserPermissionMenu" index="/settings/users">
             <Icon :icon="userPermissionIcon" style="font-size:20px;vertical-align:middle;" />
             <span>用户权限</span>
@@ -206,6 +214,7 @@ import folderIcon from '@iconify-icons/tabler/folder'
 import settingIcon from '@iconify-icons/tabler/settings'
 import officeIcon from '@iconify-icons/tabler/building'
 import projectIcon from '@iconify-icons/tabler/tag'
+import operationLogIcon from '@iconify-icons/tabler/file-description'
 import userPermissionIcon from '@iconify-icons/tabler/users-group'
 import passwordIcon from '@iconify-icons/tabler/password-user'
 import logoutIcon from '@iconify-icons/tabler/logout'
@@ -243,6 +252,7 @@ const pageTitle = computed(() => {
   if (route.path === '/settings/departments') return '部门设置'
   if (route.path === '/settings/projects') return '项目设置'
   if (route.path === '/settings/stamp-tax-rates') return '印花税率'
+  if (route.path === '/settings/operation-logs') return '操作日志'
   if (route.path === '/settings/users') return '用户权限'
   if (route.path === '/settings/password') return '密码修改'
   if (route.path.startsWith('/settings')) return '系统设置'
