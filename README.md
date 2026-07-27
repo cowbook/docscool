@@ -114,6 +114,89 @@ npm run dev
 
 访问：`http://localhost:5173`
 
+## 服务器使用 gunicorn 启动
+
+适用于 Linux / DSM 场景（生产部署建议）。
+
+### 1. 安装依赖
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. 前台启动（先验证）
+
+在仓库根目录执行：
+
+```bash
+cd /path/to/docscool
+backend/.venv/bin/python -m gunicorn --chdir backend -w 2 -b 0.0.0.0:6000 wsgi:app
+```
+
+- `--chdir backend`：确保能正确加载 `backend/wsgi.py`
+- `-w 2`：2 个 worker，可按机器配置调整
+- `-b 0.0.0.0:6000`：监听 6000 端口
+
+### 3. 后台启动（不占当前终端）
+
+```bash
+cd /path/to/docscool
+nohup backend/.venv/bin/python -m gunicorn --chdir backend -w 2 -b 0.0.0.0:6000 wsgi:app > backend/instance/gunicorn.log 2>&1 &
+```
+
+### 4. 代码更新后重启
+
+```bash
+cd /path/to/docscool
+git pull
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+pkill -f "gunicorn.*wsgi:app" || true
+nohup backend/.venv/bin/python -m gunicorn --chdir backend -w 2 -b 0.0.0.0:6000 wsgi:app > backend/instance/gunicorn.log 2>&1 &
+```
+
+### 5. 推荐：systemd 托管（自动拉起）
+
+示例服务文件 `/etc/systemd/system/docscool-backend.service`：
+
+```ini
+[Unit]
+Description=DocsCool Backend (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/docscool
+ExecStart=/path/to/docscool/backend/.venv/bin/python -m gunicorn --chdir backend -w 2 -b 0.0.0.0:6000 wsgi:app
+Restart=always
+RestartSec=3
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用并启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable docscool-backend
+sudo systemctl start docscool-backend
+sudo systemctl status docscool-backend
+```
+
+更新后重启：
+
+```bash
+cd /path/to/docscool
+git pull
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+sudo systemctl restart docscool-backend
+```
+
 ## 主要接口
 
 - `GET /api/health` 健康检查

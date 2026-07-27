@@ -87,7 +87,9 @@
               <el-form-item label="是否归档" class="form-item-span-2">
                 <div class="status-checkbox-group">
                   <el-checkbox v-model="isArchivedChecked" label="已归档" />
-                  <el-checkbox v-model="isCompletenessChecked" label="完整" :disabled="!isSuperRole" />
+                  <el-tooltip content="由系统判断，填写了所有字段，并且已识别文本。" placement="top">
+                    <el-checkbox v-model="isCompletenessChecked" label="整理完毕" :disabled="!isSuperRole" />
+                  </el-tooltip>
                 </div>
 
                     <el-link
@@ -657,14 +659,11 @@ const computeCompletenessValue = () => {
   const hasFile = !!String(form.file_path || '').trim()
   const hasDetermination = !!String(form.contract_determination_method || '').trim()
   const hasPurchaseType = !!String(form.purchase_type || '').trim()
-  return hasFile && hasDetermination && hasPurchaseType ? '是' : '否'
+  const hasOcrMarkdown = !!ocrMdLinkEnabled.value
+  return hasFile && hasDetermination && hasPurchaseType && hasOcrMarkdown ? '是' : '否'
 }
 
 const applyCompletenessDefault = ({ force = false } = {}) => {
-  const current = String(form.completeness || '').trim()
-  if (!force && isSuperRole.value && current) {
-    return
-  }
   form.completeness = computeCompletenessValue()
 }
 
@@ -968,7 +967,7 @@ const loadPaymentFlows = async (contractId) => {
     paymentFlowRows.value = Array.isArray(data?.payments) ? data.payments : []
   } catch (error) {
     paymentFlowRows.value = []
-    paymentFlowError.value = error?.response?.data?.message || '支付流水加载失败'
+    paymentFlowError.value = '支付流水加载失败'
   } finally {
     paymentFlowLoading.value = false
   }
@@ -1288,6 +1287,8 @@ const saveContract = async () => {
     return
   }
 
+  applyCompletenessDefault({ force: true })
+
   saving.value = true
   try {
     if (editing.value) {
@@ -1417,6 +1418,13 @@ watch(
   },
 )
 
+watch(
+  () => ocrMdLinkEnabled.value,
+  () => {
+    applyCompletenessDefault()
+  },
+)
+
 const revokePreviewUrl = () => {
   if (previewUrl.value) {
     window.URL.revokeObjectURL(previewUrl.value)
@@ -1516,7 +1524,9 @@ const loadPdfPreviewForRow = async (row, closeFullscreenOnError = true) => {
   }
 }
 
-const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+function normalizePath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
 
 const resetLinkTreeCache = () => {
   for (const key of Object.keys(linkTreeCache)) {

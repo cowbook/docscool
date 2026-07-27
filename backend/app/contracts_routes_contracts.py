@@ -62,7 +62,7 @@ from .contracts_routes_contracts_helpers import (
 )
 from .files_core_helpers import _load_storage_file_payload
 from .extensions import db
-from .models import Contract, UserLog, UserPermission
+from .models import Contract, Department, UserLog, UserPermission
 
 
 ROLE_SUPER_ADMIN = 'super_admin'
@@ -680,6 +680,38 @@ def get_dashboard_charts():
         return parts[0] if parts else ''
 
     departments = _get_department_names()
+    department_rows = Department.query.all()
+
+    handler_login_by_department = {}
+    for row in department_rows:
+        name = str(getattr(row, 'name', '') or '').strip()
+        handler_login = str(getattr(row, 'handler_login_name', '') or '').strip()
+        if name and handler_login:
+            handler_login_by_department[name] = handler_login
+
+    # 对于“现管部门”，允许从历史部门映射里兜底拿到经办人。
+    for row in department_rows:
+        is_existing = bool(getattr(row, 'is_existing', True))
+        if is_existing:
+            continue
+        mapped_name = str(getattr(row, 'current_department_name', '') or '').strip()
+        handler_login = str(getattr(row, 'handler_login_name', '') or '').strip()
+        if mapped_name and handler_login and mapped_name not in handler_login_by_department:
+            handler_login_by_department[mapped_name] = handler_login
+
+    handler_logins = {
+        login_name
+        for login_name in handler_login_by_department.values()
+        if login_name
+    }
+    handler_desc_by_login = {}
+    if handler_logins:
+        for row in UserPermission.query.filter(UserPermission.login_name.in_(handler_logins)).all():
+            login_name = str(getattr(row, 'login_name', '') or '').strip()
+            description = str(getattr(row, 'description', '') or '').strip()
+            if login_name:
+                handler_desc_by_login[login_name] = description
+
     contract_counts = []
     file_counts = []
     contracts_by_current_department = {name: [] for name in departments}
@@ -702,6 +734,7 @@ def get_dashboard_charts():
     total_counts = []
     organized_counts = []
     current_year_counts = []
+    handler_descriptions = []
 
     for name in departments:
         rows = contracts_by_current_department.get(name, [])
@@ -712,6 +745,15 @@ def get_dashboard_charts():
             for row in rows
             if getattr(row, 'handling_date', None) is not None and row.handling_date.year == current_year
         ))
+
+        handler_login_name = str(handler_login_by_department.get(name, '') or '').strip()
+        handler_description = str(handler_desc_by_login.get(handler_login_name, '') or '').strip()
+        if handler_login_name and handler_description:
+            handler_descriptions.append(f'{handler_login_name}（{handler_description}）')
+        elif handler_description:
+            handler_descriptions.append(handler_description)
+        else:
+            handler_descriptions.append(handler_login_name)
 
     storage_pdf_paths = {
         _normalize_relative_path(item.get('path') or '')
@@ -743,6 +785,7 @@ def get_dashboard_charts():
         },
         'dept_current_management_bar': {
             'departments': departments,
+            'handler_descriptions': handler_descriptions,
             'total_counts': total_counts,
             'organized_counts': organized_counts,
             'no_main_file_counts': no_main_file_counts,
@@ -900,23 +943,17 @@ def quick_match_contract_files():
 @require_auth
 def create_contract():
     body = request.get_json(silent=True) or {}
+    is_super_user = _is_current_user_super_role()
 
     color_flag = (body.get('color_flag') or '').strip()
     if color_flag and color_flag not in COLOR_FLAG_OPTIONS:
         return jsonify({'message': 'color_flag is invalid'}), 400
 
-    completeness = (body.get('completeness') or '').strip()
-    if completeness and completeness not in COMPLETENESS_OPTIONS:
-        return jsonify({'message': 'completeness is invalid'}), 400
-    if completeness and not _is_current_user_super_role():
-        return jsonify({'message': '仅超管或群晖超管可手工修改完整性'}), 403
+    requested_completeness = (body.get('completeness') or '').strip()
 
     record, message, status_code, _ = _build_contract_record(body, g.current_user, update_mode=False)
     if record is None:
         return jsonify({'message': message}), status_code
-
-    if completeness:
-        record.completeness = completeness
 
     db.session.add(record)
     try:
@@ -934,7 +971,10 @@ def create_contract():
     if renamed_file_path:
         record.file_path = renamed_file_path
 
-    if not completeness:
+    # 仅当超管明确传入“是”时允许手工置为“是”，其余情况统一走系统规则。
+    if requested_completeness == '是' and is_super_user:
+        record.completeness = '是'
+    else:
         record.completeness = _build_completeness_value(
             record.file_path,
             record.contract_determination_method,
@@ -1145,6 +1185,7 @@ def update_contract(contract_id):
     is_super_user = _is_current_user_super_role()
 
     denied = _ensure_archived_contract_editable(record)
+
     if denied:
         return denied
 
@@ -1243,13 +1284,9 @@ def update_contract(contract_id):
         if color_flag and color_flag not in COLOR_FLAG_OPTIONS:
             return jsonify({'message': 'color_flag is invalid'}), 400
         record.color_flag = color_flag or None
-    if 'completeness' in body:
-        completeness = (body.get('completeness') or '').strip()
-        if completeness and completeness not in COMPLETENESS_OPTIONS:
-            return jsonify({'message': 'completeness is invalid'}), 400
-        if completeness and not is_super_user:
-            return jsonify({'message': '仅超管或群晖超管可手工修改完整性'}), 403
-        record.completeness = completeness or None
+
+    requested_completeness = (body.get('completeness') or '').strip() if 'completeness' in body else ''
+        
     if 'project' in body:
         project = (body.get('project') or '').strip() or None
         if project:
@@ -1281,7 +1318,10 @@ def update_contract(contract_id):
     if renamed_file_path:
         record.file_path = renamed_file_path
 
-    if 'completeness' not in body:
+    # 仅当超管明确传入“是”时允许手工置为“是”，其余情况统一走系统规则。
+    if requested_completeness == '是' and is_super_user:
+        record.completeness = '是'
+    else:
         record.completeness = _build_completeness_value(
             record.file_path,
             record.contract_determination_method,

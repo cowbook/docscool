@@ -112,6 +112,8 @@ class Department(db.Model):
     name = db.Column(db.String(50), unique=True, nullable=False, index=True)
     is_existing = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))
     current_department_name = db.Column(db.String(50), nullable=True)
+    principal_login_name = db.Column(db.String(128), nullable=True)
+    handler_login_name = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def to_dict(self):
@@ -120,6 +122,8 @@ class Department(db.Model):
             'name': self.name,
             'is_existing': bool(self.is_existing),
             'current_department_name': self.current_department_name or '',
+            'principal_login_name': self.principal_login_name or '',
+            'handler_login_name': self.handler_login_name or '',
             'created_at': self.created_at.isoformat(),
         }
 

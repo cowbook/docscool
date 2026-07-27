@@ -48,6 +48,44 @@
             <span v-else>{{ scope.row.current_department_name || '-' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="负责人" min-width="220">
+          <template #default="scope">
+            <el-select
+              v-if="canManage"
+              v-model="scope.row.principal_login_name"
+              filterable
+              clearable
+              placeholder="请选择负责人"
+            >
+              <el-option
+                v-for="item in userOptions"
+                :key="`principal-${item.login_name}`"
+                :label="item.label"
+                :value="item.login_name"
+              />
+            </el-select>
+            <span v-else>{{ scope.row.principal_login_name || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="经办人" min-width="220">
+          <template #default="scope">
+            <el-select
+              v-if="canManage"
+              v-model="scope.row.handler_login_name"
+              filterable
+              clearable
+              placeholder="请选择经办人"
+            >
+              <el-option
+                v-for="item in userOptions"
+                :key="`handler-${item.login_name}`"
+                :label="item.label"
+                :value="item.login_name"
+              />
+            </el-select>
+            <span v-else>{{ scope.row.handler_login_name || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="created_at" label="创建时间" min-width="220" />
         <el-table-column v-if="canManage" label="操作" width="180" fixed="right">
           <template #default="scope">
@@ -74,6 +112,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 
 const departments = ref([])
+const userOptions = ref([])
 const newDepartment = ref('')
 const saving = ref(false)
 const savingRowId = ref(0)
@@ -94,8 +133,28 @@ const loadDepartments = async () => {
       ...item,
       is_existing: normalizeExistingValue(item?.is_existing),
       current_department_name: String(item?.current_department_name || ''),
+      principal_login_name: String(item?.principal_login_name || ''),
+      handler_login_name: String(item?.handler_login_name || ''),
     }))
     : []
+}
+
+const loadUserOptions = async () => {
+  const { data } = await http.get('/settings/users/options')
+  const rows = Array.isArray(data?.users) ? data.users : []
+  userOptions.value = rows
+    .map((item) => {
+      const loginName = String(item?.login_name || '').trim()
+      if (!loginName) {
+        return null
+      }
+      const description = String(item?.description || '').trim()
+      return {
+        login_name: loginName,
+        label: description ? `${loginName} (${description})` : loginName,
+      }
+    })
+    .filter(Boolean)
 }
 
 const loadCurrentPermission = async () => {
@@ -154,6 +213,8 @@ const saveDepartment = async (row) => {
     await http.put(`/settings/departments/${row.id}`, {
       is_existing: isExisting,
       current_department_name: currentDepartmentName,
+      principal_login_name: String(row.principal_login_name || '').trim(),
+      handler_login_name: String(row.handler_login_name || '').trim(),
     })
     ElMessage.success('保存成功')
     await loadDepartments()
@@ -186,7 +247,7 @@ const removeDepartment = async (row) => {
 
 onMounted(async () => {
   try {
-    await Promise.all([loadCurrentPermission(), loadDepartments()])
+    await Promise.all([loadCurrentPermission(), loadDepartments(), loadUserOptions()])
   } catch (_error) {
     ElMessage.error('部门列表加载失败')
   }

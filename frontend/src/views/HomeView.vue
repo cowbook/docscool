@@ -83,10 +83,10 @@
                   class="dept-current-table"
                 >
                   <el-table-column prop="department" label="现管部门" min-width="180" />
-                  <el-table-column prop="total_count" label="总数" min-width="90" align="right" />
-                  <el-table-column prop="organized_count" label="已整理" min-width="90" align="right" />
-                  <el-table-column prop="no_main_file_count" label="无主文件" min-width="110" align="right" />
-                  <el-table-column prop="current_year_count" label="本年度" min-width="90" align="right" />
+                  <el-table-column prop="handler_description" label="经办人" min-width="220" />
+                  <el-table-column prop="organized_progress" label="整理进度" min-width="110" align="right" />
+                  <el-table-column prop="no_main_file_count" label="无信息附件" min-width="110" align="right" />
+                  <el-table-column prop="current_year_count" label="本年合同录入" min-width="90" align="right" />
                 </el-table>
               </section>
             </div>
@@ -421,14 +421,22 @@ const applyDashboardData = (stat, charts) => {
     const organized = Array.isArray(payload.organized_counts) ? payload.organized_counts : []
     const noMainFiles = Array.isArray(payload.no_main_file_counts) ? payload.no_main_file_counts : []
     const currentYear = Array.isArray(payload.current_year_counts) ? payload.current_year_counts : []
+    const handlers = Array.isArray(payload.handler_descriptions) ? payload.handler_descriptions : []
 
-    deptCurrentManagementRows.value = departments.map((department, index) => ({
-      department,
-      total_count: Number(totals[index] || 0),
-      organized_count: Number(organized[index] || 0),
-      no_main_file_count: Number(noMainFiles[index] || 0),
-      current_year_count: Number(currentYear[index] || 0),
-    }))
+    deptCurrentManagementRows.value = departments.map((department, index) => {
+      const totalCount = Number(totals[index] || 0)
+      const organizedCount = Number(organized[index] || 0)
+      const noMainFileCount = Number(noMainFiles[index] || 0)
+      const denominator = totalCount + noMainFileCount
+
+      return {
+        department,
+        handler_description: String(handlers[index] || '').trim() || '-',
+        organized_progress: `${organizedCount}/${denominator}`,
+        no_main_file_count: noMainFileCount,
+        current_year_count: Number(currentYear[index] || 0),
+      }
+    })
   }
 }
 

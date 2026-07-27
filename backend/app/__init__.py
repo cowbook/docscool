@@ -239,6 +239,8 @@ def _ensure_department_columns():
     required_columns = {
         'is_existing': 'ALTER TABLE departments ADD COLUMN is_existing BOOLEAN NOT NULL DEFAULT 1',
         'current_department_name': 'ALTER TABLE departments ADD COLUMN current_department_name VARCHAR(50)',
+        'principal_login_name': 'ALTER TABLE departments ADD COLUMN principal_login_name VARCHAR(128)',
+        'handler_login_name': 'ALTER TABLE departments ADD COLUMN handler_login_name VARCHAR(128)',
     }
     for column, ddl in required_columns.items():
         if column not in existing:

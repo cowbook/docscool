@@ -27,11 +27,34 @@ from .contracts_core import (
 from .models import Contract
 
 
+def _has_ocr_full_markdown(file_path: str) -> bool:
+    normalized_path = str(file_path or '').replace('\\', '/').strip().strip('/')
+    if not normalized_path:
+        return False
+
+    parts = [part.strip() for part in normalized_path.split('/') if part and part.strip()]
+    if not parts:
+        return False
+
+    file_name = parts[-1]
+    file_stem, _ext = os.path.splitext(file_name)
+    if not file_stem:
+        return False
+
+    ocr_root = os.path.realpath(os.path.join(current_app.root_path, '..', 'instance', 'ocr'))
+    candidate_path = os.path.realpath(os.path.join(ocr_root, *parts[:-1], file_stem, 'full.md'))
+    if not (candidate_path == ocr_root or candidate_path.startswith(ocr_root + os.sep)):
+        return False
+
+    return os.path.isfile(candidate_path)
+
+
 def _build_completeness_value(file_path: str, determination_method: str, purchase_type: str) -> str:
     has_file = bool(str(file_path or '').strip())
     has_determination = bool(str(determination_method or '').strip())
     has_purchase_type = bool(str(purchase_type or '').strip())
-    return '是' if has_file and has_determination and has_purchase_type else '否'
+    has_ocr_markdown = _has_ocr_full_markdown(file_path)
+    return '是' if has_file and has_determination and has_purchase_type and has_ocr_markdown else '否'
 
 _IMPORT_ERROR_REPORTS = {}
 COLOR_FLAG_OPTIONS = {'红旗', '橙旗', '黄旗', '绿旗', '蓝旗'}

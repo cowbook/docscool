@@ -187,6 +187,98 @@ def _normalize_role_value(value: str) -> str:
     return role if role in ROLE_VALUES else ROLE_ADMIN
 
 
+def _normalize_login_name(value) -> str:
+    return str(value or '').strip()
+
+
+def _validate_department_user(login_name: str, field_label: str):
+    if len(login_name) > 128:
+        raise ValueError(f'{field_label}最多128个字符')
+    if not login_name:
+        return None
+
+    row = UserPermission.query.filter_by(login_name=login_name).first()
+    if not row:
+        raise ValueError(f'{field_label}不在用户表中，请先在用户权限页面添加该用户')
+    return row
+
+
+def _department_representative_folder(name: str, is_existing: bool, current_department_name: str) -> str:
+    if not is_existing:
+        mapped = (current_department_name or '').strip()
+        if mapped:
+            return mapped
+    return (name or '').strip()
+
+
+def _grant_department_scope_edit_permission(user_row: UserPermission, department_name: str, folder_name: str) -> bool:
+    if not user_row:
+        return False
+    if _is_super_role(_normalize_role_value(getattr(user_row, 'role', ROLE_ADMIN))):
+        return False
+
+    department_name = (department_name or '').strip()
+    folder_name = (folder_name or '').strip()
+    if not department_name and not folder_name:
+        return False
+
+    items = user_row.get_permission_items()
+    edit_item = None
+    for item in items:
+        if str(item.get('permission') or '').strip() == PERMISSION_EDIT:
+            edit_item = item
+            break
+
+    changed = False
+    if not edit_item:
+        edit_item = {
+            'permission': PERMISSION_EDIT,
+            'departments': [],
+            'folders': [],
+        }
+        items.append(edit_item)
+        changed = True
+
+    departments = list(edit_item.get('departments') or [])
+    folders = list(edit_item.get('folders') or [])
+
+    if department_name and PERMISSION_ALL not in departments and department_name not in departments:
+        departments.append(department_name)
+        changed = True
+    if folder_name and PERMISSION_ALL not in folders and folder_name not in folders:
+        folders.append(folder_name)
+        changed = True
+
+    if changed:
+        edit_item['departments'] = departments
+        edit_item['folders'] = folders
+        user_row.set_permission_items(items)
+
+    return changed
+
+
+def _auto_grant_department_owner_permissions(
+    *,
+    department_name: str,
+    is_existing: bool,
+    current_department_name: str,
+    principal_row: UserPermission,
+    handler_row: UserPermission,
+):
+    folder_name = _department_representative_folder(department_name, is_existing, current_department_name)
+    changed = False
+    processed = set()
+
+    for user_row in (principal_row, handler_row):
+        if not user_row or user_row.id in processed:
+            continue
+        processed.add(user_row.id)
+        if _grant_department_scope_edit_permission(user_row, department_name, folder_name):
+            changed = True
+
+    return changed
+
+
 def _month_range_now() -> tuple[datetime, datetime]:
     now = datetime.now()
     month_start = datetime(now.year, now.month, 1, 0, 0, 0)
@@ -1040,6 +1132,21 @@ def list_user_permissions():
     })
 
 
+@contracts_bp.get('/settings/users/options')
+@require_auth
+def list_user_permission_options():
+    rows = UserPermission.query.order_by(UserPermission.login_name.asc()).all()
+    return jsonify({
+        'users': [
+            {
+                'login_name': row.login_name,
+                'description': row.description or '',
+            }
+            for row in rows
+        ],
+    })
+
+
 @contracts_bp.get('/settings/users/departments')
 @require_auth
 def list_user_permission_departments():
@@ -1573,6 +1680,8 @@ def create_department_setting():
     name = (body.get('name') or '').strip()
     is_existing = bool(body.get('is_existing', True))
     current_department_name = (body.get('current_department_name') or '').strip()
+    principal_login_name = _normalize_login_name(body.get('principal_login_name'))
+    handler_login_name = _normalize_login_name(body.get('handler_login_name'))
 
     if not name:
         return jsonify({'message': 'name is required'}), 400
@@ -1585,11 +1694,28 @@ def create_department_setting():
     if not is_existing and not current_department_name:
         return jsonify({'message': '历史部门请填写“现在部门”'}), 400
 
+    try:
+        principal_row = _validate_department_user(principal_login_name, '负责人')
+        handler_row = _validate_department_user(handler_login_name, '经办人')
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+
     row = Department(
         name=name,
         is_existing=is_existing,
         current_department_name=None if is_existing else current_department_name,
+        principal_login_name=principal_login_name or None,
+        handler_login_name=handler_login_name or None,
     )
+
+    _auto_grant_department_owner_permissions(
+        department_name=name,
+        is_existing=is_existing,
+        current_department_name=current_department_name,
+        principal_row=principal_row,
+        handler_row=handler_row,
+    )
+
     db.session.add(row)
     db.session.commit()
 
@@ -1609,13 +1735,36 @@ def update_department_setting(department_id):
 
     is_existing = bool(body.get('is_existing', True))
     current_department_name = (body.get('current_department_name') or '').strip()
+    principal_login_name = _normalize_login_name(
+        body.get('principal_login_name') if 'principal_login_name' in body else row.principal_login_name
+    )
+    handler_login_name = _normalize_login_name(
+        body.get('handler_login_name') if 'handler_login_name' in body else row.handler_login_name
+    )
     if len(current_department_name) > 50:
         return jsonify({'message': '现在部门最多50个字符'}), 400
     if not is_existing and not current_department_name:
         return jsonify({'message': '历史部门请填写“现在部门”'}), 400
 
+    try:
+        principal_row = _validate_department_user(principal_login_name, '负责人')
+        handler_row = _validate_department_user(handler_login_name, '经办人')
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+
     row.is_existing = is_existing
     row.current_department_name = None if is_existing else current_department_name
+    row.principal_login_name = principal_login_name or None
+    row.handler_login_name = handler_login_name or None
+
+    _auto_grant_department_owner_permissions(
+        department_name=row.name,
+        is_existing=is_existing,
+        current_department_name=current_department_name,
+        principal_row=principal_row,
+        handler_row=handler_row,
+    )
+
     db.session.commit()
     return jsonify(row.to_dict())
 
