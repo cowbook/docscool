@@ -778,6 +778,26 @@ def _build_contract_attachment_base_name(record: Contract) -> str:
     return f"{number}{name}".strip()
 
 
+def _build_contract_attachment_target_directory(record: Contract) -> str:
+    current_management_department = str(getattr(record, 'current_management_department', '') or '').strip()
+    if not current_management_department:
+        current_management_department = _resolve_current_management_department_name(getattr(record, 'department', '') or '')
+
+    if not current_management_department:
+        current_management_department = str(getattr(record, 'department', '') or '').strip()
+
+    if not current_management_department:
+        return ''
+
+    handling_date = getattr(record, 'handling_date', None)
+    if isinstance(handling_date, (date, datetime)):
+        year_text = str(handling_date.year)
+    else:
+        year_text = str(datetime.now().year)
+
+    return _build_synology_file_path(current_management_department, year_text)
+
+
 def _next_available_folder_name(parent_dir: str, desired_name: str) -> str:
     if not os.path.isdir(parent_dir):
         return desired_name
@@ -845,27 +865,51 @@ def _rename_contract_file_to_contract_identity(record: Contract) -> str:
     if not normalized_file_path:
         return ''
 
-    directory = posixpath.dirname(normalized_file_path)
     old_name = posixpath.basename(normalized_file_path)
     if not old_name:
         return normalized_file_path
 
-    old_stem, ext = os.path.splitext(old_name)
+    target_directory = _build_contract_attachment_target_directory(record)
     target_base = _build_contract_attachment_base_name(record)
-    if not target_base:
+    if not target_base or not target_directory:
         return normalized_file_path
 
+    old_stem, ext = os.path.splitext(old_name)
     desired_name = f"{target_base}{ext}"
+    desired_file_path = _build_synology_file_path(target_directory, desired_name)
+
+    if desired_file_path == normalized_file_path:
+        return normalized_file_path
 
     if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
-        remote_folder = _build_filestation_path(directory) if directory else _build_filestation_path()
+        remote_folder = _build_filestation_path(target_directory)
         remote_file_path = _build_filestation_path(normalized_file_path)
         sid = _synology_upload_login()
+        _synology_ensure_remote_folder(sid, remote_folder)
         existing_names = _synology_list_file_names(sid, remote_folder)
-        existing_without_current = [name for name in existing_names if name != old_name]
-        final_name = _next_available_filename(existing_without_current, desired_name)
+        final_name = _next_available_filename(existing_names, desired_name)
+
+        current_folder = posixpath.dirname(normalized_file_path)
+        if current_folder != target_directory:
+            payload = _synology_api_post(
+                sid,
+                {
+                    'api': 'SYNO.FileStation.CopyMove',
+                    'version': '3',
+                    'method': 'start',
+                },
+                data={
+                    'path': f'["{remote_file_path}"]',
+                    'dest_folder_path': remote_folder,
+                    'remove_src': 'true',
+                    'overwrite': 'false',
+                },
+            )
+            if not payload.get('success'):
+                raise RuntimeError(f"Synology 文件移动失败: {_synology_error_message(payload, 'filestation')}")
 
         if final_name != old_name:
+            target_remote_path = _build_filestation_path(target_directory, old_name)
             payload = _synology_api_post(
                 sid,
                 {
@@ -874,26 +918,27 @@ def _rename_contract_file_to_contract_identity(record: Contract) -> str:
                     'method': 'rename',
                 },
                 data={
-                    'path': _synology_json_array(remote_file_path),
+                    'path': _synology_json_array(target_remote_path if current_folder != target_directory else remote_file_path),
                     'name': _synology_json_array(final_name),
                 },
             )
             if not payload.get('success'):
                 raise RuntimeError(f"Synology 文件重命名失败: {_synology_error_message(payload, 'filestation')}")
-        new_file_path = _build_synology_file_path(directory, final_name)
+        new_file_path = _build_synology_file_path(target_directory, final_name)
     else:
         local_file_path = _safe_local_file_path(normalized_file_path)
         if not os.path.isfile(local_file_path):
             raise FileNotFoundError('文件不存在或已被移动')
 
-        local_dir = os.path.dirname(local_file_path)
+        target_local_dir = _safe_local_folder_path(target_directory)
+        os.makedirs(target_local_dir, exist_ok=True)
         existing_names = [
-            name for name in os.listdir(local_dir)
-            if os.path.isfile(os.path.join(local_dir, name)) and name != old_name
+            name for name in os.listdir(target_local_dir)
+            if os.path.isfile(os.path.join(target_local_dir, name)) and name != old_name
         ]
         final_name = _next_available_filename(existing_names, desired_name)
-        new_file_path = _build_synology_file_path(directory, final_name)
-        if final_name != old_name:
+        new_file_path = _build_synology_file_path(target_directory, final_name)
+        if final_name != old_name or posixpath.dirname(normalized_file_path) != target_directory:
             new_local_path = _safe_local_file_path(new_file_path)
             os.rename(local_file_path, new_local_path)
 

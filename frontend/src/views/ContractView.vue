@@ -159,9 +159,9 @@
             placeholder="搜索任意合同字段"
             style="width: 280px"
             @clear="loadContracts"
-            @keyup.enter="loadContracts"
+            @keyup.enter="searchContracts"
           />
-          <el-button type="primary" @click="loadContracts">搜索</el-button>
+          <el-button type="primary" @click="searchContracts">搜索</el-button>
         </div>
       </div>
 
@@ -1223,21 +1223,36 @@ const loadLinkTreeSnapshot = async () => {
   }
 }
 
-const loadContracts = async () => {
-  const { data } = await http.get('/contracts', {
-    params: {
-      current_management_department: filters.current_management_department || undefined,
-      handling_department: filters.handling_department || undefined,
-      project: filters.project || undefined,
-      color_flag: filters.color_flag || undefined,
-      completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
+const buildContractListParams = (searchOnly = false) => {
+  if (searchOnly && filters.keyword) {
+    return {
       keyword: filters.keyword || undefined,
-      has_file: filters.has_file || undefined,
-      is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
-    },
+    }
+  }
+
+  return {
+    current_management_department: filters.current_management_department || undefined,
+    handling_department: filters.handling_department || undefined,
+    project: filters.project || undefined,
+    color_flag: filters.color_flag || undefined,
+    completeness: filters.completeness !== null ? (filters.completeness ? '是' : '否') : undefined,
+    keyword: filters.keyword || undefined,
+    has_file: filters.has_file || undefined,
+    is_archived: filters.is_archived !== null ? (filters.is_archived ? '已归档' : '未归档') : undefined,
+  }
+}
+
+const loadContracts = async (options = {}) => {
+  const { searchOnly = false } = options
+  const { data } = await http.get('/contracts', {
+    params: buildContractListParams(searchOnly),
   })
   contracts.value = data
   currentPage.value = 1
+}
+
+const searchContracts = async () => {
+  await loadContracts({ searchOnly: true })
 }
 
 const handleContractSaved = async () => {
