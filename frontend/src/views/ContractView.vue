@@ -125,6 +125,10 @@
         </div>
         <div class="toolbar-row">
 
+          <el-select v-model="filters.current_management_department" clearable placeholder="按现管部门筛选" style="width: 220px" @change="loadContracts">
+            <el-option value="__empty__" label="(空)" />
+            <el-option v-for="item in existingDepartmentFilterOptions" :key="item" :label="item" :value="item" />
+          </el-select>
 
           <el-select v-model="filters.handling_department" clearable placeholder="按承办部门筛选" style="width: 220px" @change="loadContracts">
             <el-option value="__empty__" label="(空)" />
@@ -831,6 +835,7 @@ const aiFolderTreeProps = {
 }
 
 const filters = reactive({
+  current_management_department: '',
   handling_department: '',
   project: '',
   color_flag: '',
@@ -943,6 +948,11 @@ const departmentFilterOptions = computed(() => {
     }
   })
   return Array.from(merged).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
+const existingDepartmentFilterOptions = computed(() => {
+  return Array.from(new Set((existingDepartments.value || []).map((item) => String(item || '').trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
 })
 
 const quickMatchTargetIds = computed(() => {
@@ -1216,6 +1226,7 @@ const loadLinkTreeSnapshot = async () => {
 const loadContracts = async () => {
   const { data } = await http.get('/contracts', {
     params: {
+      current_management_department: filters.current_management_department || undefined,
       handling_department: filters.handling_department || undefined,
       project: filters.project || undefined,
       color_flag: filters.color_flag || undefined,
@@ -1482,6 +1493,7 @@ const downloadImportErrorReport = async (token, fallbackName = '合同导入失�
 }
 
 const buildExportParams = () => ({
+  current_management_department: filters.current_management_department || undefined,
   handling_department: filters.handling_department || undefined,
   project: filters.project || undefined,
   color_flag: filters.color_flag || undefined,

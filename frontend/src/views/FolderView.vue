@@ -784,6 +784,12 @@ const showContextMenu = (event, path = '') => {
   hideFileContextMenu()
   const normalizedPath = normalizePath(path)
 
+  // 非超管不允许在顶层存储（根目录）触发右键菜单。
+  if (!normalizedPath && !isSuperAdminUser.value) {
+    hideContextMenu()
+    return
+  }
+
   if (isViewPermissionUser.value) {
     hideContextMenu()
     return

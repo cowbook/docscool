@@ -306,6 +306,7 @@ def list_contracts():
     is_archived = (request.args.get('is_archived') or '').strip()
     color_flag = (request.args.get('color_flag') or '').strip()
     completeness = (request.args.get('completeness') or '').strip()
+    current_management_department = (request.args.get('current_management_department') or '').strip()
 
     query = Contract.query
     unrestricted, allowed_departments = _resolve_current_user_department_scope()
@@ -318,6 +319,10 @@ def list_contracts():
         query = query.filter(Contract.department.is_(None))
     elif department:
         query = query.filter(Contract.department == department)
+    if current_management_department == '__empty__':
+        query = query.filter(Contract.current_management_department.is_(None))
+    elif current_management_department:
+        query = query.filter(Contract.current_management_department == current_management_department)
     if project == '__empty__':
         query = query.filter(Contract.project.is_(None))
     elif project:
@@ -383,6 +388,7 @@ def export_contracts_excel():
     is_archived = (request.args.get('is_archived') or '').strip()
     color_flag = (request.args.get('color_flag') or '').strip()
     completeness = (request.args.get('completeness') or '').strip()
+    current_management_department = (request.args.get('current_management_department') or '').strip()
 
     query = Contract.query
     unrestricted, allowed_departments = _resolve_current_user_department_scope()
@@ -395,6 +401,10 @@ def export_contracts_excel():
         query = query.filter(Contract.department.is_(None))
     elif department:
         query = query.filter(Contract.department == department)
+    if current_management_department == '__empty__':
+        query = query.filter(Contract.current_management_department.is_(None))
+    elif current_management_department:
+        query = query.filter(Contract.current_management_department == current_management_department)
     if project == '__empty__':
         query = query.filter(Contract.project.is_(None))
     elif project:
@@ -522,6 +532,7 @@ def export_group_report_excel():
             return jsonify({'message': 'year 参数无效'}), 400
     else:
         report_year = date.today().year
+    current_management_department = (request.args.get('current_management_department') or '').strip()
 
     if report_year < 2025 or report_year > date.today().year:
         return jsonify({'message': 'year 参数超出允许范围'}), 400
@@ -534,6 +545,10 @@ def export_group_report_excel():
     is_archived = (request.args.get('is_archived') or '').strip()
     color_flag = (request.args.get('color_flag') or '').strip()
     completeness = (request.args.get('completeness') or '').strip()
+    if current_management_department == '__empty__':
+        query = query.filter(Contract.current_management_department.is_(None))
+    elif current_management_department:
+        query = query.filter(Contract.current_management_department == current_management_department)
 
     query = Contract.query
     unrestricted, allowed_departments = _resolve_current_user_department_scope()
@@ -748,12 +763,7 @@ def get_dashboard_charts():
 
         handler_login_name = str(handler_login_by_department.get(name, '') or '').strip()
         handler_description = str(handler_desc_by_login.get(handler_login_name, '') or '').strip()
-        if handler_login_name and handler_description:
-            handler_descriptions.append(f'{handler_login_name}（{handler_description}）')
-        elif handler_description:
-            handler_descriptions.append(handler_description)
-        else:
-            handler_descriptions.append(handler_login_name)
+        handler_descriptions.append(handler_description)
 
     storage_pdf_paths = {
         _normalize_relative_path(item.get('path') or '')

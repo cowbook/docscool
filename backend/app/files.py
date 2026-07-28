@@ -819,6 +819,19 @@ def _resolve_current_user_folder_scope() -> tuple[bool, set[str]]:
     return False, allowed_folders
 
 
+def _is_current_user_super_role() -> bool:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return False
+
+    row = UserPermission.query.filter_by(login_name=username).first()
+    if not row:
+        return False
+
+    role = str(getattr(row, 'role', '') or '').strip()
+    return role in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
+
+
 def _thumbs_root_dir() -> str:
     backend_root = os.path.abspath(os.path.join(current_app.root_path, '..'))
     thumbs_root = os.path.join(backend_root, 'instance', 'thumbs')
@@ -1617,7 +1630,15 @@ def create_folder():
     name = body.get('name') or ''
 
     try:
-        folder_path = _create_storage_folder(parent_path, name)
+        normalized_parent = _normalize_relative_path(parent_path)
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+
+    if not normalized_parent and not _is_current_user_super_role():
+        return jsonify({'message': '仅超管可在顶层创建目录'}), 403
+
+    try:
+        folder_path = _create_storage_folder(normalized_parent, name)
     except FileExistsError as exc:
         return jsonify({'message': str(exc)}), 409
     except FileNotFoundError as exc:
@@ -1630,7 +1651,7 @@ def create_folder():
     _write_file_operation_log(
         operation_type='新建',
         operation_target=folder_path,
-        detail=f'新建文件夹：父目录={_normalize_relative_path(parent_path) if parent_path else "/"}',
+        detail=f'新建文件夹：父目录={normalized_parent if normalized_parent else "/"}',
     )
 
     return jsonify({'path': folder_path}), 201
