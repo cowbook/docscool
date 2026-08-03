@@ -391,6 +391,11 @@ def _normalize_option_fields(fields: dict) -> dict:
         option_sets.get('purchase_type', []),
         '',
     )
+    normalized['contract_execution_status'] = _match_option_value(
+        normalized.get('contract_execution_status', ''),
+        option_sets.get('contract_execution_status', []),
+        '正在执行',
+    )
     normalized['pricing_method'] = _match_option_value(
         normalized.get('pricing_method', ''),
         option_sets.get('pricing_method', []),

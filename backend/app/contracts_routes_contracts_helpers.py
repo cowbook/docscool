@@ -49,12 +49,13 @@ def _has_ocr_full_markdown(file_path: str) -> bool:
     return os.path.isfile(candidate_path)
 
 
-def _build_completeness_value(file_path: str, determination_method: str, purchase_type: str) -> str:
+def _build_completeness_value(file_path: str, determination_method: str, purchase_type: str, execution_status: str = '') -> str:
     has_file = bool(str(file_path or '').strip())
     has_determination = bool(str(determination_method or '').strip())
     has_purchase_type = bool(str(purchase_type or '').strip())
+    has_execution_status = bool(str(execution_status or '').strip())
     has_ocr_markdown = _has_ocr_full_markdown(file_path)
-    return '是' if has_file and has_determination and has_purchase_type and has_ocr_markdown else '否'
+    return '是' if has_file and has_determination and has_purchase_type and has_execution_status and has_ocr_markdown else '否'
 
 _IMPORT_ERROR_REPORTS = {}
 COLOR_FLAG_OPTIONS = {'红旗', '橙旗', '黄旗', '绿旗', '蓝旗'}
@@ -75,6 +76,7 @@ EXCEL_HEADER_ALIASES = {
     'contract_amount': ['合同金额', '金额', '价税合计', '含税金额', '总价', '合同总价', '合同总金额'],
     'handler': ['承办人', '经办人', '负责人', '申请人', '发起人', '填报人'],
     'handling_department': ['承办部门', '部门', '归口部门', '申请部门', '发起部门', '所属部门'],
+    'contract_execution_status': ['合同执行状态'],
     'contract_determination_method': ['合同确定方式', '确定方式', '采购方式', '招采方式', '定标方式'],
     'handling_date': ['承办日期', '处理日期', '审批日期', '日期', '发起日期', '申请日期', '创建时间', '提交时间'],
     'contract_type': ['合同类型', '类型'],
@@ -307,6 +309,7 @@ def _build_contract_import_template():
         '存档位置',
         '承办人',
         '承办部门',
+        '合同执行状态',
         '合同确定方式',
         '承办日期',
         '合同类型',
@@ -315,7 +318,7 @@ def _build_contract_import_template():
         '计价方式',
         '项目',
     ]
-    widths = [26, 20, 24, 16, 10, 20, 14, 18, 18, 14, 14, 14, 12, 14, 22]
+    widths = [26, 20, 24, 16, 10, 20, 14, 18, 14, 18, 14, 14, 14, 12, 14, 22]
 
     sheet.append(headers)
     header_fill = PatternFill(fill_type='solid', fgColor='DCE6F1')
@@ -678,6 +681,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                     existing_contract.file_path,
                     existing_contract.contract_determination_method,
                     existing_contract.purchase_type,
+                    existing_contract.contract_execution_status,
                 )
                 existing_contract.updated_by = created_by
                 return existing_contract, '', 0, True
@@ -710,6 +714,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         handling_date=_parse_date(payload.get('handling_date')),
         contract_type=normalized_contract_type or None,
         purchase_type=purchase_type,
+        contract_execution_status=(payload.get('contract_execution_status') or '').strip() or '正在执行',
         stamp_tax_rate=normalized_stamp_tax_rate or None,
         pricing_method=(payload.get('pricing_method') or '').strip() or None,
         copy_count=copy_count,

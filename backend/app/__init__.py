@@ -64,6 +64,7 @@ def _ensure_contract_columns():
         'handling_date': 'ALTER TABLE contracts ADD COLUMN handling_date DATE',
         'contract_type': 'ALTER TABLE contracts ADD COLUMN contract_type VARCHAR(64)',
         'purchase_type': 'ALTER TABLE contracts ADD COLUMN purchase_type VARCHAR(64)',
+        'contract_execution_status': 'ALTER TABLE contracts ADD COLUMN contract_execution_status VARCHAR(32)',
         'stamp_tax_rate': 'ALTER TABLE contracts ADD COLUMN stamp_tax_rate VARCHAR(32)',
         'pricing_method': 'ALTER TABLE contracts ADD COLUMN pricing_method VARCHAR(64)',
         'copy_count': 'ALTER TABLE contracts ADD COLUMN copy_count INTEGER',
@@ -98,6 +99,7 @@ def _drop_legacy_contract_columns():
         'handling_date',
         'contract_type',
         'purchase_type',
+        'contract_execution_status',
         'stamp_tax_rate',
         'pricing_method',
         'copy_count',
@@ -144,6 +146,7 @@ def _drop_legacy_contract_columns():
             handling_date DATE,
             contract_type VARCHAR(64),
             purchase_type VARCHAR(64),
+            contract_execution_status VARCHAR(32),
             stamp_tax_rate VARCHAR(32),
             pricing_method VARCHAR(64),
             copy_count INTEGER,
@@ -172,7 +175,7 @@ def _drop_legacy_contract_columns():
         INSERT INTO contracts (
             id, contract_number, contract_name, contract_unit, amount, currency,
             handler, department, current_management_department, contract_form, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, color_flag, completeness, project,
+            handling_date, contract_type, purchase_type, contract_execution_status, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, color_flag, completeness, project,
             original_contract_id,
             fullbody, start_date, end_date, status, file_path, created_by,
             updated_by, created_at, updated_at
@@ -180,7 +183,7 @@ def _drop_legacy_contract_columns():
         SELECT
             id, contract_number, contract_name, contract_unit, amount, currency,
             handler, department, NULL, NULL, contract_determination_method,
-            handling_date, contract_type, purchase_type, stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, NULL, NULL, project,
+            handling_date, contract_type, purchase_type, '正在执行', stamp_tax_rate, pricing_method, copy_count, save_place, is_archived, NULL, NULL, project,
             NULL,
             fullbody, start_date, end_date, status, file_path, created_by,
             created_by, created_at, updated_at
@@ -257,6 +260,7 @@ def _ensure_contract_business_columns():
         'current_management_department': 'ALTER TABLE contracts ADD COLUMN current_management_department VARCHAR(128)',
         'color_flag': 'ALTER TABLE contracts ADD COLUMN color_flag VARCHAR(32)',
         'completeness': 'ALTER TABLE contracts ADD COLUMN completeness VARCHAR(4)',
+        'contract_execution_status': 'ALTER TABLE contracts ADD COLUMN contract_execution_status VARCHAR(32)',
     }
 
     for column, ddl in required_columns.items():
@@ -273,13 +277,19 @@ def _backfill_contract_completeness():
         has_file = bool(str(getattr(row, 'file_path', '') or '').strip())
         has_determination = bool(str(getattr(row, 'contract_determination_method', '') or '').strip())
         has_purchase_type = bool(str(getattr(row, 'purchase_type', '') or '').strip())
-        next_value = '是' if has_file and has_determination and has_purchase_type else '否'
+        has_execution_status = bool(str(getattr(row, 'contract_execution_status', '') or '').strip())
+        next_value = '是' if has_file and has_determination and has_purchase_type and has_execution_status else '否'
         if str(getattr(row, 'completeness', '') or '').strip() != next_value:
             row.completeness = next_value
             changed += 1
 
     if changed > 0:
         db.session.commit()
+
+
+def _backfill_contract_execution_status():
+    db.session.execute(db.text("UPDATE contracts SET contract_execution_status = '正在执行' WHERE contract_execution_status IS NULL OR TRIM(contract_execution_status) = ''"))
+    db.session.commit()
 
 
 def _backfill_current_management_department():
@@ -594,6 +604,7 @@ def create_app() -> Flask:
         _migrate_legacy_file_paths(app)
         _backfill_current_management_department()
         _backfill_contract_completeness()
+        _backfill_contract_execution_status()
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(contracts_bp)

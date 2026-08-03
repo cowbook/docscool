@@ -269,7 +269,7 @@
                   />
                 </el-tooltip>
 
-                <span class="file-name" :title="getFileName(scope.row.file_path)">
+                <span class="file-name" :title="scope.row.file_path || ''">
                   {{ getFileName(scope.row.file_path) || '缺失' }}
                 </span>
               </el-link>
@@ -546,6 +546,7 @@ const DEFAULT_TABLE_COLUMNS = [
   { key: 'contract_name', prop: 'contract_name', label: '合同名称', minWidth: 220, visible: true, sortable: true, showOverflowTooltip: true },
   { key: 'file_path', prop: 'file_path', label: '文件', minWidth: 220, visible: true, sortable: false, showOverflowTooltip: false },
   { key: 'contract_unit', prop: 'contract_unit', label: '合同单位', minWidth: 180, visible: true, sortable: true, showOverflowTooltip: true },
+  { key: 'contract_execution_status', prop: 'contract_execution_status', label: '合同执行状态', minWidth: 130, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'contract_amount', prop: 'contract_amount', label: '合同金额', minWidth: 120, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'copy_count', prop: 'copy_count', label: '份数', minWidth: 80, visible: true, sortable: true, showOverflowTooltip: false },
   { key: 'handler', prop: 'handler', label: '承办人', minWidth: 100, visible: true, sortable: true, showOverflowTooltip: false },
@@ -580,24 +581,17 @@ const loadStoredTableColumns = () => {
       return cloneTableColumns()
     }
 
-    const merged = []
-    const seen = new Set()
-
+    const parsedMap = new Map()
     parsed.forEach((item) => {
-      const base = DEFAULT_TABLE_COLUMNS.find((column) => column.key === item?.key)
-      if (base) {
-        merged.push({ ...base, ...item, visible: item.visible !== false })
-        seen.add(base.key)
+      if (item?.key) {
+        parsedMap.set(item.key, item)
       }
     })
 
-    DEFAULT_TABLE_COLUMNS.forEach((item) => {
-      if (!seen.has(item.key)) {
-        merged.push({ ...item })
-      }
+    return DEFAULT_TABLE_COLUMNS.map((item) => {
+      const stored = parsedMap.get(item.key)
+      return stored ? { ...item, ...stored, visible: stored.visible !== false } : { ...item }
     })
-
-    return merged.length ? merged : cloneTableColumns()
   } catch (_error) {
     return cloneTableColumns()
   }

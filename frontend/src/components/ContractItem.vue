@@ -138,6 +138,11 @@
                   @blur="normalizeContractAmount"
                 />
               </el-form-item>
+              <el-form-item label="合同执行状态">
+                <el-select v-model="form.contract_execution_status" placeholder="请选择合同执行状态" style="width: 100%">
+                  <el-option v-for="item in normalizedOptions.contract_execution_status" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="份数">
                 <el-input
                   v-model="form.copy_count"
@@ -613,6 +618,7 @@ const normalizedOptions = computed(() => ({
   contract_determination_method: props.options?.contract_determination_method || [],
   contract_type: props.options?.contract_type || [],
   purchase_type: props.options?.purchase_type || [],
+  contract_execution_status: props.options?.contract_execution_status || [],
   stamp_tax_rate_by_contract_type: props.options?.stamp_tax_rate_by_contract_type || {},
   pricing_method: props.options?.pricing_method || [],
   is_archived: props.options?.is_archived || [],
@@ -659,8 +665,9 @@ const computeCompletenessValue = () => {
   const hasFile = !!String(form.file_path || '').trim()
   const hasDetermination = !!String(form.contract_determination_method || '').trim()
   const hasPurchaseType = !!String(form.purchase_type || '').trim()
+  const hasExecutionStatus = !!String(form.contract_execution_status || '').trim()
   const hasOcrMarkdown = !!ocrMdLinkEnabled.value
-  return hasFile && hasDetermination && hasPurchaseType && hasOcrMarkdown ? '是' : '否'
+  return hasFile && hasDetermination && hasPurchaseType && hasExecutionStatus && hasOcrMarkdown ? '是' : '否'
 }
 
 const applyCompletenessDefault = ({ force = false } = {}) => {
@@ -743,6 +750,7 @@ const form = reactive({
   handling_date: '',
   contract_type: '',
   purchase_type: '',
+  contract_execution_status: '正在执行',
   stamp_tax_rate: '',
   pricing_method: '',
   is_archived: '未归档',
@@ -936,6 +944,7 @@ const resetForm = () => {
   form.handling_date = ''
   form.contract_type = ''
   form.purchase_type = ''
+  form.contract_execution_status = '正在执行'
   form.stamp_tax_rate = ''
   form.pricing_method = ''
   form.is_archived = '未归档'
@@ -1012,6 +1021,7 @@ const populateFormFromContract = (row) => {
   form.handling_date = row.handling_date || ''
   form.contract_type = row.contract_type || ''
   form.purchase_type = row.purchase_type || ''
+  form.contract_execution_status = row.contract_execution_status || '正在执行'
   form.stamp_tax_rate = row.stamp_tax_rate || getStampTaxRateByContractType(row.contract_type)
   form.pricing_method = row.pricing_method || ''
   form.is_archived = row.is_archived || '未归档'
@@ -1045,6 +1055,7 @@ const applyAiSupplementalFields = (fields, sourceRow = {}) => {
     ['handling_date', 'handling_date'],
     ['contract_type', 'contract_type'],
     ['purchase_type', 'purchase_type'],
+    ['contract_execution_status', 'contract_execution_status'],
     ['stamp_tax_rate', 'stamp_tax_rate'],
     ['pricing_method', 'pricing_method'],
     ['is_archived', 'is_archived'],
@@ -1091,6 +1102,7 @@ const applyParsedFields = (fields) => {
   form.handling_date = fields?.handling_date || ''
   form.contract_type = fields?.contract_type || ''
   form.purchase_type = fields?.purchase_type || ''
+  form.contract_execution_status = fields?.contract_execution_status || '正在执行'
   form.stamp_tax_rate = fields?.stamp_tax_rate || getStampTaxRateByContractType(fields?.contract_type)
   form.pricing_method = fields?.pricing_method || ''
   form.is_archived = fields?.is_archived || '未归档'
@@ -1307,6 +1319,7 @@ const saveContract = async () => {
         handling_date: form.handling_date,
         contract_type: form.contract_type,
         purchase_type: form.purchase_type,
+        contract_execution_status: form.contract_execution_status,
         stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,
@@ -1334,6 +1347,7 @@ const saveContract = async () => {
         handling_date: form.handling_date,
         contract_type: form.contract_type,
         purchase_type: form.purchase_type,
+        contract_execution_status: form.contract_execution_status,
         stamp_tax_rate: form.stamp_tax_rate,
         pricing_method: form.pricing_method,
         is_archived: form.is_archived,

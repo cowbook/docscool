@@ -88,6 +88,7 @@ CONTRACT_LOG_FIELDS = {
     'handling_date': '承办日期',
     'contract_type': '合同类型',
     'purchase_type': '采购类型',
+    'contract_execution_status': '合同执行状态',
     'stamp_tax_rate': '印花税率',
     'pricing_method': '计价方式',
     'copy_count': '份数',
@@ -465,7 +466,7 @@ def export_contracts_excel():
         sheet.title = '合同信息'
 
         headers = [
-            '合同编号', '合同名称', '合同单位', '合同金额', '币种', '承办人', '承办部门', '现管部门',
+            '合同编号', '合同名称', '合同单位', '合同执行状态', '合同金额', '币种', '承办人', '承办部门', '现管部门',
             '定标方式', '承办日期', '合同类型', '采购类型', '印花税率', '计价方式',
             '份数', '存档位置', '是否归档', '颜色标记', '完整性', '项目', '全文', '开始日期', '结束日期',
             '状态', '文件路径', '创建人', '修改人', '创建时间', '修改时间',
@@ -478,6 +479,7 @@ def export_contracts_excel():
                 payload.get('contract_number') or '',
                 payload.get('contract_name') or '',
                 payload.get('contract_unit') or '',
+                payload.get('contract_execution_status') or '',
                 payload.get('contract_amount') or '',
                 payload.get('currency') or '',
                 payload.get('handler') or '',
@@ -959,11 +961,18 @@ def create_contract():
     if color_flag and color_flag not in COLOR_FLAG_OPTIONS:
         return jsonify({'message': 'color_flag is invalid'}), 400
 
+    execution_status = (body.get('contract_execution_status') or '').strip()
+    if not execution_status:
+        return jsonify({'message': 'contract_execution_status is required'}), 400
+    if execution_status not in {'正在执行', '正常终止', '变更终止', '解除终止'}:
+        return jsonify({'message': 'contract_execution_status is invalid'}), 400
+
     requested_completeness = (body.get('completeness') or '').strip()
 
     record, message, status_code, _ = _build_contract_record(body, g.current_user, update_mode=False)
     if record is None:
         return jsonify({'message': message}), status_code
+    record.contract_execution_status = execution_status
 
     db.session.add(record)
     try:
@@ -989,6 +998,7 @@ def create_contract():
             record.file_path,
             record.contract_determination_method,
             record.purchase_type,
+            record.contract_execution_status,
         )
 
     db.session.flush()
@@ -1037,6 +1047,7 @@ def import_contracts_excel():
     required_headers = {
         'contract_name': '合同名称',
         'handling_department': '承办部门',
+        'contract_execution_status': '合同执行状态',
     }
     pending_contract_numbers = set()
     imported_count = 0
@@ -1233,6 +1244,13 @@ def update_contract(contract_id):
         record.handler = (body.get('handler') or '').strip() or None
     if 'contract_form' in body:
         record.contract_form = (body.get('contract_form') or '').strip() or None
+    if 'contract_execution_status' in body:
+        execution_status = (body.get('contract_execution_status') or '').strip()
+        if not execution_status:
+            return jsonify({'message': 'contract_execution_status is required'}), 400
+        if execution_status not in {'正在执行', '正常终止', '变更终止', '解除终止'}:
+            return jsonify({'message': 'contract_execution_status is invalid'}), 400
+        record.contract_execution_status = execution_status
     if 'handling_department' in body:
         department = (body.get('handling_department') or '').strip()
         if department:
@@ -1336,6 +1354,7 @@ def update_contract(contract_id):
             record.file_path,
             record.contract_determination_method,
             record.purchase_type,
+            record.contract_execution_status,
         )
 
     record.updated_by = (getattr(g, 'current_user', '') or '').strip() or None

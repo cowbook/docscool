@@ -539,6 +539,7 @@ const buildOcrPreviewUrlFromFilePath = (filePath) => {
 }
 
 const isSuperAdminUser = computed(() => ['super_admin', 'synology_super_admin'].includes(userRole.value))
+const isSynologySuperAdminUser = computed(() => userRole.value === 'synology_super_admin')
 const isViewPermissionUser = computed(() => {
   if (isSuperAdminUser.value) {
     return false
@@ -623,10 +624,10 @@ const canRenameContextFolder = computed(() => {
 
 const canDeleteContextFolder = computed(() => {
   const targetPath = normalizePath(contextTargetPath.value)
-  if (!targetPath || !hasFolderAccess(targetPath)) {
+  if (!isSynologySuperAdminUser.value) {
     return false
   }
-  if (!isSuperAdminUser.value && isTopLevelFolderPath(targetPath)) {
+  if (!targetPath || !hasFolderAccess(targetPath)) {
     return false
   }
   return true
@@ -1957,6 +1958,11 @@ const applyFolderDeletedState = async (folderPath) => {
 }
 
 const deleteFolder = async (targetPath = selectedFolderPath.value) => {
+  if (!isSynologySuperAdminUser.value) {
+    ElMessage.warning('仅群晖超管可删除文件夹')
+    return
+  }
+
   const folderPath = normalizePath(targetPath)
   if (!folderPath) {
     ElMessage.warning('根目录不允许删除')

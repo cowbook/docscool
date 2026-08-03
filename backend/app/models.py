@@ -32,6 +32,7 @@ class Contract(db.Model):
     handling_date = db.Column(db.Date, nullable=True)
     contract_type = db.Column(db.String(64), nullable=True)
     purchase_type = db.Column(db.String(64), nullable=True)
+    contract_execution_status = db.Column(db.String(32), nullable=False, default='正在执行')
     stamp_tax_rate = db.Column(db.String(32), nullable=True)
     pricing_method = db.Column(db.String(64), nullable=True)
     copy_count = db.Column(db.Integer, nullable=True)
@@ -75,6 +76,7 @@ class Contract(db.Model):
             'handling_date': self.handling_date.isoformat() if self.handling_date else None,
             'contract_type': self.contract_type,
             'purchase_type': self.purchase_type,
+            'contract_execution_status': self.contract_execution_status,
             'stamp_tax_rate': self.stamp_tax_rate,
             'pricing_method': self.pricing_method,
             'copy_count': self.copy_count,

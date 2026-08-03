@@ -832,6 +832,19 @@ def _is_current_user_super_role() -> bool:
     return role in {ROLE_SUPER_ADMIN, ROLE_SYNOLOGY_SUPER_ADMIN}
 
 
+def _is_current_user_synology_super_admin() -> bool:
+    username = (getattr(g, 'current_user', '') or '').strip()
+    if not username:
+        return False
+
+    row = UserPermission.query.filter_by(login_name=username).first()
+    if not row:
+        return False
+
+    role = str(getattr(row, 'role', '') or '').strip()
+    return role == ROLE_SYNOLOGY_SUPER_ADMIN
+
+
 def _thumbs_root_dir() -> str:
     backend_root = os.path.abspath(os.path.join(current_app.root_path, '..'))
     thumbs_root = os.path.join(backend_root, 'instance', 'thumbs')
@@ -1660,6 +1673,9 @@ def create_folder():
 @files_bp.delete('/folders')
 @require_auth
 def delete_folder():
+    if not _is_current_user_synology_super_admin():
+        return jsonify({'message': '仅群晖超管可删除文件夹'}), 403
+
     body = request.get_json(silent=True) or {}
     folder_path = body.get('path') or request.args.get('path') or ''
     raw_force = (body.get('force') if isinstance(body, dict) else request.args.get('force')) or ''
