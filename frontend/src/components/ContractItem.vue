@@ -999,6 +999,34 @@ const probeOcrMdAvailability = async (url) => {
   }
 }
 
+const waitForOcrMdAvailability = async (url, { maxAttempts = 1, delayMs = 0 } = {}) => {
+  const targetUrl = String(url || '').trim()
+  if (!targetUrl) {
+    ocrMdProbeToken += 1
+    ocrMdAvailable.value = false
+    ocrMdChecking.value = false
+    return false
+  }
+
+  const attempts = Math.max(1, Number(maxAttempts) || 1)
+  const delay = Math.max(0, Number(delayMs) || 0)
+
+  for (let index = 0; index < attempts; index += 1) {
+    await probeOcrMdAvailability(targetUrl)
+    if (ocrMdAvailable.value) {
+      return true
+    }
+
+    if (index < attempts - 1 && delay > 0) {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, delay)
+      })
+    }
+  }
+
+  return ocrMdAvailable.value
+}
+
 const resetForm = () => {
   form.file_path = ''
   form.contract_name = ''
@@ -1367,6 +1395,13 @@ const saveContract = async () => {
   if (form.project && !normalizedOptions.value.project.includes(form.project)) {
     ElMessage.warning('请选择项目设置中的有效项目')
     return
+  }
+
+  if (!ocrMdLinkEnabled.value && ocrMdApiUrl.value) {
+    await waitForOcrMdAvailability(ocrMdApiUrl.value, {
+      maxAttempts: 3,
+      delayMs: 600,
+    })
   }
 
   const completenessValidationErrors = collectCompletenessRequiredFieldErrors()
@@ -2314,6 +2349,14 @@ const runAiRecognitionFromPreview = async () => {
     }
 
     applyAiSupplementalFields(parsedFields, sourceSnapshot)
+
+    if (ocrMdApiUrl.value) {
+      await waitForOcrMdAvailability(ocrMdApiUrl.value, {
+        maxAttempts: 6,
+        delayMs: 600,
+      })
+    }
+
     ElMessage.success('AI解析成功，合同信息已根据识别结果更新')
   } catch (error) {
     if (error?.code === 'ECONNABORTED') {
