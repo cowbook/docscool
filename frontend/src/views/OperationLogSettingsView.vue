@@ -5,12 +5,26 @@
         <div class="card-header">
           <div>
             <div class="card-title">操作日志</div>
-            <div class="card-tip">默认展示本月日志，可按时间段筛选查看用户操作记录。</div>
+            <div class="card-tip">默认展示本月日志，可按时间段和用户筛选查看用户操作记录。</div>
           </div>
         </div>
       </template>
 
       <div class="toolbar">
+        <el-select
+          v-model="selectedLoginName"
+          clearable
+          filterable
+          placeholder="按用户筛选"
+          style="width: 260px"
+        >
+          <el-option
+            v-for="item in userOptions"
+            :key="item.login_name"
+            :label="formatUserLabel(item)"
+            :value="item.login_name"
+          />
+        </el-select>
         <el-date-picker
           v-model="dateRange"
           type="daterange"
@@ -50,6 +64,8 @@ import http from '../api/http'
 const loading = ref(false)
 const rows = ref([])
 const dateRange = ref([])
+const selectedLoginName = ref('')
+const userOptions = ref([])
 
 const pad2 = (value) => String(value).padStart(2, '0')
 
@@ -66,6 +82,25 @@ const resetToCurrentMonth = () => {
   dateRange.value = [toDateText(monthStart), toDateText(now)]
 }
 
+const formatUserLabel = (row) => {
+  const loginName = String(row?.login_name || '').trim()
+  const description = String(row?.description || '').trim()
+  if (!description) {
+    return loginName
+  }
+  return `${description}（${loginName}）`
+}
+
+const loadUserOptions = async () => {
+  try {
+    const { data } = await http.get('/settings/users/options')
+    userOptions.value = Array.isArray(data?.users) ? data.users : []
+  } catch (error) {
+    userOptions.value = []
+    ElMessage.error(error?.response?.data?.message || '用户列表加载失败')
+  }
+}
+
 const loadLogs = async () => {
   if (!Array.isArray(dateRange.value) || dateRange.value.length !== 2) {
     ElMessage.warning('请选择完整的开始和结束日期')
@@ -78,6 +113,7 @@ const loadLogs = async () => {
       params: {
         start_date: dateRange.value[0],
         end_date: dateRange.value[1],
+        login_name: selectedLoginName.value || undefined,
       },
     })
     rows.value = Array.isArray(data?.rows) ? data.rows : []
@@ -89,6 +125,7 @@ const loadLogs = async () => {
 }
 
 onMounted(async () => {
+  await loadUserOptions()
   resetToCurrentMonth()
   await loadLogs()
 })

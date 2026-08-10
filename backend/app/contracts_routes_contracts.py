@@ -283,6 +283,29 @@ def _is_current_user_super_role() -> bool:
     return _is_super_role(_current_user_role())
 
 
+def _collect_missing_completeness_required_fields(record: Contract) -> list[str]:
+    checks = [
+        ('file_path', '文件路径'),
+        ('contract_number', '合同编号'),
+        ('contract_name', '合同名称'),
+        ('contract_unit', '合同单位'),
+        ('current_management_department', '现管部门'),
+        ('contract_form', '合同形式'),
+        ('contract_determination_method', '合同确定方式'),
+        ('contract_type', '合同类型'),
+        ('purchase_type', '采购类型'),
+        ('contract_execution_status', '合同执行状态'),
+        ('stamp_tax_rate', '印花税率'),
+        ('pricing_method', '计价方式'),
+    ]
+    missing = []
+    for field_name, label in checks:
+        value = getattr(record, field_name, None)
+        if not str(value or '').strip():
+            missing.append(label)
+    return missing
+
+
 def _is_archived_contract(record: Contract) -> bool:
     return (getattr(record, 'is_archived', '') or '').strip() == '已归档'
 
@@ -990,15 +1013,28 @@ def create_contract():
     if renamed_file_path:
         record.file_path = renamed_file_path
 
+    missing_required_fields = _collect_missing_completeness_required_fields(record)
+    if missing_required_fields:
+        db.session.rollback()
+        return jsonify({'message': f'请补全以下必填项: {"、".join(missing_required_fields)}'}), 400
+
     # 仅当超管明确传入“是”时允许手工置为“是”，其余情况统一走系统规则。
     if requested_completeness == '是' and is_super_user:
         record.completeness = '是'
     else:
         record.completeness = _build_completeness_value(
             record.file_path,
+            record.contract_number,
+            record.contract_name,
+            record.contract_unit,
+            record.current_management_department,
+            record.contract_form,
             record.contract_determination_method,
+            record.contract_type,
             record.purchase_type,
             record.contract_execution_status,
+            record.stamp_tax_rate,
+            record.pricing_method,
         )
 
     db.session.flush()
@@ -1346,15 +1382,27 @@ def update_contract(contract_id):
     if renamed_file_path:
         record.file_path = renamed_file_path
 
+    missing_required_fields = _collect_missing_completeness_required_fields(record)
+    if missing_required_fields:
+        return jsonify({'message': f'请补全以下必填项: {"、".join(missing_required_fields)}'}), 400
+
     # 仅当超管明确传入“是”时允许手工置为“是”，其余情况统一走系统规则。
     if requested_completeness == '是' and is_super_user:
         record.completeness = '是'
     else:
         record.completeness = _build_completeness_value(
             record.file_path,
+            record.contract_number,
+            record.contract_name,
+            record.contract_unit,
+            record.current_management_department,
+            record.contract_form,
             record.contract_determination_method,
+            record.contract_type,
             record.purchase_type,
             record.contract_execution_status,
+            record.stamp_tax_rate,
+            record.pricing_method,
         )
 
     record.updated_by = (getattr(g, 'current_user', '') or '').strip() or None

@@ -49,13 +49,48 @@ def _has_ocr_full_markdown(file_path: str) -> bool:
     return os.path.isfile(candidate_path)
 
 
-def _build_completeness_value(file_path: str, determination_method: str, purchase_type: str, execution_status: str = '') -> str:
+def _build_completeness_value(
+    file_path: str,
+    contract_number: str = '',
+    contract_name: str = '',
+    contract_unit: str = '',
+    current_management_department: str = '',
+    contract_form: str = '',
+    determination_method: str = '',
+    contract_type: str = '',
+    purchase_type: str = '',
+    execution_status: str = '',
+    stamp_tax_rate: str = '',
+    pricing_method: str = '',
+) -> str:
     has_file = bool(str(file_path or '').strip())
+    has_contract_number = bool(str(contract_number or '').strip())
+    has_contract_name = bool(str(contract_name or '').strip())
+    has_contract_unit = bool(str(contract_unit or '').strip())
+    has_current_management_department = bool(str(current_management_department or '').strip())
+    has_contract_form = bool(str(contract_form or '').strip())
     has_determination = bool(str(determination_method or '').strip())
+    has_contract_type = bool(str(contract_type or '').strip())
     has_purchase_type = bool(str(purchase_type or '').strip())
     has_execution_status = bool(str(execution_status or '').strip())
+    has_stamp_tax_rate = bool(str(stamp_tax_rate or '').strip())
+    has_pricing_method = bool(str(pricing_method or '').strip())
     has_ocr_markdown = _has_ocr_full_markdown(file_path)
-    return '是' if has_file and has_determination and has_purchase_type and has_execution_status and has_ocr_markdown else '否'
+    return '是' if (
+        has_file
+        and has_contract_number
+        and has_contract_name
+        and has_contract_unit
+        and has_current_management_department
+        and has_contract_form
+        and has_determination
+        and has_contract_type
+        and has_purchase_type
+        and has_execution_status
+        and has_stamp_tax_rate
+        and has_pricing_method
+        and has_ocr_markdown
+    ) else '否'
 
 _IMPORT_ERROR_REPORTS = {}
 COLOR_FLAG_OPTIONS = {'红旗', '橙旗', '黄旗', '绿旗', '蓝旗'}
@@ -593,7 +628,7 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     else:
         original_contract_id = None
 
-    required = ['contract_name', 'handling_department']
+    required = ['contract_name', 'handling_department', 'contract_number', 'contract_unit', 'contract_type', 'pricing_method']
     missing = [key for key in required if not str(payload.get(key, '')).strip()]
     if missing:
         return None, f'Missing required fields: {", ".join(missing)}', 400, False
@@ -602,9 +637,22 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
     normalized_current_management_department = (payload.get('current_management_department') or '').strip()
     if not normalized_current_management_department:
         normalized_current_management_department = _resolve_current_management_department_name(department)
+    if not str(normalized_current_management_department or '').strip():
+        return None, 'current_management_department is required', 400, False
 
     determination_method = (payload.get('contract_determination_method') or '').strip() or None
     purchase_type = (payload.get('purchase_type') or '').strip() or None
+    if not determination_method:
+        return None, 'contract_determination_method is required', 400, False
+    if not purchase_type:
+        return None, 'purchase_type is required', 400, False
+
+    if not str(normalized_contract_form or '').strip():
+        return None, 'contract_form is required', 400, False
+    if not str(normalized_contract_type or '').strip():
+        return None, 'contract_type is required', 400, False
+    if not str(normalized_stamp_tax_rate or '').strip():
+        return None, 'stamp_tax_rate is required', 400, False
 
     contract_amount_text = str(payload.get('contract_amount') or '').strip()
     amount = _safe_decimal(contract_amount_text) if contract_amount_text else None
@@ -679,9 +727,17 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
                 existing_contract.status = (payload.get('status') or 'active').strip() or 'active'
                 existing_contract.completeness = _build_completeness_value(
                     existing_contract.file_path,
+                    existing_contract.contract_number,
+                    existing_contract.contract_name,
+                    existing_contract.contract_unit,
+                    existing_contract.current_management_department,
+                    existing_contract.contract_form,
                     existing_contract.contract_determination_method,
+                    existing_contract.contract_type,
                     existing_contract.purchase_type,
                     existing_contract.contract_execution_status,
+                    existing_contract.stamp_tax_rate,
+                    existing_contract.pricing_method,
                 )
                 existing_contract.updated_by = created_by
                 return existing_contract, '', 0, True
@@ -721,7 +777,20 @@ def _build_contract_record(body: dict, created_by: str, pending_contract_numbers
         save_place=save_place,
         is_archived='未归档',
         color_flag=normalized_color_flag,
-        completeness=_build_completeness_value(normalized_file_path, determination_method, purchase_type),
+        completeness=_build_completeness_value(
+            normalized_file_path,
+            contract_number,
+            (payload.get('contract_name') or '').strip(),
+            (payload.get('contract_unit') or '').strip(),
+            normalized_current_management_department,
+            normalized_contract_form,
+            determination_method,
+            normalized_contract_type,
+            purchase_type,
+            (payload.get('contract_execution_status') or '').strip() or '正在执行',
+            normalized_stamp_tax_rate,
+            (payload.get('pricing_method') or '').strip(),
+        ),
         project=project,
         original_contract_id=original_contract_id,
         file_path=normalized_file_path or None,

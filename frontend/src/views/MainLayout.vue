@@ -78,7 +78,7 @@
                 </span>
                 <span>印花税率</span>
               </el-menu-item>
-              <el-menu-item index="/settings/operation-logs">
+              <el-menu-item v-if="canShowOperationLogMenu" index="/settings/operation-logs">
                 <Icon :icon="operationLogIcon" style="font-size:18px;vertical-align:middle;margin-right:6px;" />
                 <span>操作日志</span>
               </el-menu-item>
@@ -190,7 +190,7 @@
             </span>
             <span>印花税率</span>
           </el-menu-item>
-          <el-menu-item index="/settings/operation-logs">
+          <el-menu-item v-if="canShowOperationLogMenu" index="/settings/operation-logs">
             <Icon :icon="operationLogIcon" style="font-size:20px;vertical-align:middle;" />
             <span>操作日志</span>
           </el-menu-item>
@@ -239,6 +239,10 @@ const canShowUserPermissionMenu = computed(() => {
   if (normalizedUsername === 'zhangyan') {
     return true
   }
+  return ['super_admin', 'synology_super_admin'].includes(String(currentUserRole.value || '').trim())
+})
+
+const canShowOperationLogMenu = computed(() => {
   return ['super_admin', 'synology_super_admin'].includes(String(currentUserRole.value || '').trim())
 })
 

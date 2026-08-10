@@ -329,6 +329,12 @@ def _require_super_admin_write_permission():
     return jsonify({'message': '仅超管或指定账号允许新增或删除'}), 403
 
 
+def _require_super_admin_read_permission():
+    if _is_super_role(_current_user_role_value()):
+        return None
+    return jsonify({'message': '仅超管可访问该功能'}), 403
+
+
 def _department_option_values():
     fixed = {(row.name or '').strip() for row in Department.query.order_by(Department.name.asc()).all()}
 
@@ -1500,14 +1506,30 @@ def list_stamp_tax_rate_settings():
 @contracts_bp.get('/settings/user-logs')
 @require_auth
 def list_user_logs():
+    permission_error = _require_super_admin_read_permission()
+    if permission_error:
+        return permission_error
+
     try:
         start_time, end_time = _parse_log_time_range()
     except ValueError as exc:
         return jsonify({'message': str(exc)}), 400
 
-    rows = (
+    login_name = (request.args.get('login_name') or '').strip()
+
+    query = (
         UserLog.query
         .filter(UserLog.record_time >= start_time, UserLog.record_time <= end_time)
+    )
+
+    if login_name:
+        user_row = UserPermission.query.filter_by(login_name=login_name).first()
+        if not user_row:
+            return jsonify({'rows': []})
+        query = query.filter(UserLog.user_id == user_row.id)
+
+    rows = (
+        query
         .order_by(UserLog.record_time.desc(), UserLog.id.desc())
         .all()
     )

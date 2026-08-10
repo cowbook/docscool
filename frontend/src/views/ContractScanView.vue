@@ -185,6 +185,7 @@ const options = reactive({
   contract_determination_method: [],
   contract_type: [],
   purchase_type: [],
+  contract_execution_status: [],
   stamp_tax_rate_by_contract_type: {},
   pricing_method: [],
   is_archived: [],
@@ -402,6 +403,7 @@ const loadFieldOptions = async () => {
   options.contract_determination_method = data?.contract_determination_method || []
   options.contract_type = data?.contract_type || []
   options.purchase_type = data?.purchase_type || []
+  options.contract_execution_status = data?.contract_execution_status || []
   options.stamp_tax_rate_by_contract_type = data?.stamp_tax_rate_by_contract_type || {}
   options.pricing_method = data?.pricing_method || []
   options.is_archived = data?.is_archived || []

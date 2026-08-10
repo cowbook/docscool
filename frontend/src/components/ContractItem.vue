@@ -104,7 +104,7 @@
               </el-link>
               </el-form-item>
 
-              <el-form-item label="合同名称" class="form-item-span-2">
+              <el-form-item label="合同名称" class="form-item-span-2" required>
                 <div class="contract-name-with-flag">
                   <el-dropdown trigger="click" @command="handleColorFlagSelect">
                     <button type="button" class="flag-trigger" title="颜色标记">
@@ -124,10 +124,10 @@
                   <el-input v-model="form.contract_name" class="contract-name-input" />
                 </div>
               </el-form-item>
-              <el-form-item label="合同编号">
+              <el-form-item label="合同编号" required>
                 <el-input v-model="form.contract_number" />
               </el-form-item>
-              <el-form-item label="合同单位">
+              <el-form-item label="合同单位" required>
                 <el-input v-model="form.contract_unit" />
               </el-form-item>
               <el-form-item label="合同金额">
@@ -138,7 +138,7 @@
                   @blur="normalizeContractAmount"
                 />
               </el-form-item>
-              <el-form-item label="合同执行状态">
+              <el-form-item label="合同执行状态" required>
                 <el-select v-model="form.contract_execution_status" placeholder="请选择合同执行状态" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_execution_status" :key="item" :label="item" :value="item" />
                 </el-select>
@@ -160,7 +160,7 @@
                   <el-option v-for="item in departments" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="现管部门">
+              <el-form-item label="现管部门" required>
                 <el-select
                   v-model="form.current_management_department"
                   filterable
@@ -172,7 +172,7 @@
                   <el-option v-for="item in currentManagementDepartments" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="合同形式">
+              <el-form-item label="合同形式" required>
                 <el-select v-model="form.contract_form" placeholder="请选择合同形式" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_form" :key="item" :label="item" :value="item" />
                 </el-select>
@@ -189,7 +189,7 @@
                   </el-select>
                 </div>
               </el-form-item>
-              <el-form-item label="合同确定方式">
+              <el-form-item label="合同确定方式" required>
                 <el-select v-model="form.contract_determination_method" placeholder="请选择合同确定方式" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_determination_method" :key="item" :label="item" :value="item" />
                 </el-select>
@@ -197,20 +197,20 @@
               <el-form-item label="承办日期">
                 <el-date-picker v-model="form.handling_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
               </el-form-item>
-              <el-form-item label="合同类型">
+              <el-form-item label="合同类型" required>
                 <el-select v-model="form.contract_type" placeholder="请选择合同类型" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.contract_type" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="采购类型">
+              <el-form-item label="采购类型" required>
                 <el-select v-model="form.purchase_type" placeholder="请选择采购类型" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.purchase_type" :key="item" :label="item" :value="item" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="印花税率">
+              <el-form-item label="印花税率" required>
                 <el-input v-model="form.stamp_tax_rate" placeholder="根据合同类型自动回填，可手动调整" clearable />
               </el-form-item>
-              <el-form-item label="计价方式">
+              <el-form-item label="计价方式" required>
                 <el-select v-model="form.pricing_method" placeholder="请选择计价方式" style="width: 100%">
                   <el-option v-for="item in normalizedOptions.pricing_method" :key="item" :label="item" :value="item" />
                 </el-select>
@@ -549,7 +549,7 @@
 
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
 import VuePdfEmbed from 'vue-pdf-embed'
 import fileTypeWord from '@iconify-icons/vscode-icons/file-type-word'
@@ -663,15 +663,85 @@ const handleColorFlagSelect = (command) => {
 
 const computeCompletenessValue = () => {
   const hasFile = !!String(form.file_path || '').trim()
+  const hasContractNumber = !!String(form.contract_number || '').trim()
+  const hasContractName = !!String(form.contract_name || '').trim()
+  const hasContractUnit = !!String(form.contract_unit || '').trim()
+  const hasCurrentManagementDepartment = !!String(form.current_management_department || '').trim()
+  const hasContractForm = !!String(form.contract_form || '').trim()
   const hasDetermination = !!String(form.contract_determination_method || '').trim()
+  const hasContractType = !!String(form.contract_type || '').trim()
   const hasPurchaseType = !!String(form.purchase_type || '').trim()
   const hasExecutionStatus = !!String(form.contract_execution_status || '').trim()
+  const hasStampTaxRate = !!String(form.stamp_tax_rate || '').trim()
+  const hasPricingMethod = !!String(form.pricing_method || '').trim()
   const hasOcrMarkdown = !!ocrMdLinkEnabled.value
-  return hasFile && hasDetermination && hasPurchaseType && hasExecutionStatus && hasOcrMarkdown ? '是' : '否'
+  return hasFile
+    && hasContractNumber
+    && hasContractName
+    && hasContractUnit
+    && hasCurrentManagementDepartment
+    && hasContractForm
+    && hasDetermination
+    && hasContractType
+    && hasPurchaseType
+    && hasExecutionStatus
+    && hasStampTaxRate
+    && hasPricingMethod
+    && hasOcrMarkdown
+    ? '是'
+    : '否'
 }
 
 const applyCompletenessDefault = ({ force = false } = {}) => {
   form.completeness = computeCompletenessValue()
+}
+
+const collectCompletenessRequiredFieldErrors = () => {
+  const errors = []
+
+  if (!String(form.file_path || '').trim()) {
+    errors.push('请先上传或链接合同文件')
+  }
+  if (!String(form.contract_number || '').trim()) {
+    errors.push('请先填写合同编号')
+  }
+  if (!String(form.contract_name || '').trim()) {
+    errors.push('请先填写合同名称')
+  }
+  if (!String(form.contract_unit || '').trim()) {
+    errors.push('请先填写合同单位')
+  }
+  if (!String(form.current_management_department || '').trim()) {
+    errors.push('请先选择现管部门')
+  }
+  if (!String(form.contract_form || '').trim()) {
+    errors.push('请先选择合同形式')
+  }
+  if (!String(form.contract_determination_method || '').trim()) {
+    errors.push('请先选择合同确定方式')
+  }
+  if (!String(form.contract_type || '').trim()) {
+    errors.push('请先选择合同类型')
+  }
+  if (!String(form.purchase_type || '').trim()) {
+    errors.push('请先选择采购类型')
+  }
+  if (!String(form.contract_execution_status || '').trim()) {
+    errors.push('请先选择合同执行状态')
+  }
+  if (!String(form.stamp_tax_rate || '').trim()) {
+    errors.push('请先填写印花税率')
+  }
+  if (!String(form.pricing_method || '').trim()) {
+    errors.push('请先选择计价方式')
+  }
+  if (ocrMdChecking.value) {
+    errors.push('OCR文本检测中，请稍后再保存')
+  } else if (!ocrMdLinkEnabled.value) {
+    errors.push('未检测到OCR文本，请先完成OCR识别')
+  }
+
+  return errors
 }
 
 const getStampTaxRateByContractType = (contractType) => {
@@ -1299,6 +1369,19 @@ const saveContract = async () => {
     return
   }
 
+  const completenessValidationErrors = collectCompletenessRequiredFieldErrors()
+  if (completenessValidationErrors.length > 0) {
+    const detail = completenessValidationErrors
+      .map((item, index) => `${index + 1}. ${item}`)
+      .join('<br/>')
+
+    await ElMessageBox.alert(detail, '请补全以下必填项', {
+      confirmButtonText: '知道了',
+      dangerouslyUseHTMLString: true,
+    })
+    return
+  }
+
   applyCompletenessDefault({ force: true })
 
   saving.value = true
@@ -1424,8 +1507,17 @@ watch(
 watch(
   [
     () => form.file_path,
+    () => form.contract_number,
+    () => form.contract_name,
+    () => form.contract_unit,
+    () => form.current_management_department,
+    () => form.contract_form,
     () => form.contract_determination_method,
+    () => form.contract_type,
     () => form.purchase_type,
+    () => form.contract_execution_status,
+    () => form.stamp_tax_rate,
+    () => form.pricing_method,
   ],
   () => {
     applyCompletenessDefault()
