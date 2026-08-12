@@ -58,9 +58,23 @@ def _normalize_db_uri(uri: str) -> str:
     return f'sqlite:///{absolute_path}'
 
 
-Config.SQLALCHEMY_DATABASE_URI = _normalize_db_uri(
-    os.getenv('DATABASE_URL', 'sqlite:///instance/contracts.db')
-)
+db_uri = os.getenv('DATABASE_URL') or os.getenv('MYSQL_DATABASE_URL')
+if not db_uri:
+    raise RuntimeError('DATABASE_URL or MYSQL_DATABASE_URL must be set for the backend database connection')
+
+if db_uri.startswith('sqlite'):
+    raise RuntimeError('SQLite is disabled; configure DATABASE_URL or MYSQL_DATABASE_URL to a MySQL connection')
+
+if not db_uri.startswith('mysql'):
+    raise RuntimeError('Only MySQL connections are supported; configure DATABASE_URL or MYSQL_DATABASE_URL to mysql+...')
+
+Config.SQLALCHEMY_DATABASE_URI = _normalize_db_uri(db_uri)
+Config.SQLALCHEMY_ENGINE_OPTIONS = {
+    'connect_args': {
+        'charset': 'utf8mb4',
+        'use_unicode': True,
+    }
+}
 
 
 def _to_filestation_path(storage_root: str) -> str:

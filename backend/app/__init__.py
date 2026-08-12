@@ -581,6 +581,13 @@ def create_app() -> Flask:
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(Config)
     app.logger.setLevel(logging.INFO)
+    app.logger.info(
+        '[storage-config] mode=%s contract_storage_root=%s filestation_root=%s filestation_scan=%s',
+        app.config.get('CONTRACT_STORAGE_MODE'),
+        app.config.get('CONTRACT_STORAGE_ROOT'),
+        app.config.get('SYNOLOGY_FILESTATION_ROOT'),
+        app.config.get('SYNOLOGY_FILESTATION_SCAN'),
+    )
 
     os.makedirs(app.instance_path, exist_ok=True)
     if app.config.get('CONTRACT_STORAGE_MODE') == 'local':

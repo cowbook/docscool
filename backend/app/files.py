@@ -1285,16 +1285,21 @@ def get_folders_tree():
 @require_auth
 def list_folder_children():
     parent_path = request.args.get('parent_path') or request.args.get('path') or ''
+    current_app.logger.info('[files-debug] list_folder_children request parent_path=%s', parent_path)
     try:
         normalized = _normalize_relative_path(parent_path)
         children = _list_folder_children_nodes(normalized)
     except PermissionError as exc:
+        current_app.logger.exception('[files-debug] list_folder_children permission error parent_path=%s', parent_path)
         return jsonify({'message': str(exc)}), 401
     except FileNotFoundError as exc:
+        current_app.logger.exception('[files-debug] list_folder_children not found parent_path=%s', parent_path)
         return jsonify({'message': str(exc)}), 404
     except ValueError:
+        current_app.logger.exception('[files-debug] list_folder_children invalid path parent_path=%s', parent_path)
         return jsonify({'message': '目录路径非法'}), 400
     except Exception as exc:
+        current_app.logger.exception('[files-debug] list_folder_children failed parent_path=%s error=%s', parent_path, exc)
         return jsonify({'message': f'读取子目录失败: {exc}'}), 500
 
     return jsonify({

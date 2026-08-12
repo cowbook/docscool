@@ -432,26 +432,64 @@ def _synology_api_get(sid: str, params: dict) -> dict:
     api_name = str((params or {}).get('api') or '').strip()
     method_name = str((params or {}).get('method') or '').strip().lower()
 
-    try:
-        client = _synology_get_filestation_client_by_sid(sid)
-
-        if api_name == 'SYNO.FileStation.List' and method_name == 'list':
-            result = client.get_file_list(
-                folder_path=(params or {}).get('folder_path'),
-                additional=_synology_json_array_text((params or {}).get('additional')),
+    for attempt in range(2):
+        try:
+            current_app.logger.info(
+                '[synology-debug] api_get attempt=%s sid=%s api=%s method=%s params=%s',
+                attempt + 1,
+                bool(sid),
+                api_name,
+                method_name,
+                params,
             )
-            return _synology_sdk_normalize_payload(result)
+            client = _synology_get_filestation_client_by_sid(sid)
 
-        return {
-            'success': False,
-            'error': {
-                'code': 'unsupported-sdk-api',
-                'message': f'Unsupported GET API mapping: {api_name}.{method_name}',
-            },
-            'data': {},
-        }
-    except Exception as exc:
-        return _synology_sdk_error_payload(exc)
+            if api_name == 'SYNO.FileStation.List' and method_name == 'list':
+                result = client.get_file_list(
+                    folder_path=(params or {}).get('folder_path'),
+                    additional=_synology_json_array_text((params or {}).get('additional')),
+                )
+                normalized = _synology_sdk_normalize_payload(result)
+                current_app.logger.info(
+                    '[synology-debug] api_get success attempt=%s sid=%s api=%s method=%s payload=%s',
+                    attempt + 1,
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    normalized,
+                )
+                return normalized
+
+            return {
+                'success': False,
+                'error': {
+                    'code': 'unsupported-sdk-api',
+                    'message': f'Unsupported GET API mapping: {api_name}.{method_name}',
+                },
+                'data': {},
+            }
+        except Exception as exc:
+            payload = _synology_sdk_error_payload(exc)
+            code = _synology_error_code(payload)
+            if attempt == 0 and code in {119, '119'}:
+                current_app.logger.warning(
+                    '[synology-debug] api_get expired-session retrying sid=%s api=%s method=%s code=%s',
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    code,
+                )
+                sid = _synology_upload_login()
+                continue
+            current_app.logger.exception(
+                '[synology-debug] api_get error attempt=%s sid=%s api=%s method=%s payload=%s',
+                attempt + 1,
+                bool(sid),
+                api_name,
+                method_name,
+                payload,
+            )
+            return payload
 
 
 def _synology_api_post(sid: str, params: dict, data: dict = None, files: dict = None) -> dict:
@@ -459,95 +497,170 @@ def _synology_api_post(sid: str, params: dict, data: dict = None, files: dict = 
     method_name = str((params or {}).get('method') or '').strip().lower()
     body = data or {}
 
-    try:
-        client = _synology_get_filestation_client_by_sid(sid)
-
-        if api_name == 'SYNO.FileStation.CreateFolder' and method_name == 'create':
-            folder_path_values = _synology_parse_array_text(body.get('folder_path'))
-            name_values = _synology_parse_array_text(body.get('name'))
-            folder_path_param = folder_path_values if len(folder_path_values) != 1 else folder_path_values[0]
-            name_param = name_values if len(name_values) != 1 else name_values[0]
-            result = client.create_folder(
-                folder_path=folder_path_param,
-                name=name_param,
-                force_parent=_synology_bool_text(body.get('force_parent'), default=False),
+    for attempt in range(2):
+        try:
+            current_app.logger.info(
+                '[synology-debug] api_post attempt=%s sid=%s api=%s method=%s data=%s files=%s',
+                attempt + 1,
+                bool(sid),
+                api_name,
+                method_name,
+                body,
+                bool(files),
             )
-            return _synology_sdk_normalize_payload(result)
+            client = _synology_get_filestation_client_by_sid(sid)
 
-        if api_name == 'SYNO.FileStation.Upload' and method_name == 'upload':
-            file_payload = (files or {}).get('file')
-            if not isinstance(file_payload, tuple) or len(file_payload) < 2:
-                return {
-                    'success': False,
-                    'error': {'code': 101, 'message': 'file is required'},
-                    'data': {},
-                }
-
-            upload_name = str(file_payload[0] or 'upload.bin')
-            stream = file_payload[1]
-
-            with tempfile.TemporaryDirectory(prefix='docscool_upload_') as tmp_dir:
-                tmp_path = os.path.join(tmp_dir, upload_name)
-                with open(tmp_path, 'wb') as tmp_file:
-                    content = stream.read() if hasattr(stream, 'read') else b''
-                    if isinstance(content, str):
-                        content = content.encode('utf-8')
-                    tmp_file.write(content or b'')
-
-                if hasattr(stream, 'seek'):
-                    try:
-                        stream.seek(0)
-                    except Exception:
-                        pass
-
-                result = client.upload_file(
-                    dest_path=str(body.get('path') or ''),
-                    file_path=tmp_path,
-                    create_parents=_synology_bool_text(body.get('create_parents'), default=True),
-                    overwrite=_synology_bool_text(body.get('overwrite'), default=False),
-                    verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
-                    progress_bar=False,
+            if api_name == 'SYNO.FileStation.CreateFolder' and method_name == 'create':
+                folder_path_values = _synology_parse_array_text(body.get('folder_path'))
+                name_values = _synology_parse_array_text(body.get('name'))
+                folder_path_param = folder_path_values if len(folder_path_values) != 1 else folder_path_values[0]
+                name_param = name_values if len(name_values) != 1 else name_values[0]
+                result = client.create_folder(
+                    folder_path=folder_path_param,
+                    name=name_param,
+                    force_parent=_synology_bool_text(body.get('force_parent'), default=False),
                 )
-                return _synology_sdk_normalize_payload(result)
+                normalized = _synology_sdk_normalize_payload(result)
+                current_app.logger.info(
+                    '[synology-debug] api_post success attempt=%s sid=%s api=%s method=%s payload=%s',
+                    attempt + 1,
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    normalized,
+                )
+                return normalized
 
-        if api_name == 'SYNO.FileStation.Delete' and method_name in {'delete', 'start'}:
-            path_values = _synology_parse_array_text(body.get('path'))
-            path_param = path_values if len(path_values) != 1 else path_values[0]
-            result = client.start_delete_task(
-                path=path_param,
-                recursive=_synology_bool_text(body.get('recursive'), default=False),
+            if api_name == 'SYNO.FileStation.Upload' and method_name == 'upload':
+                file_payload = (files or {}).get('file')
+                if not isinstance(file_payload, tuple) or len(file_payload) < 2:
+                    return {
+                        'success': False,
+                        'error': {'code': 101, 'message': 'file is required'},
+                        'data': {},
+                    }
+
+                upload_name = str(file_payload[0] or 'upload.bin')
+                stream = file_payload[1]
+
+                with tempfile.TemporaryDirectory(prefix='docscool_upload_') as tmp_dir:
+                    tmp_path = os.path.join(tmp_dir, upload_name)
+                    with open(tmp_path, 'wb') as tmp_file:
+                        content = stream.read() if hasattr(stream, 'read') else b''
+                        if isinstance(content, str):
+                            content = content.encode('utf-8')
+                        tmp_file.write(content or b'')
+
+                    if hasattr(stream, 'seek'):
+                        try:
+                            stream.seek(0)
+                        except Exception:
+                            pass
+
+                    result = client.upload_file(
+                        dest_path=str(body.get('path') or ''),
+                        file_path=tmp_path,
+                        create_parents=_synology_bool_text(body.get('create_parents'), default=True),
+                        overwrite=_synology_bool_text(body.get('overwrite'), default=False),
+                        verify=bool(current_app.config.get('SYNOLOGY_VERIFY_SSL', False)),
+                        progress_bar=False,
+                    )
+                    normalized = _synology_sdk_normalize_payload(result)
+                    current_app.logger.info(
+                        '[synology-debug] api_post success attempt=%s sid=%s api=%s method=%s payload=%s',
+                        attempt + 1,
+                        bool(sid),
+                        api_name,
+                        method_name,
+                        normalized,
+                    )
+                    return normalized
+
+            if api_name == 'SYNO.FileStation.Delete' and method_name in {'delete', 'start'}:
+                path_values = _synology_parse_array_text(body.get('path'))
+                path_param = path_values if len(path_values) != 1 else path_values[0]
+                result = client.start_delete_task(
+                    path=path_param,
+                    recursive=_synology_bool_text(body.get('recursive'), default=False),
+                )
+                normalized = _synology_sdk_normalize_payload(result)
+                current_app.logger.info(
+                    '[synology-debug] api_post success attempt=%s sid=%s api=%s method=%s payload=%s',
+                    attempt + 1,
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    normalized,
+                )
+                return normalized
+
+            if api_name == 'SYNO.FileStation.Rename' and method_name == 'rename':
+                path_values = _synology_parse_array_text(body.get('path'))
+                name_values = _synology_parse_array_text(body.get('name'))
+                path_param = path_values if len(path_values) != 1 else path_values[0]
+                name_param = name_values if len(name_values) != 1 else name_values[0]
+                result = client.rename_folder(path=path_param, name=name_param)
+                normalized = _synology_sdk_normalize_payload(result)
+                current_app.logger.info(
+                    '[synology-debug] api_post success attempt=%s sid=%s api=%s method=%s payload=%s',
+                    attempt + 1,
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    normalized,
+                )
+                return normalized
+
+            if api_name == 'SYNO.FileStation.CopyMove' and method_name == 'start':
+                path_values = _synology_parse_array_text(body.get('path'))
+                path_param = path_values if len(path_values) != 1 else path_values[0]
+                result = client.start_copy_move(
+                    path=path_param,
+                    dest_folder_path=str(body.get('dest_folder_path') or ''),
+                    remove_src=_synology_bool_text(body.get('remove_src'), default=False),
+                    overwrite=_synology_bool_text(body.get('overwrite'), default=False),
+                )
+                normalized = _synology_sdk_normalize_payload(result)
+                current_app.logger.info(
+                    '[synology-debug] api_post success attempt=%s sid=%s api=%s method=%s payload=%s',
+                    attempt + 1,
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    normalized,
+                )
+                return normalized
+
+            return {
+                'success': False,
+                'error': {
+                    'code': 'unsupported-sdk-api',
+                    'message': f'Unsupported POST API mapping: {api_name}.{method_name}',
+                },
+                'data': {},
+            }
+        except Exception as exc:
+            payload = _synology_sdk_error_payload(exc)
+            code = _synology_error_code(payload)
+            if attempt == 0 and code in {119, '119'}:
+                current_app.logger.warning(
+                    '[synology-debug] api_post expired-session retrying sid=%s api=%s method=%s code=%s',
+                    bool(sid),
+                    api_name,
+                    method_name,
+                    code,
+                )
+                sid = _synology_upload_login()
+                continue
+            current_app.logger.exception(
+                '[synology-debug] api_post error attempt=%s sid=%s api=%s method=%s payload=%s',
+                attempt + 1,
+                bool(sid),
+                api_name,
+                method_name,
+                payload,
             )
-            return _synology_sdk_normalize_payload(result)
-
-        if api_name == 'SYNO.FileStation.Rename' and method_name == 'rename':
-            path_values = _synology_parse_array_text(body.get('path'))
-            name_values = _synology_parse_array_text(body.get('name'))
-            path_param = path_values if len(path_values) != 1 else path_values[0]
-            name_param = name_values if len(name_values) != 1 else name_values[0]
-            result = client.rename_folder(path=path_param, name=name_param)
-            return _synology_sdk_normalize_payload(result)
-
-        if api_name == 'SYNO.FileStation.CopyMove' and method_name == 'start':
-            path_values = _synology_parse_array_text(body.get('path'))
-            path_param = path_values if len(path_values) != 1 else path_values[0]
-            result = client.start_copy_move(
-                path=path_param,
-                dest_folder_path=str(body.get('dest_folder_path') or ''),
-                remove_src=_synology_bool_text(body.get('remove_src'), default=False),
-                overwrite=_synology_bool_text(body.get('overwrite'), default=False),
-            )
-            return _synology_sdk_normalize_payload(result)
-
-        return {
-            'success': False,
-            'error': {
-                'code': 'unsupported-sdk-api',
-                'message': f'Unsupported POST API mapping: {api_name}.{method_name}',
-            },
-            'data': {},
-        }
-    except Exception as exc:
-        return _synology_sdk_error_payload(exc)
+            return payload
 
 
 def _synology_json_array(*values: str) -> str:
@@ -1014,6 +1127,12 @@ def _remote_folder_path(relative_path: str) -> str:
 def _list_remote_entries(relative_path: str, sid: str = ''):
     resolved_sid = sid or _synology_upload_login()
     folder_path = _remote_folder_path(relative_path)
+    current_app.logger.info(
+        '[synology-debug] list_remote_entries start relative_path=%s folder_path=%s sid=%s',
+        relative_path,
+        folder_path,
+        bool(resolved_sid),
+    )
     payload = _synology_api_get(
         resolved_sid,
         {
@@ -1023,6 +1142,13 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
             'folder_path': folder_path,
             'additional': '["size","time","owner"]',
         },
+    )
+    current_app.logger.info(
+        '[synology-debug] list_remote_entries result relative_path=%s folder_path=%s success=%s payload=%s',
+        relative_path,
+        folder_path,
+        payload.get('success'),
+        payload,
     )
     if not payload.get('success'):
         code = _synology_error_code(payload)
@@ -1077,6 +1203,11 @@ def _list_remote_entries(relative_path: str, sid: str = ''):
 
 def _list_storage_entries(relative_path: str):
     normalized = _normalize_relative_path(relative_path)
+    current_app.logger.info(
+        '[synology-debug] list_storage_entries normalized=%s mode=%s',
+        normalized,
+        current_app.config.get('CONTRACT_STORAGE_MODE'),
+    )
     if current_app.config.get('CONTRACT_STORAGE_MODE') == 'remote':
         return _list_remote_entries(normalized)
     return _list_local_entries(normalized)

@@ -30,7 +30,21 @@ from .contracts_core import (
 from .models import Contract
 
 def _list_folder_children_nodes(relative_path: str):
-    directories, _files = _list_storage_entries(relative_path)
+    current_app.logger.info(
+        '[files-debug] list_folder_children_nodes start relative_path=%s mode=%s',
+        relative_path,
+        current_app.config.get('CONTRACT_STORAGE_MODE'),
+    )
+    try:
+        directories, _files = _list_storage_entries(relative_path)
+    except Exception as exc:
+        current_app.logger.exception(
+            '[files-debug] list_folder_children_nodes failed relative_path=%s error=%s',
+            relative_path,
+            exc,
+        )
+        raise
+
     return [
         {
             'name': item['name'],
